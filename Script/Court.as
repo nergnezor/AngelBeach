@@ -24,6 +24,28 @@ class ACourt : AActor
 	const float PostRadius      = 5.0f;
 	const float LineWidth       = 5.0f;
 
+	// --- Deformable sand heightfield ---
+	const int   SandGridX    = 80;      // cells along X
+	const int   SandGridY    = 48;      // cells along Y
+	const float SandMinZ     = -24.0f;  // deepest a crater can go
+	const float SandHealRate = 0.35f;   // how fast footprints/craters refill
+
+	private float SandW = 0.0f;         // half-extent X
+	private float SandD = 0.0f;         // half-extent Y
+	private float SandCellX = 1.0f;
+	private float SandCellY = 1.0f;
+
+	// Persistent per-vertex height offset (negative = pushed down).
+	private TArray<float> SandHeight;
+	private TArray<FVector> SandV;
+	private TArray<FVector> SandN;
+	private TArray<FVector2D> SandUV;
+	private TArray<FProcMeshTangent> SandTan;
+
+	private bool bSandDirty = false;
+	private float SandUpdateAccum = 0.0f;
+	const float SandUpdateInterval = 0.06f;
+
 	void BeginPlay() override
 	{
 		Super::BeginPlay();
@@ -33,39 +55,177 @@ class ACourt : AActor
 		BuildPosts();
 	}
 
-	// Flat sand quad
+	void Tick(float DeltaTime) override
+	{
+		Super::Tick(DeltaTime);
+
+		// Slowly heal deformations back toward flat.
+		bool bAnyHeal = false;
+		float HealFactor = 1.0f - Math::Clamp(SandHealRate * DeltaTime, 0.0f, 1.0f);
+		for (int i = 0; i < SandHeight.Num(); i++)
+		{
+			if (Math::Abs(SandHeight[i]) > 0.05f)
+			{
+				SandHeight[i] *= HealFactor;
+				bAnyHeal = true;
+			}
+			else if (SandHeight[i] != 0.0f)
+			{
+				SandHeight[i] = 0.0f;
+				bAnyHeal = true;
+			}
+		}
+		if (bAnyHeal) bSandDirty = true;
+
+		// Throttle the (relatively heavy) mesh rebuild.
+		if (bSandDirty)
+		{
+			SandUpdateAccum += DeltaTime;
+			if (SandUpdateAccum >= SandUpdateInterval)
+			{
+				SandUpdateAccum = 0.0f;
+				bSandDirty = false;
+				RebuildSandMesh();
+			}
+		}
+	}
+
+	private int SandIdx(int ix, int iy) const
+	{
+		return iy * (SandGridX + 1) + ix;
+	}
+
+	// Subdivided sand grid so it can be dented into craters and footprints.
 	private void BuildSand()
 	{
-		TArray<FVector> V;
+		SandW = CourtHalfLength + 200.0f; // extra sand border
+		SandD = CourtHalfWidth + 200.0f;
+		SandCellX = (2.0f * SandW) / SandGridX;
+		SandCellY = (2.0f * SandD) / SandGridY;
+
 		TArray<int32> T;
-		TArray<FVector> N;
-		TArray<FVector2D> UV;
-		TArray<FProcMeshTangent> Tan;
+		SandV.Empty();
+		SandN.Empty();
+		SandUV.Empty();
+		SandTan.Empty();
+		SandHeight.Empty();
 
-		float W = CourtHalfLength + 200.0f; // extra sand border
-		float D = CourtHalfWidth + 200.0f;
+		for (int iy = 0; iy <= SandGridY; iy++)
+		{
+			for (int ix = 0; ix <= SandGridX; ix++)
+			{
+				float x = -SandW + ix * SandCellX;
+				float y = -SandD + iy * SandCellY;
+				SandV.Add(FVector(x, y, 0));
+				SandN.Add(FVector(0, 0, 1));
+				SandUV.Add(FVector2D(float(ix) / SandGridX, float(iy) / SandGridY));
+				SandHeight.Add(0.0f);
+			}
+		}
 
-		V.Add(FVector(-W, -D, 0));
-		V.Add(FVector( W, -D, 0));
-		V.Add(FVector( W,  D, 0));
-		V.Add(FVector(-W,  D, 0));
+		for (int iy = 0; iy < SandGridY; iy++)
+		{
+			for (int ix = 0; ix < SandGridX; ix++)
+			{
+				int A = SandIdx(ix, iy);
+				int B = SandIdx(ix + 1, iy);
+				int C = SandIdx(ix + 1, iy + 1);
+				int D = SandIdx(ix, iy + 1);
+				T.Add(A); T.Add(C); T.Add(B);
+				T.Add(A); T.Add(D); T.Add(C);
+			}
+		}
 
-		T.Add(0); T.Add(2); T.Add(1);
-		T.Add(0); T.Add(3); T.Add(2);
+		SandMesh.CreateMeshSection_LinearColor(0, SandV, T, SandN, SandUV,
+			SandColors(), SandTan, true);
+	}
 
-		for (int i = 0; i < 4; i++) N.Add(FVector(0,0,1));
-		UV.Add(FVector2D(0,0));
-		UV.Add(FVector2D(1,0));
-		UV.Add(FVector2D(1,1));
-		UV.Add(FVector2D(0,1));
-
-		SandMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, true);
-
-		// Sandy color
+	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
+	private TArray<FLinearColor> SandColors() const
+	{
 		TArray<FLinearColor> C;
-		for (int i = 0; i < 4; i++) C.Add(FLinearColor(0.93f, 0.83f, 0.60f, 1));
-		SandMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+		for (int i = 0; i < SandV.Num(); i++)
+		{
+			float depth = Math::Clamp(-SandHeight[i] / -SandMinZ, 0.0f, 1.0f);
+			float shade = 1.0f - depth * 0.35f;
+			C.Add(FLinearColor(0.93f * shade, 0.83f * shade, 0.60f * shade, 1));
+		}
+		return C;
+	}
+
+	// Push the sand down at a world position: crater with a small raised rim.
+	// Positive Depth digs a pit; grains are thrown up separately by SandFX.
+	UFUNCTION(BlueprintCallable)
+	void DeformSand(FVector WorldPos, float Radius, float Depth)
+	{
+		if (SandHeight.Num() == 0) return;
+
+		FVector Local = WorldPos - GetActorLocation();
+		float InvR = (Radius > 1.0f) ? 1.0f / Radius : 1.0f;
+		float RimR = Radius * 1.5f;
+
+		// Bounding cell range to avoid scanning the whole grid.
+		int minX = Math::Clamp(int((Local.X - RimR + SandW) / SandCellX) - 1, 0, SandGridX);
+		int maxX = Math::Clamp(int((Local.X + RimR + SandW) / SandCellX) + 1, 0, SandGridX);
+		int minY = Math::Clamp(int((Local.Y - RimR + SandD) / SandCellY) - 1, 0, SandGridY);
+		int maxY = Math::Clamp(int((Local.Y + RimR + SandD) / SandCellY) + 1, 0, SandGridY);
+
+		for (int iy = minY; iy <= maxY; iy++)
+		{
+			for (int ix = minX; ix <= maxX; ix++)
+			{
+				int idx = SandIdx(ix, iy);
+				FVector P = SandV[idx];
+				float d = FVector(P.X - Local.X, P.Y - Local.Y, 0).Size();
+
+				if (d < Radius)
+				{
+					// Smooth bowl: deepest at centre.
+					float t = d * InvR;
+					float fall = 1.0f - t * t;
+					SandHeight[idx] = Math::Max(SandMinZ, SandHeight[idx] - Depth * fall);
+				}
+				else if (d < RimR)
+				{
+					// Raised rim of displaced sand around the crater.
+					float t = (d - Radius) / (RimR - Radius);
+					float rim = (1.0f - t) * Depth * 0.18f;
+					SandHeight[idx] += rim;
+				}
+			}
+		}
+
+		bSandDirty = true;
+	}
+
+	// Recompute vertex Z + normals from the height grid and push to the mesh.
+	private void RebuildSandMesh()
+	{
+		for (int i = 0; i < SandV.Num(); i++)
+		{
+			FVector P = SandV[i];
+			SandV[i] = FVector(P.X, P.Y, SandHeight[i]);
+		}
+
+		// Normals from central differences across the height grid.
+		for (int iy = 0; iy <= SandGridY; iy++)
+		{
+			for (int ix = 0; ix <= SandGridX; ix++)
+			{
+				int xl = Math::Max(ix - 1, 0);
+				int xr = Math::Min(ix + 1, SandGridX);
+				int yl = Math::Max(iy - 1, 0);
+				int yr = Math::Min(iy + 1, SandGridY);
+				float dzx = (SandHeight[SandIdx(xr, iy)] - SandHeight[SandIdx(xl, iy)])
+					/ ((xr - xl) * SandCellX);
+				float dzy = (SandHeight[SandIdx(ix, yr)] - SandHeight[SandIdx(ix, yl)])
+					/ ((yr - yl) * SandCellY);
+				SandN[SandIdx(ix, iy)] = FVector(-dzx, -dzy, 1).GetSafeNormal();
+			}
+		}
+
+		SandMesh.UpdateMeshSection_LinearColor(0, SandV, SandN, SandUV,
+			SandColors(), SandTan);
 	}
 
 	// Net: flat quad with dark color

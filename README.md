@@ -10,17 +10,21 @@ A beach volleyball game built entirely with AngelScript and procedural mesh gene
 - **AI opponent** — forward-integration trajectory prediction, adjustable difficulty (0–1)
 - **HUD** — live score, set counter, game phase text, minimap
 - **Side camera** — smooth ball-following with configurable weights
+- **Golden-hour lighting** — low warm sun, real-time sky light, warm volumetric fog, post-process bloom/vignette/exposure
+- **Sand FX** — grains spray upward on ball impacts and footsteps (Niagara when assigned, procedural CPU fallback otherwise)
+- **Deformable sand** — impacts and footsteps dent craters and footprints that slowly heal
+- **Gamepad support** — full controller bindings alongside keyboard
 
 ## Controls
 
-| Key | Action |
-|-----|--------|
-| W/A/S/D | Move |
-| Space | Jump |
-| E | Pass (bump) |
-| Shift | Set |
-| F | Spike |
-| Escape | Pause |
+| Keyboard | Gamepad | Action |
+|----------|---------|--------|
+| W/A/S/D | Left stick | Move |
+| Space | A | Jump |
+| E | X | Pass (bump) |
+| Shift | Y | Set |
+| F | B / Right trigger | Spike |
+| Escape | Start | Pause |
 
 ## Project Structure
 
@@ -39,11 +43,12 @@ Script/
   Player.as                — APawn base: movement, jump, pass/set/spike
   HumanPlayer.as           — WASD+Space+E+Shift+F input bindings
   AIPlayer.as              — AI with trajectory prediction, difficulty scaling
-  Court.as                 — sand, net, boundary lines, posts (all procedural)
+  Court.as                 — deformable sand grid, net, lines, posts (all procedural)
+  SandFX.as                — upward sand spray + dust (Niagara or procedural fallback)
   GameMode.as              — spawn, serve flow, point/set/match logic, restart
   HUD.as                   — Canvas HUD: score, phase, minimap
   Camera.as                — side-view camera with soft ball-following
-  CourtLevel.as            — level script: directional light, sky atmosphere, fog
+  CourtLevel.as            — golden-hour lighting + post-process, level setup
 ```
 
 ## Setup
@@ -66,3 +71,20 @@ Adjust `AAIPlayer.Difficulty` (0.0–1.0) in `Script/AIPlayer.as`:
 - `0.0` — very slow, large positional error
 - `0.7` — default, competitive
 - `1.0` — near-perfect prediction, fastest movement
+
+## Sand FX (Niagara, optional)
+
+Sand spray works out of the box via a procedural CPU particle fallback — no
+assets required. For the most realistic GPU sand, author Niagara systems in the
+editor and assign them on the `ASandFX` actor:
+
+1. Create a Niagara System (e.g. `NS_SandBurst`) — a short-lived burst emitter
+   with a strong upward + outward initial velocity, gravity, and collision.
+   Optionally a second smaller system (`NS_Footstep`) for footstep puffs.
+2. Open `Script/SandFX.as` and set the defaults of `ImpactSystem` /
+   `FootstepSystem`, or assign them on the spawned `ASandFX` instance.
+3. When a system is assigned it is used automatically; otherwise the procedural
+   fallback runs. Tune spray strength/counts in `SandFX::SprayFallback`.
+
+Crater/footprint depth and heal speed live in `Script/Court.as`
+(`SandMinZ`, `SandHealRate`, `DeformSand`).
