@@ -22,6 +22,12 @@ class ABall : AActor
 
 	bool bInPlay = false;
 
+	// FX references (set by GameMode)
+	UPROPERTY()
+	ASandFX Sand;
+	UPROPERTY()
+	ACourt Court;
+
 	UFUNCTION(BlueprintCallable)
 	void Launch(FVector Origin, FVector InitVelocity)
 	{
@@ -68,10 +74,25 @@ class ABall : AActor
 		// Floor collision
 		if (Position.Z - BallRadius <= FloorZ)
 		{
+			// Capture impact velocity before the bounce reverses it.
+			FVector ImpactVel = Velocity;
+			float vDown = Math::Max(0.0f, -Velocity.Z);
+
 			Position.Z = FloorZ + BallRadius;
 			Velocity.Z = -Velocity.Z * Restitution;
 			Velocity.X *= 0.85f;
 			Velocity.Y *= 0.85f;
+
+			// Spray sand upward and dent a crater (only on real impacts).
+			if (vDown > 60.0f)
+			{
+				float Strength = Math::Clamp(vDown / 500.0f, 0.2f, 3.0f);
+				FVector Ground = FVector(Position.X, Position.Y, 0.0f);
+				if (Sand != nullptr)
+					Sand.Burst(Ground, ImpactVel, Strength);
+				if (Court != nullptr)
+					Court.DeformSand(Ground, 28.0f + Strength * 22.0f, 5.0f + Strength * 9.0f);
+			}
 
 			// Notify game mode of floor hit
 			ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());

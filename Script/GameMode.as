@@ -14,6 +14,9 @@ class ABeachVolleyballGameMode : AGameModeBase
 	UPROPERTY(BlueprintReadOnly)
 	ACourt Court;
 
+	UPROPERTY(BlueprintReadOnly)
+	ASandFX SandFX;
+
 	float ServeDelay = 2.0f;
 	float ServeTimer = 0.0f;
 	bool bWaitingForServe = false;
@@ -60,20 +63,38 @@ class ABeachVolleyballGameMode : AGameModeBase
 		Court = Cast<ACourt>(GetWorld().SpawnActor(ACourt::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, Params));
 
+		// Spawn sand FX system (dust + upward spray)
+		SandFX = Cast<ASandFX>(GetWorld().SpawnActor(ASandFX::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, Params));
+
 		// Spawn ball
 		Ball = Cast<ABall>(GetWorld().SpawnActor(ABall::StaticClass(),
 			FVector(0, 0, 300), FRotator::ZeroRotator, Params));
+		if (Ball != nullptr)
+		{
+			Ball.Sand = SandFX;
+			Ball.Court = Court;
+		}
 
 		// Spawn human player (left/negative X side)
 		HumanPawn = Cast<AHumanPlayer>(GetWorld().SpawnActor(AHumanPlayer::StaticClass(),
 			FVector(-400, 0, 100), FRotator::ZeroRotator, Params));
+		if (HumanPawn != nullptr)
+		{
+			HumanPawn.Sand = SandFX;
+			HumanPawn.Court = Court;
+		}
 
 		// Spawn AI player (right/positive X side)
 		AIPawn = Cast<AAIPlayer>(GetWorld().SpawnActor(AAIPlayer::StaticClass(),
 			FVector(400, 0, 100), FRotator::ZeroRotator, Params));
 
 		if (AIPawn != nullptr)
+		{
 			AIPawn.Ball = Ball;
+			AIPawn.Sand = SandFX;
+			AIPawn.Court = Court;
+		}
 
 		// Possess human with player controller
 		APlayerController PC = GetWorld().GetFirstPlayerController();
