@@ -1,0 +1,54 @@
+name: Build – Linux
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 120
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
+      PROJECT_NAME: BeachVolleyball
+      OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify engine
+        run: |
+          test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
+            echo "ERROR: engine not found at $ENGINE_DIR"
+            echo "Install the engine on the runner and set ENGINE_DIR if needed."
+            exit 1
+          }
+          echo "Engine OK: $ENGINE_DIR"
+
+      - name: Build C++ module
+        run: |
+          "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
+            ${PROJECT_NAME}Editor Linux Development \
+            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            -progress
+
+      - name: Package for Linux
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
+            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            -noP4 \
+            -platform=Linux \
+            -clientconfig=Development \
+            -cook -build -stage -pak -archive \
+            -archivedirectory="$OUTPUT_DIR"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ github.sha }}
+          path: PackagedBuilds/Linux/
+          retention-days: 14
