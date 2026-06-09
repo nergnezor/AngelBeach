@@ -1,0 +1,130 @@
+name: Runner – Setup new machine
+
+# Connects via SSH to a target machine and runs scripts/setup-runner.sh
+# in a detached tmux session. The job returns immediately; the actual
+# installation (engine build etc.) continues running in the background.
+#
+# Required repository secrets:
+#   RUNNER_SSH_KEY   — private key matching a ~/.ssh/authorized_keys entry
+#                      on the target machine
+#   RUNNER_GITHUB_PAT — GitHub PAT with repo scope (used to generate a
+#                       runner registration token automatically)
+#
+# Optional repository variables (override engine/SDK install paths):
+#   ENGINE_DIR, ANDROID_SDK_DIR, RUNNER_DIR — see setup-runner.sh header
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "SSH host or IP of the new runner machine"
+        required: true
+        type: string
+      user:
+        description: "SSH username"
+        required: false
+        default: ubuntu
+        type: string
+      runner_labels:
+        description: "Comma-separated runner labels"
+        required: false
+        default: "linux,ue5"
+        type: string
+      engine_dir:
+        description: "Engine install path on the remote machine"
+        required: false
+        default: "/opt/UnrealEngine-Angelscript"
+        type: string
+      skip_engine:
+        description: "Skip engine build (if already installed)"
+        required: false
+        default: false
+        type: boolean
+      skip_android:
+        description: "Skip Android SDK install"
+        required: false
+        default: false
+        type: boolean
+      skip_html5:
+        description: "Skip HTML5 plugin install"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # Just SSH + launch; actual build runs on target
+
+    env:
+      SSH_HOST: ${{ inputs.host }}
+      SSH_USER: ${{ inputs.user }}
+
+    steps:
+      - name: Checkout (for setup-runner.sh)
+        uses: actions/checkout@v4
+
+      - name: Install SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.RUNNER_SSH_KEY }}" > ~/.ssh/runner_key
+          chmod 600 ~/.ssh/runner_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Generate runner registration token
+        id: token
+        run: |
+          TOKEN=$(curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.RUNNER_GITHUB_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token" \
+            | grep -oP '"token":\s*"\K[^"]+')
+          echo "::add-mask::$TOKEN"
+          echo "value=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Upload setup script
+        run: |
+          scp -i ~/.ssh/runner_key \
+              -o StrictHostKeyChecking=no \
+              scripts/setup-runner.sh \
+              "$SSH_USER@$SSH_HOST:/tmp/setup-runner.sh"
+          ssh -i ~/.ssh/runner_key \
+              -o StrictHostKeyChecking=no \
+              "$SSH_USER@$SSH_HOST" \
+              "chmod +x /tmp/setup-runner.sh"
+
+      - name: Launch setup in detached tmux session
+        run: |
+          ssh -i ~/.ssh/runner_key \
+              -o StrictHostKeyChecking=no \
+              "$SSH_USER@$SSH_HOST" \
+              "tmux new-session -d -s runner-setup \
+                'export REPO=\"${{ github.repository }}\" \
+                       RUNNER_TOKEN=\"${{ steps.token.outputs.value }}\" \
+                       RUNNER_LABELS=\"${{ inputs.runner_labels }}\" \
+                       ENGINE_DIR=\"${{ inputs.engine_dir }}\" \
+                       SKIP_ENGINE=\"${{ inputs.skip_engine && '1' || '0' }}\" \
+                       SKIP_ANDROID=\"${{ inputs.skip_android && '1' || '0' }}\" \
+                       SKIP_HTML5=\"${{ inputs.skip_html5 && '1' || '0' }}\"; \
+                 bash /tmp/setup-runner.sh 2>&1 | tee /var/log/setup-runner.log; \
+                 echo EXIT_CODE=\$? >> /var/log/setup-runner.log'"
+
+      - name: Verify session started
+        run: |
+          ssh -i ~/.ssh/runner_key \
+              -o StrictHostKeyChecking=no \
+              "$SSH_USER@$SSH_HOST" \
+              "tmux ls"
+          echo ""
+          echo "Setup is running in the background on $SSH_HOST."
+          echo "Monitor progress:"
+          echo "  ssh $SSH_USER@$SSH_HOST 'tmux attach -t runner-setup'"
+          echo "  ssh $SSH_USER@$SSH_HOST 'tail -f /var/log/setup-runner.log'"
+          echo ""
+          echo "The engine build takes 1-3 hours. The runner will appear in"
+          echo "Settings → Actions → Runners once setup-runner.sh completes."
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/runner_key
