@@ -41,13 +41,16 @@ JOBS          ?= $(shell n=$$(nproc); echo $$((n>2 ? n-2 : 1)))
 UE_EDITOR     := $(ENGINE_DIR)/Engine/Binaries/Linux/UnrealEditor
 UE_BUILD      := $(ENGINE_DIR)/Engine/Build/BatchFiles/Linux/Build.sh
 UE_GENPROJ    := $(ENGINE_DIR)/GenerateProjectFiles.sh
+UE_UAT        := $(ENGINE_DIR)/Engine/Build/BatchFiles/RunUAT.sh
+
+OUTPUT_DIR    ?= $(PROJECT_DIR)/PackagedBuilds
 
 SWAPFILE      ?= /swapfile.ue
 SWAPSIZE      ?= 32G
 
 # --- Meta --------------------------------------------------------------------
 .DEFAULT_GOAL := help
-.PHONY: help deps swap engine project genproject run clean-project distclean check
+.PHONY: help deps swap engine project genproject run package-linux package-android clean-project distclean check
 
 help: ## Show this help
 	@echo "Beach Volleyball — UE5 + AngelScript"
@@ -116,6 +119,29 @@ project: check ## Compile this game's C++ module against the engine
 	"$(UE_BUILD)" $(PROJECT_NAME)Editor Linux Development \
 		-project="$(UPROJECT)" -progress
 	@echo ">> Project module built."
+
+package-linux: check ## Package a Development build for Linux (output: $(OUTPUT_DIR)/Linux)
+	@mkdir -p "$(OUTPUT_DIR)/Linux"
+	"$(UE_UAT)" BuildCookRun \
+		-project="$(UPROJECT)" \
+		-noP4 \
+		-platform=Linux \
+		-clientconfig=Development \
+		-cook -build -stage -pak -archive \
+		-archivedirectory="$(OUTPUT_DIR)/Linux"
+	@echo ">> Linux package ready at $(OUTPUT_DIR)/Linux"
+
+package-android: check ## Package a Development APK for Android (output: $(OUTPUT_DIR)/Android)
+	@mkdir -p "$(OUTPUT_DIR)/Android"
+	"$(UE_UAT)" BuildCookRun \
+		-project="$(UPROJECT)" \
+		-noP4 \
+		-platform=Android \
+		-cookflavor=Multi \
+		-clientconfig=Development \
+		-cook -build -stage -pak -archive \
+		-archivedirectory="$(OUTPUT_DIR)/Android"
+	@echo ">> Android package ready at $(OUTPUT_DIR)/Android"
 
 genproject: check ## (Optional) generate IDE project files for this project
 	"$(UE_GENPROJ)" -project="$(UPROJECT)" -game -engine
