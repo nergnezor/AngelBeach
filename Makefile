@@ -50,7 +50,7 @@ SWAPSIZE      ?= 32G
 
 # --- Meta --------------------------------------------------------------------
 .DEFAULT_GOAL := help
-.PHONY: help deps swap engine project genproject run package-linux package-android clean-project distclean check
+.PHONY: help deps swap engine project genproject run package-linux package-android package-web clean-project distclean check
 
 help: ## Show this help
 	@echo "Beach Volleyball — UE5 + AngelScript"
@@ -142,6 +142,21 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 		-cook -build -stage -pak -archive \
 		-archivedirectory="$(OUTPUT_DIR)/Android"
 	@echo ">> Android package ready at $(OUTPUT_DIR)/Android"
+
+package-web: check ## Package for HTML5/WebGL (output: $(OUTPUT_DIR)/Web) — requires community HTML5 plugin
+	@test -d "$(ENGINE_DIR)/Engine/Platforms/HTML5" || { \
+		echo "ERROR: HTML5 platform not found."; \
+		echo "       Install the community plugin: https://github.com/nicktindall/ue5-html5-plugin"; \
+		exit 1; }
+	@mkdir -p "$(OUTPUT_DIR)/Web"
+	"$(UE_UAT)" BuildCookRun \
+		-project="$(UPROJECT)" \
+		-noP4 \
+		-platform=HTML5 \
+		-clientconfig=Development \
+		-cook -build -stage -pak -archive \
+		-archivedirectory="$(OUTPUT_DIR)/Web"
+	@echo ">> Web package ready at $(OUTPUT_DIR)/Web/HTML5"
 
 genproject: check ## (Optional) generate IDE project files for this project
 	"$(UE_GENPROJ)" -project="$(UPROJECT)" -game -engine

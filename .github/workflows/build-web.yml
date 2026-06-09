@@ -1,0 +1,59 @@
+name: Build – Web (HTML5)
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 180
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
+      PROJECT_NAME: BeachVolleyball
+      OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify engine & HTML5 platform
+        run: |
+          test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
+            echo "ERROR: engine not found at $ENGINE_DIR"; exit 1
+          }
+          # HTML5 requires the community plugin for UE5:
+          # https://github.com/nicktindall/ue5-html5-plugin
+          test -d "$ENGINE_DIR/Engine/Platforms/HTML5" || {
+            echo "ERROR: HTML5 platform not found in engine."
+            echo "Install the community plugin on the runner first."
+            exit 1
+          }
+          echo "Engine + HTML5 OK"
+
+      - name: Build C++ module (HTML5)
+        run: |
+          "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
+            ${PROJECT_NAME} HTML5 Development \
+            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            -progress
+
+      - name: Package for HTML5
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
+            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            -noP4 \
+            -platform=HTML5 \
+            -clientconfig=Development \
+            -cook -build -stage -pak -archive \
+            -archivedirectory="$OUTPUT_DIR"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ github.sha }}
+          path: PackagedBuilds/Web/
+          retention-days: 14
