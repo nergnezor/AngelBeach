@@ -24,17 +24,97 @@ class ABeachVolleyballGameMode : AGameModeBase
 	float MatchRestartTimer = 0.0f;
 	bool bWaitingForRestart = false;
 
-	void BeginPlay() override
+	// Draw the score/minimap HUD.
+	default HUDClass = ABeachVolleyballHUD;
+
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
-		Super::BeginPlay();
+		SetupWorld();
 		SpawnActors();
 		StartMatch();
 	}
 
-	void Tick(float DeltaTime) override
+	// Golden-hour lighting, post-process and side camera (runs on any map).
+	private void SetupWorld()
 	{
-		Super::Tick(DeltaTime);
+		// --- Sun: low golden-hour angle, warm low-intensity light ---
+		ADirectionalLight SunActor = Cast<ADirectionalLight>(
+			SpawnActor(ADirectionalLight::StaticClass(), FVector(0, 0, 10000), FRotator(-8, -55, 0)));
+		if (SunActor != nullptr)
+		{
+			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
+				SunActor.GetComponentByClass(UDirectionalLightComponent::StaticClass()));
+			if (LC != nullptr)
+			{
+				LC.SetIntensity(6.0f);
+				LC.SetLightColor(FLinearColor(1.0f, 0.667f, 0.41f));
+				LC.CastShadows = true;
+			}
+		}
 
+		// --- Sky atmosphere + real-time sky light ---
+		SpawnActor(ASkyAtmosphere::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+
+		ASkyLight SkyLightActor = Cast<ASkyLight>(
+			SpawnActor(ASkyLight::StaticClass(), FVector(0, 0, 500), FRotator::ZeroRotator));
+		if (SkyLightActor != nullptr)
+		{
+			USkyLightComponent SLC = Cast<USkyLightComponent>(
+				SkyLightActor.GetComponentByClass(USkyLightComponent::StaticClass()));
+			if (SLC != nullptr)
+			{
+				SLC.SetRealTimeCapture(true);
+				SLC.SetIntensity(1.2f);
+			}
+		}
+
+		// --- Warm volumetric fog ---
+		AExponentialHeightFog FogActor = Cast<AExponentialHeightFog>(
+			SpawnActor(AExponentialHeightFog::StaticClass(), FVector(0, 0, 100), FRotator::ZeroRotator));
+		if (FogActor != nullptr)
+		{
+			UExponentialHeightFogComponent FC = Cast<UExponentialHeightFogComponent>(
+				FogActor.GetComponentByClass(UExponentialHeightFogComponent::StaticClass()));
+			if (FC != nullptr)
+			{
+				FC.SetFogDensity(0.012f);
+				FC.SetFogHeightFalloff(0.2f);
+				FC.SetFogInscatteringColor(FLinearColor(0.85f, 0.55f, 0.35f));
+				FC.SetVolumetricFog(true);
+				FC.SetVolumetricFogScatteringDistribution(0.85f);
+				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.6f, 0.3f));
+				FC.SetDirectionalInscatteringExponent(16.0f);
+				FC.SetDirectionalInscatteringStartDistance(100.0f);
+			}
+		}
+
+		// --- Unbound post-process volume: bloom, exposure, vignette ---
+		APostProcessVolume PPV = Cast<APostProcessVolume>(
+			SpawnActor(APostProcessVolume::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator));
+		if (PPV != nullptr)
+		{
+			PPV.bUnbound = true;
+			PPV.Priority = 1.0f;
+			FPostProcessSettings PP = PPV.Settings;
+			PP.bOverride_BloomIntensity = true;
+			PP.BloomIntensity = 0.85f;
+			PP.bOverride_BloomThreshold = true;
+			PP.BloomThreshold = 1.1f;
+			PP.bOverride_AutoExposureBias = true;
+			PP.AutoExposureBias = 1.0f;
+			PP.bOverride_VignetteIntensity = true;
+			PP.VignetteIntensity = 0.35f;
+			PPV.Settings = PP;
+		}
+
+		// --- Side camera ---
+		SpawnActor(ABeachVolleyballCamera::StaticClass(), FVector(0, -1400, 350), FRotator(0, 90, 0));
+	}
+
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
+	{
 		if (bWaitingForServe)
 		{
 			ServeTimer += DeltaTime;
@@ -59,45 +139,46 @@ class ABeachVolleyballGameMode : AGameModeBase
 	private void SpawnActors()
 	{
 		// Spawn court
-		FActorSpawnParameters Params;
-		Court = Cast<ACourt>(GetWorld().SpawnActor(ACourt::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator, Params));
+		Court = Cast<ACourt>(SpawnActor(ACourt::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn sand FX system (dust + upward spray)
-		SandFX = Cast<ASandFX>(GetWorld().SpawnActor(ASandFX::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator, Params));
+		SandFX = Cast<ASandFX>(SpawnActor(ASandFX::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn ball
-		Ball = Cast<ABall>(GetWorld().SpawnActor(ABall::StaticClass(),
-			FVector(0, 0, 300), FRotator::ZeroRotator, Params));
+		Ball = Cast<ABall>(SpawnActor(ABall::StaticClass(),
+			FVector(0, 0, 300), FRotator::ZeroRotator));
 		if (Ball != nullptr)
 		{
 			Ball.Sand = SandFX;
 			Ball.Court = Court;
+			Ball.GM = this;
 		}
 
 		// Spawn human player (left/negative X side)
-		HumanPawn = Cast<AHumanPlayer>(GetWorld().SpawnActor(AHumanPlayer::StaticClass(),
-			FVector(-400, 0, 100), FRotator::ZeroRotator, Params));
+		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer::StaticClass(),
+			FVector(-400, 0, 100), FRotator::ZeroRotator));
 		if (HumanPawn != nullptr)
 		{
 			HumanPawn.Sand = SandFX;
 			HumanPawn.Court = Court;
+			HumanPawn.GM = this;
 		}
 
 		// Spawn AI player (right/positive X side)
-		AIPawn = Cast<AAIPlayer>(GetWorld().SpawnActor(AAIPlayer::StaticClass(),
-			FVector(400, 0, 100), FRotator::ZeroRotator, Params));
-
+		AIPawn = Cast<AAIPlayer>(SpawnActor(AAIPlayer::StaticClass(),
+			FVector(400, 0, 100), FRotator::ZeroRotator));
 		if (AIPawn != nullptr)
 		{
 			AIPawn.Ball = Ball;
 			AIPawn.Sand = SandFX;
 			AIPawn.Court = Court;
+			AIPawn.GM = this;
 		}
 
 		// Possess human with player controller
-		APlayerController PC = GetWorld().GetFirstPlayerController();
+		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr && HumanPawn != nullptr)
 		{
 			PC.Possess(HumanPawn);
@@ -191,7 +272,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 	void OnBallHitNet()
 	{
 		// Net touch: rally continues (ball bounces off)
-		// If ball falls on same side it came from, that team loses point
 	}
 
 	// Called by Player when touch limit exceeded

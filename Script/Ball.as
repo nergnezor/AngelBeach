@@ -2,7 +2,7 @@
 
 class ABall : AActor
 {
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, RootComponent)
 	UProceduralMeshComponent MeshComp;
 
 	// Physics state
@@ -22,11 +22,13 @@ class ABall : AActor
 
 	bool bInPlay = false;
 
-	// FX references (set by GameMode)
+	// References (set by GameMode)
 	UPROPERTY()
 	ASandFX Sand;
 	UPROPERTY()
 	ACourt Court;
+	UPROPERTY()
+	ABeachVolleyballGameMode GM;
 
 	UFUNCTION(BlueprintCallable)
 	void Launch(FVector Origin, FVector InitVelocity)
@@ -43,15 +45,15 @@ class ABall : AActor
 		Velocity = ImpulseDir.GetSafeNormal() * Speed;
 	}
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
-		Super::BeginPlay();
 		BuildSphereMesh();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
-		Super::Tick(DeltaTime);
 		if (!bInPlay) return;
 
 		StepPhysics(DeltaTime);
@@ -95,7 +97,6 @@ class ABall : AActor
 			}
 
 			// Notify game mode of floor hit
-			ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
 			if (GM != nullptr)
 				GM.OnBallHitFloor(Position);
 		}
@@ -119,7 +120,6 @@ class ABall : AActor
 					? NetX - NetHalfThickness - BallRadius
 					: NetX + NetHalfThickness + BallRadius;
 
-				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
 				if (GM != nullptr)
 					GM.OnBallHitNet();
 			}
@@ -133,6 +133,8 @@ class ABall : AActor
 		TArray<int32> Tris;
 		TArray<FVector> Normals;
 		TArray<FVector2D> UVs;
+		TArray<FLinearColor> Colors;
+		TArray<FVector2D> NoUV;
 		TArray<FProcMeshTangent> Tangents;
 
 		int Stacks = 12;
@@ -153,6 +155,7 @@ class ABall : AActor
 				Verts.Add(N * R);
 				Normals.Add(N);
 				UVs.Add(FVector2D(float(j) / Slices, float(i) / Stacks));
+				Colors.Add(FLinearColor(1, 1, 1, 1)); // white volleyball
 			}
 		}
 
@@ -170,13 +173,7 @@ class ABall : AActor
 		}
 
 		MeshComp.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
-			TArray<FLinearColor>(), Tangents, true);
-
-		// White volleyball material (vertex color)
-		TArray<FLinearColor> Colors;
-		for (int i = 0; i < Verts.Num(); i++)
-			Colors.Add(FLinearColor(1, 1, 1, 1));
-		MeshComp.UpdateMeshSection_LinearColor(0, Verts, Normals, UVs, Colors, Tangents);
+			NoUV, NoUV, NoUV, Colors, Tangents, true);
 	}
 
 	// Return predicted landing position via forward integration

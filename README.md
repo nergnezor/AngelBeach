@@ -45,18 +45,31 @@ Script/
   AIPlayer.as              — AI with trajectory prediction, difficulty scaling
   Court.as                 — deformable sand grid, net, lines, posts (all procedural)
   SandFX.as                — upward sand spray + dust (Niagara or procedural fallback)
-  GameMode.as              — spawn, serve flow, point/set/match logic, restart
+  GameMode.as              — world setup (golden-hour lighting, post-process, camera),
+                             spawn, serve flow, point/set/match logic, restart
   HUD.as                   — Canvas HUD: score, phase, minimap
   Camera.as                — side-view camera with soft ball-following
-  CourtLevel.as            — golden-hour lighting + post-process, level setup
+Content/
+  CourtLevel.umap          — near-empty level; GameMode builds everything at runtime
 ```
 
 ## Setup
 
-1. Install **Unreal Engine 5.3+**
-2. Install the **AngelScript for UE5** plugin (https://angelscript.hazelight.se/)
-3. Open `BeachVolleyball.uproject`
-4. Cook and play — the `CourtLevel` default map runs the full game
+This project targets the **AngelScript fork of Unreal Engine** (Hazelight's
+`UnrealEngine-Angelscript`, latest branch). A `Makefile` automates the whole
+build on Linux:
+
+```bash
+make deps        # apt build dependencies
+make swap        # optional 32G swapfile (helps on <32G RAM)
+make engine      # clone + build the AngelScript UE fork (needs EpicGames GitHub access)
+make project     # compile the game module
+make run         # launch the editor on this project
+```
+
+Then press Play — the `GameMode` builds the court, players, ball, lighting and
+camera at runtime on the near-empty `CourtLevel` map. AngelScript hot-reloads,
+so edits to `Script/*.as` apply without restarting.
 
 ## Scoring Rules
 
