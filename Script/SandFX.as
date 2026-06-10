@@ -1,15 +1,12 @@
 // Sand burst FX: sprays grains UP and outward on impacts and footsteps.
 //
-// Two backends:
-//   * Niagara  - assign ImpactSystem / FootstepSystem in the editor for the
-//                most realistic GPU sand. Used automatically when set.
-//   * Fallback - an asset-free CPU particle pool rendered as procedural,
-//                camera-facing quads. Runs whenever no Niagara system is set,
-//                so the effect is never empty out of the box.
+// Procedural CPU particle pool rendered as camera-facing quads (asset-free).
+// Niagara systems can be assigned for GPU sand; the actual spawn call is wired
+// once the base scripts are confirmed compiling against this engine (see Burst).
 
 class ASandFX : AActor
 {
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, RootComponent)
 	UProceduralMeshComponent DustMesh;
 
 	// Optional Niagara systems (author in editor, then assign on the actor).
@@ -19,10 +16,10 @@ class ASandFX : AActor
 	UPROPERTY()
 	UNiagaraSystem FootstepSystem;
 
-	// --- CPU fallback particle pool ---
+	// --- CPU particle pool ---
 	const int   MaxParticles = 260;
 	const float PGravity     = -980.0f;
-	const float PDrag        = 0.6f;    // per-second velocity damping
+	const float PDrag        = 0.6f;
 	const float GroundZ      = 0.0f;
 
 	private TArray<FVector> PPos;
@@ -33,9 +30,9 @@ class ASandFX : AActor
 	private int NextFree = 0;
 	private bool bDustDirty = false;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
-		Super::BeginPlay();
 		for (int i = 0; i < MaxParticles; i++)
 		{
 			PPos.Add(FVector::ZeroVector);
@@ -47,43 +44,33 @@ class ASandFX : AActor
 	}
 
 	// Strong upward sand spray from a ball impact.
-	// ImpactVel is the ball's velocity at impact; grains spray up and away.
 	UFUNCTION(BlueprintCallable)
 	void Burst(FVector Pos, FVector ImpactVel, float Strength)
 	{
-		Strength = Math::Clamp(Strength, 0.1f, 3.0f);
+		float S = Math::Clamp(Strength, 0.1f, 3.0f);
 
-		if (ImpactSystem != nullptr)
-		{
-			Niagara::SpawnSystemAtLocation(ImpactSystem, Pos, FRotator::ZeroRotator);
-			return;
-		}
+		// NOTE: When ImpactSystem is assigned, spawn it here once the Niagara
+		// AngelScript namespace is confirmed, e.g.:
+		//   Niagara::SpawnSystemAtLocation(ImpactSystem, Pos, FRotator::ZeroRotator);
+		// Until then (and whenever no system is set) the procedural spray runs.
 
-		int Count = int(18.0f + Strength * 34.0f);
-		SprayFallback(Pos, ImpactVel, Strength, Count, 1.0f);
+		int Count = int(18.0f + S * 34.0f);
+		SprayFallback(Pos, ImpactVel, S, Count, 1.0f);
 	}
 
 	// Smaller puff kicked up under a footstep.
 	UFUNCTION(BlueprintCallable)
 	void Footstep(FVector Pos, float Strength)
 	{
-		Strength = Math::Clamp(Strength, 0.1f, 2.0f);
-
-		if (FootstepSystem != nullptr)
-		{
-			Niagara::SpawnSystemAtLocation(FootstepSystem, Pos, FRotator::ZeroRotator);
-			return;
-		}
-
-		int Count = int(6.0f + Strength * 10.0f);
-		SprayFallback(Pos, FVector(0, 0, 0), Strength, Count, 0.5f);
+		float S = Math::Clamp(Strength, 0.1f, 2.0f);
+		int Count = int(6.0f + S * 10.0f);
+		SprayFallback(Pos, FVector(0, 0, 0), S, Count, 0.5f);
 	}
 
 	// Emit Count grains with a strong vertical component.
 	private void SprayFallback(FVector Pos, FVector ImpactVel, float Strength,
 		int Count, float Scale)
 	{
-		// Horizontal direction sand prefers to spray (opposite ball travel).
 		FVector HBias = FVector(-ImpactVel.X, -ImpactVel.Y, 0).GetSafeNormal();
 
 		for (int n = 0; n < Count; n++)
@@ -97,7 +84,7 @@ class ASandFX : AActor
 				+ HBias * 0.6f;
 
 			float hSpeed = Math::RandRange(60.0f, 220.0f) * Strength * Scale;
-			float upSpeed = Math::RandRange(220.0f, 520.0f) * Strength * Scale; // up-dominant
+			float upSpeed = Math::RandRange(220.0f, 520.0f) * Strength * Scale;
 
 			PPos[idx] = Pos + FVector(0, 0, 2);
 			PVel[idx] = OutDir.GetSafeNormal() * hSpeed + FVector(0, 0, upSpeed);
@@ -109,10 +96,9 @@ class ASandFX : AActor
 		bDustDirty = true;
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
-		Super::Tick(DeltaTime);
-
 		bool bAnyAlive = false;
 		float damp = 1.0f - Math::Clamp(PDrag * DeltaTime, 0.0f, 1.0f);
 
@@ -125,7 +111,6 @@ class ASandFX : AActor
 			PVel[i] *= damp;
 			PPos[i] += PVel[i] * DeltaTime;
 
-			// Settle on the sand, then fade quickly.
 			if (PPos[i].Z <= GroundZ)
 			{
 				PPos[i].Z = GroundZ;
@@ -151,13 +136,13 @@ class ASandFX : AActor
 		TArray<FVector> N;
 		TArray<FVector2D> UV;
 		TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV;
 		TArray<FProcMeshTangent> Tan;
 
 		for (int i = 0; i < MaxParticles; i++)
 		{
 			if (PLife[i] <= 0.0f) continue;
 
-			// Shrink as the grain dies (no translucency needed).
 			float frac = PLife[i] / PLifeMax[i];
 			float s = PSize[i] * (0.4f + 0.6f * frac);
 			FVector P = PPos[i];
@@ -172,7 +157,6 @@ class ASandFX : AActor
 			UV.Add(FVector2D(0, 0)); UV.Add(FVector2D(1, 0));
 			UV.Add(FVector2D(1, 1)); UV.Add(FVector2D(0, 1));
 
-			// Lighter, dustier than packed sand; slightly darker as it falls.
 			float shade = 0.85f + 0.15f * frac;
 			for (int k = 0; k < 4; k++)
 				C.Add(FLinearColor(0.95f * shade, 0.86f * shade, 0.66f * shade, 1));
@@ -187,6 +171,6 @@ class ASandFX : AActor
 			return;
 		}
 
-		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, C, Tan, false);
+		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 	}
 }

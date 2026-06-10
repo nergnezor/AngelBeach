@@ -13,6 +13,7 @@ public class BeachVolleyball : ModuleRules
 			"Engine",
 			"InputCore",
 			"ProceduralMeshComponent",
+			"Niagara",
 			"AngelscriptCode"
 		});
 

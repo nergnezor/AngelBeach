@@ -2,10 +2,10 @@
 
 class ABeachVolleyballCamera : AActor
 {
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
 
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, Attach = CameraComp)
 	USpringArmComponent SpringArm;
 
 	// Camera positioning
@@ -20,26 +20,24 @@ class ABeachVolleyballCamera : AActor
 	UPROPERTY()
 	ABall Ball;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
-		Super::BeginPlay();
-
 		// Position camera on side
 		SetActorLocation(SideOffset);
 		SetActorRotation(FRotator(0, 90, 0)); // face the court
 
 		// Assign to player controller
-		APlayerController PC = GetWorld().GetFirstPlayerController();
+		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr)
-			PC.SetViewTarget(this);
+			PC.SetViewTargetWithBlend(this, 0.0f);
 
 		FindBall();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
-		Super::Tick(DeltaTime);
-
 		if (Ball == nullptr) FindBall();
 
 		UpdateCameraPosition(DeltaTime);
@@ -57,8 +55,9 @@ class ABeachVolleyballCamera : AActor
 			BaseLookAt.Z = 150 + Math::Max(0.0f, (Ball.Position.Z - 150) * BallWeightZ);
 		}
 
-		// Smooth interpolation
-		CurrentLookAt = FMath::VInterpTo(CurrentLookAt, BaseLookAt, DeltaTime, FollowSpeed);
+		// Smooth interpolation (exponential approach toward the target)
+		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);
+		CurrentLookAt = CurrentLookAt + (BaseLookAt - CurrentLookAt) * Alpha;
 
 		// Camera position: fixed Y offset, follow X and Z softly
 		FVector CamPos = FVector(CurrentLookAt.X, SideOffset.Y, SideOffset.Z + CurrentLookAt.Z * 0.5f);

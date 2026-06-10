@@ -1,12 +1,12 @@
-// Base player pawn - movement, jump, hit actions
+// Base player pawn - movement, jump, hit actions, procedural stylised body
 
 class AVolleyballPlayer : APawn
 {
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, RootComponent)
 	UCapsuleComponent Capsule;
 
 	// Procedural stylised body (built/animated each frame in RebuildBody)
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, Attach = Capsule)
 	UProceduralMeshComponent Body;
 
 	// Movement params
@@ -24,36 +24,36 @@ class AVolleyballPlayer : APawn
 	float HitCooldown = 0.4f;
 	float HitTimer = 0.0f;
 
-	// Sand FX references (set by GameMode)
-	UPROPERTY()
-	ASandFX Sand;
-	UPROPERTY()
-	ACourt Court;
-	private float StepTimer = 0.0f;
-
-	// --- Stylised body animation state ---
-	private float WalkPhase = 0.0f;
-	private float ReachTimer = 0.0f;       // >0 while arms reach for the ball
-	private FVector ReachDir = FVector(0, 0, 1);
-	private bool bBodyBuilt = false;
-
 	// Court bounds (set by GameMode)
 	float CourtMinX = -450.0f;
 	float CourtMaxX = -5.0f;     // net side boundary
 	float CourtMinY = -450.0f;
 	float CourtMaxY = 450.0f;
 
-	void BeginPlay() override
+	// References (set by GameMode)
+	UPROPERTY()
+	ASandFX Sand;
+	UPROPERTY()
+	ACourt Court;
+	UPROPERTY()
+	ABeachVolleyballGameMode GM;
+	private float StepTimer = 0.0f;
+
+	// --- Stylised body animation state ---
+	private float WalkPhase = 0.0f;
+	private float ReachTimer = 0.0f;       // >0 while arms reach for the ball
+	private FVector ReachDir = FVector(0, 0, 1);
+
+	// Base setup, called by subclasses from their BeginPlay.
+	void InitPlayer()
 	{
-		Super::BeginPlay();
 		FVector Loc = GetActorLocation();
 		FloorZ = Loc.Z;
 	}
 
-	void Tick(float DeltaTime) override
+	// Base per-frame update, called by subclasses from their Tick.
+	void UpdatePlayer(float DeltaTime)
 	{
-		Super::Tick(DeltaTime);
-
 		// Gravity
 		if (!bIsGrounded)
 			PlayerVelocity.Z += Gravity * DeltaTime;
@@ -93,7 +93,6 @@ class AVolleyballPlayer : APawn
 			if (HSpeed > 80.0f)
 			{
 				StepTimer += DeltaTime;
-				// Faster strides at higher speed.
 				float Interval = Math::Clamp(120.0f / HSpeed, 0.18f, 0.5f);
 				if (StepTimer >= Interval)
 				{
@@ -124,7 +123,7 @@ class AVolleyballPlayer : APawn
 		if (bIsGrounded && HSpeed2 > 30.0f)
 			WalkPhase += DeltaTime * (HSpeed2 / 60.0f);
 		else
-			WalkPhase *= (1.0f - Math::Clamp(6.0f * DeltaTime, 0.0f, 1.0f)); // settle
+			WalkPhase *= (1.0f - Math::Clamp(6.0f * DeltaTime, 0.0f, 1.0f));
 
 		if (ReachTimer > 0.0f)
 			ReachTimer -= DeltaTime;
@@ -214,12 +213,8 @@ class AVolleyballPlayer : APawn
 		if (GS != nullptr)
 		{
 			bool bValid = GS.RegisterTouch(TeamSide);
-			if (!bValid)
-			{
-				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
-				if (GM != nullptr)
-					GM.OnTouchViolation(TeamSide);
-			}
+			if (!bValid && GM != nullptr)
+				GM.OnTouchViolation(TeamSide);
 		}
 	}
 
@@ -247,12 +242,10 @@ class AVolleyballPlayer : APawn
 		TArray<FVector> N;
 		TArray<FVector2D> UV;
 		TArray<FLinearColor> C;
-		TArray<FProcMeshTangent> Tan;
 
 		FLinearColor Team = TeamColor();
 		FLinearColor Skin = FLinearColor(0.95f, 0.78f, 0.60f, 1);
 
-		// Local layout (origin = actor pivot, ground at z = -PlayerHeight).
 		float hipZ = -5.0f;
 		float neckZ = 40.0f;
 		float shoulderZ = 32.0f;
@@ -260,7 +253,6 @@ class AVolleyballPlayer : APawn
 		float hipY = 8.0f;
 		float footZ = -PlayerHeight;
 
-		// Subtle bob while walking.
 		float bob = Math::Sin(WalkPhase * 2.0f) * 3.0f;
 
 		// Torso + head
@@ -281,12 +273,12 @@ class AVolleyballPlayer : APawn
 		}
 		else if (!bIsGrounded)
 		{
-			handL = shL + FVector(0,  6, 44.0f);   // arms up in the air
+			handL = shL + FVector(0,  6, 44.0f);
 			handR = shR + FVector(0, -6, 44.0f);
 		}
 		else
 		{
-			float arm = Math::Sin(WalkPhase) * 10.0f;   // gentle swing
+			float arm = Math::Sin(WalkPhase) * 10.0f;
 			handL = shL + FVector( arm,  10, -34.0f);
 			handR = shR + FVector(-arm, -10, -34.0f);
 		}
@@ -302,7 +294,7 @@ class AVolleyballPlayer : APawn
 
 		if (!bIsGrounded)
 		{
-			footL = FVector(-8,  hipY + 2, hipZ - 42.0f);  // tucked
+			footL = FVector(-8,  hipY + 2, hipZ - 42.0f);
 			footR = FVector(-8, -hipY - 2, hipZ - 42.0f);
 		}
 		else
@@ -315,7 +307,9 @@ class AVolleyballPlayer : APawn
 		AddTube(V, T, N, UV, C, hipL, footL, 6.0f, 4.5f, 5, Team);
 		AddTube(V, T, N, UV, C, hipR, footR, 6.0f, 4.5f, 5, Team);
 
-		Body.CreateMeshSection_LinearColor(0, V, T, N, UV, C, Tan, false);
+		TArray<FVector2D> NoUV;
+		TArray<FProcMeshTangent> Tan;
+		Body.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 	}
 
 	// Tapered cylinder between two local points.

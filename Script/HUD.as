@@ -2,15 +2,14 @@
 
 class ABeachVolleyballHUD : AHUD
 {
-	void DrawHUD() override
+	UFUNCTION(BlueprintOverride)
+	void DrawHUD(int SizeX, int SizeY)
 	{
-		Super::DrawHUD();
-
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr) return;
 
-		float W = Canvas.SizeX;
-		float H = Canvas.SizeY;
+		float W = float(SizeX);
+		float H = float(SizeY);
 
 		DrawBackground(W, H);
 		DrawScore(GS, W, H);
@@ -82,8 +81,8 @@ class ABeachVolleyballHUD : AHUD
 			DrawText(PhaseText, PhaseColor, W * 0.5f - PhaseText.Len() * 7, H * 0.15f, nullptr, 1.5f, false);
 
 		// Controls hint at bottom
-		FString Controls = "WASD: Move | Space: Jump | E: Pass | Shift: Set | F: Spike";
-		DrawText(Controls, FLinearColor(1,1,1,0.5f), W * 0.5f - 240, H - 28, nullptr, 0.85f, false);
+		FString Controls = "WASD/Stick: Move | Space/A: Jump | E/X: Pass | Shift/Y: Set | F/B: Spike";
+		DrawText(Controls, FLinearColor(1,1,1,0.5f), W * 0.5f - 280, H - 28, nullptr, 0.85f, false);
 	}
 
 	// Minimap: top-right corner overhead view of court and ball
@@ -114,7 +113,6 @@ class ABeachVolleyballHUD : AHUD
 			ABall B = Cast<ABall>(Balls[0]);
 			if (B != nullptr)
 			{
-				// Court spans -800 to 800 in X, -400 to 400 in Y
 				float BX = MapX + (B.Position.X + 800.0f) / 1600.0f * MapW;
 				float BY = MapY + (B.Position.Y + 400.0f) / 800.0f * MapH;
 				DrawRect(FLinearColor(1, 1, 1, 1), BX - 3, BY - 3, 6, 6);

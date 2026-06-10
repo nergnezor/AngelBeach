@@ -50,7 +50,7 @@ SWAPSIZE      ?= 32G
 
 # --- Meta --------------------------------------------------------------------
 .DEFAULT_GOAL := help
-.PHONY: help deps swap engine project genproject run package-linux package-android package-web clean-project distclean check
+.PHONY: help deps swap engine tools project genproject run package-linux package-android package-web clean-project distclean check
 
 help: ## Show this help
 	@echo "Beach Volleyball — UE5 + AngelScript"
@@ -111,7 +111,17 @@ engine: ## Clone + build the AngelScript UE fork (~100GB, hours)
 	cd "$(ENGINE_DIR)" && ./GenerateProjectFiles.sh
 	@echo ">> Building editor (this is the long part)..."
 	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) UnrealEditor
+	@$(MAKE) tools
 	@echo ">> Engine build complete: $(UE_EDITOR)"
+
+# --- Engine helper programs (required for rendering / lighting / imports) -----
+# Built one at a time: UBT refuses to build multiple targets concurrently.
+tools: ## Build ShaderCompileWorker + Lightmass + InterchangeWorker
+	@echo ">> Building helper programs (ShaderCompileWorker is required to render)..."
+	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) ShaderCompileWorker
+	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) UnrealLightmass
+	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) InterchangeWorker
+	@echo ">> Helper programs built."
 
 # --- Project: compile the game's C++ module ----------------------------------
 project: check ## Compile this game's C++ module against the engine
@@ -164,7 +174,7 @@ genproject: check ## (Optional) generate IDE project files for this project
 # --- Run ---------------------------------------------------------------------
 run: check ## Launch the editor on this project
 	@echo ">> Launching UnrealEditor on $(PROJECT_NAME)..."
-	"$(UE_EDITOR)" "$(UPROJECT)"
+	SDL_VIDEODRIVER=x11 "$(UE_EDITOR)" "$(UPROJECT)"
 
 # --- Cleanup -----------------------------------------------------------------
 clean-project: ## Remove this project's generated build artifacts

@@ -2,16 +2,16 @@
 
 class ACourt : AActor
 {
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, RootComponent)
 	UProceduralMeshComponent SandMesh;
 
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, Attach = SandMesh)
 	UProceduralMeshComponent NetMesh;
 
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, Attach = SandMesh)
 	UProceduralMeshComponent LinesMesh;
 
-	UPROPERTY()
+	UPROPERTY(DefaultComponent, Attach = SandMesh)
 	UProceduralMeshComponent PostsMesh;
 
 	// Court dimensions (cm) - regulation 16m x 8m
@@ -41,24 +41,24 @@ class ACourt : AActor
 	private TArray<FVector> SandN;
 	private TArray<FVector2D> SandUV;
 	private TArray<FProcMeshTangent> SandTan;
+	private TArray<FVector2D> NoUV;     // empty UV channels for mesh calls
 
 	private bool bSandDirty = false;
 	private float SandUpdateAccum = 0.0f;
 	const float SandUpdateInterval = 0.06f;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
-		Super::BeginPlay();
 		BuildSand();
 		BuildNet();
 		BuildLines();
 		BuildPosts();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
-		Super::Tick(DeltaTime);
-
 		// Slowly heal deformations back toward flat.
 		bool bAnyHeal = false;
 		float HealFactor = 1.0f - Math::Clamp(SandHealRate * DeltaTime, 0.0f, 1.0f);
@@ -137,7 +137,7 @@ class ACourt : AActor
 		}
 
 		SandMesh.CreateMeshSection_LinearColor(0, SandV, T, SandN, SandUV,
-			SandColors(), SandTan, true);
+			NoUV, NoUV, NoUV, SandColors(), SandTan, true);
 	}
 
 	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
@@ -154,7 +154,6 @@ class ACourt : AActor
 	}
 
 	// Push the sand down at a world position: crater with a small raised rim.
-	// Positive Depth digs a pit; grains are thrown up separately by SandFX.
 	UFUNCTION(BlueprintCallable)
 	void DeformSand(FVector WorldPos, float Radius, float Depth)
 	{
@@ -164,7 +163,6 @@ class ACourt : AActor
 		float InvR = (Radius > 1.0f) ? 1.0f / Radius : 1.0f;
 		float RimR = Radius * 1.5f;
 
-		// Bounding cell range to avoid scanning the whole grid.
 		int minX = Math::Clamp(int((Local.X - RimR + SandW) / SandCellX) - 1, 0, SandGridX);
 		int maxX = Math::Clamp(int((Local.X + RimR + SandW) / SandCellX) + 1, 0, SandGridX);
 		int minY = Math::Clamp(int((Local.Y - RimR + SandD) / SandCellY) - 1, 0, SandGridY);
@@ -180,14 +178,12 @@ class ACourt : AActor
 
 				if (d < Radius)
 				{
-					// Smooth bowl: deepest at centre.
 					float t = d * InvR;
 					float fall = 1.0f - t * t;
 					SandHeight[idx] = Math::Max(SandMinZ, SandHeight[idx] - Depth * fall);
 				}
 				else if (d < RimR)
 				{
-					// Raised rim of displaced sand around the crater.
 					float t = (d - Radius) / (RimR - Radius);
 					float rim = (1.0f - t) * Depth * 0.18f;
 					SandHeight[idx] += rim;
@@ -207,7 +203,6 @@ class ACourt : AActor
 			SandV[i] = FVector(P.X, P.Y, SandHeight[i]);
 		}
 
-		// Normals from central differences across the height grid.
 		for (int iy = 0; iy <= SandGridY; iy++)
 		{
 			for (int ix = 0; ix <= SandGridX; ix++)
@@ -225,7 +220,7 @@ class ACourt : AActor
 		}
 
 		SandMesh.UpdateMeshSection_LinearColor(0, SandV, SandN, SandUV,
-			SandColors(), SandTan);
+			NoUV, NoUV, NoUV, SandColors(), SandTan);
 	}
 
 	// Net: flat quad with dark color
@@ -235,6 +230,7 @@ class ACourt : AActor
 		TArray<int32> T;
 		TArray<FVector> N;
 		TArray<FVector2D> UV;
+		TArray<FLinearColor> C;
 		TArray<FProcMeshTangent> Tan;
 
 		float HW = CourtHalfWidth + 30.0f; // net slightly wider than court
@@ -249,22 +245,15 @@ class ACourt : AActor
 		V.Add(FVector( NetHalfThick,  HW, NetHeight));
 		V.Add(FVector(-NetHalfThick,  HW, NetHeight));
 
-		// Front face
 		T.Add(0); T.Add(1); T.Add(5); T.Add(0); T.Add(5); T.Add(4);
-		// Back face
 		T.Add(2); T.Add(3); T.Add(7); T.Add(2); T.Add(7); T.Add(6);
-		// Top
 		T.Add(4); T.Add(5); T.Add(6); T.Add(4); T.Add(6); T.Add(7);
 
 		for (int i = 0; i < 8; i++) N.Add(FVector(0,0,1));
 		for (int i = 0; i < 8; i++) UV.Add(FVector2D(0,0));
-
-		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
-
-		TArray<FLinearColor> C;
 		for (int i = 0; i < 8; i++) C.Add(FLinearColor(0.1f, 0.1f, 0.1f, 0.85f));
-		NetMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+
+		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 	}
 
 	// Court boundary lines and center line
@@ -294,12 +283,10 @@ class ACourt : AActor
 			FVector( CourtHalfLength,  CourtHalfWidth, H),
 			LineWidth);
 
-		LinesMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
-
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(1,1,1,1));
-		LinesMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+
+		LinesMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 	}
 
 	private void AddLine(TArray<FVector>& Verts, TArray<int32>& Tris,
@@ -334,12 +321,10 @@ class ACourt : AActor
 		AddCylinder(V, T, N, UV, FVector(0, -CourtHalfWidth - 30.0f, 0), PostRadius, PostHeight, Segs);
 		AddCylinder(V, T, N, UV, FVector(0,  CourtHalfWidth + 30.0f, 0), PostRadius, PostHeight, Segs);
 
-		PostsMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
-
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(0.8f, 0.8f, 0.8f, 1));
-		PostsMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+
+		PostsMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 	}
 
 	private void AddCylinder(TArray<FVector>& Verts, TArray<int32>& Tris,
