@@ -1,22 +1,16 @@
-// Side camera with soft ball-following
-
-// Extends APawn so Tick is enabled (AActor has bCanEverTick=false by default).
-class ABeachVolleyballCamera : APawn
+// End-zone camera: fixed behind Team A's baseline, tilts up to follow the ball
+class ABeachVolleyballCamera : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
 
-	UPROPERTY(DefaultComponent, Attach = CameraComp)
-	USpringArmComponent SpringArm;
+	// Fixed camera position: behind Team A's end (X = -1100), centered Y, 3m up
+	FVector CamPos = FVector(-1100, 0, 300);
 
-	// Camera positioning
-	FVector SideOffset = FVector(0, -1400, 350);  // Y offset for side view
-	float FollowSpeed = 3.5f;                      // smoothing speed
-	float BallWeightX = 0.4f;                      // how much ball X affects camera
-	float BallWeightZ = 0.25f;                     // how much ball Z affects camera height
+	// What the camera looks at — smoothly tracks ball height
+	FVector CurrentLookAt = FVector(0, 0, 150);
 
-	FVector CurrentLookAt = FVector::ZeroVector;
-	FVector TargetLookAt = FVector::ZeroVector;
+	float FollowSpeed = 4.0f;
 
 	UPROPERTY()
 	ABall Ball;
@@ -24,11 +18,8 @@ class ABeachVolleyballCamera : APawn
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		// Position camera on side
-		SetActorLocation(SideOffset);
-		SetActorRotation(FRotator(0, 90, 0)); // face the court
+		SetActorLocation(CamPos);
 
-		// Assign to player controller
 		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr)
 			PC.SetViewTargetWithBlend(this, 0.0f);
@@ -41,39 +32,23 @@ class ABeachVolleyballCamera : APawn
 	{
 		if (Ball == nullptr) FindBall();
 
-		UpdateCameraPosition(DeltaTime);
-	}
-
-	private void UpdateCameraPosition(float DeltaTime)
-	{
-		// Base look-at point is court center
-		FVector BaseLookAt = FVector(0, 0, 150);
-
+		// Target look-at: court center XY, ball height when high
+		FVector Target = FVector(0, 0, 150);
 		if (Ball != nullptr && Ball.bInPlay)
-		{
-			// Softly follow ball's X and Z position
-			BaseLookAt.X = Ball.Position.X * BallWeightX;
-			BaseLookAt.Z = 150 + Math::Max(0.0f, (Ball.Position.Z - 150) * BallWeightZ);
-		}
+			Target.Z = Math::Max(150.0f, Ball.Position.Z * 0.8f);
 
-		// Smooth interpolation (exponential approach toward the target)
+		// Smooth tilt toward target
 		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);
-		CurrentLookAt = CurrentLookAt + (BaseLookAt - CurrentLookAt) * Alpha;
+		CurrentLookAt = CurrentLookAt + (Target - CurrentLookAt) * Alpha;
 
-		// Camera position: fixed Y offset, follow X and Z softly
-		FVector CamPos = FVector(CurrentLookAt.X, SideOffset.Y, SideOffset.Z + CurrentLookAt.Z * 0.5f);
-		SetActorLocation(CamPos);
-
-		// Look at court center height
 		FVector LookDir = (CurrentLookAt - CamPos).GetSafeNormal();
-		FRotator LookRot = LookDir.Rotation();
-		SetActorRotation(LookRot);
+		SetActorRotation(LookDir.Rotation());
 	}
 
 	private void FindBall()
 	{
 		TArray<AActor> Found;
-		GetAllActorsOfClass(ABall::StaticClass(), Found);
+		GetAllActorsOfClass(ABall, Found);
 		if (Found.Num() > 0)
 			Ball = Cast<ABall>(Found[0]);
 	}
