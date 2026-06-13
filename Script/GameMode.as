@@ -17,34 +17,28 @@ class ABeachVolleyballGameMode : AGameModeBase
 	UPROPERTY(BlueprintReadOnly)
 	ASandFX SandFX;
 
-	float ServeDelay = 2.0f;
-	float ServeTimer = 0.0f;
-	bool bWaitingForServe = false;
 	float MatchRestartDelay = 5.0f;
-	float MatchRestartTimer = 0.0f;
-	bool bWaitingForRestart = false;
 
-	// Draw the score/minimap HUD.
 	default HUDClass = ABeachVolleyballHUD;
+	default GameStateClass = ABeachVolleyballGameState;
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
+		Print("GameMode BeginPlay");
 		SetupWorld();
 		SpawnActors();
 		StartMatch();
 	}
 
-	// Golden-hour lighting, post-process and side camera (runs on any map).
 	private void SetupWorld()
 	{
-		// --- Sun: low golden-hour angle, warm low-intensity light ---
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight::StaticClass(), FVector(0, 0, 10000), FRotator(-8, -55, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-8, -55, 0)));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
-				SunActor.GetComponentByClass(UDirectionalLightComponent::StaticClass()));
+				SunActor.GetComponentByClass(UDirectionalLightComponent));
 			if (LC != nullptr)
 			{
 				LC.SetIntensity(6.0f);
@@ -53,15 +47,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 			}
 		}
 
-		// --- Sky atmosphere + real-time sky light ---
-		SpawnActor(ASkyAtmosphere::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+		SpawnActor(ASkyAtmosphere, FVector::ZeroVector, FRotator::ZeroRotator);
 
 		ASkyLight SkyLightActor = Cast<ASkyLight>(
-			SpawnActor(ASkyLight::StaticClass(), FVector(0, 0, 500), FRotator::ZeroRotator));
+			SpawnActor(ASkyLight, FVector(0, 0, 500), FRotator::ZeroRotator));
 		if (SkyLightActor != nullptr)
 		{
 			USkyLightComponent SLC = Cast<USkyLightComponent>(
-				SkyLightActor.GetComponentByClass(USkyLightComponent::StaticClass()));
+				SkyLightActor.GetComponentByClass(USkyLightComponent));
 			if (SLC != nullptr)
 			{
 				SLC.SetRealTimeCapture(true);
@@ -69,13 +62,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 			}
 		}
 
-		// --- Warm volumetric fog ---
 		AExponentialHeightFog FogActor = Cast<AExponentialHeightFog>(
-			SpawnActor(AExponentialHeightFog::StaticClass(), FVector(0, 0, 100), FRotator::ZeroRotator));
+			SpawnActor(AExponentialHeightFog, FVector(0, 0, 100), FRotator::ZeroRotator));
 		if (FogActor != nullptr)
 		{
 			UExponentialHeightFogComponent FC = Cast<UExponentialHeightFogComponent>(
-				FogActor.GetComponentByClass(UExponentialHeightFogComponent::StaticClass()));
+				FogActor.GetComponentByClass(UExponentialHeightFogComponent));
 			if (FC != nullptr)
 			{
 				FC.SetFogDensity(0.012f);
@@ -89,9 +81,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 			}
 		}
 
-		// --- Unbound post-process volume: bloom, exposure, vignette ---
 		APostProcessVolume PPV = Cast<APostProcessVolume>(
-			SpawnActor(APostProcessVolume::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator));
+			SpawnActor(APostProcessVolume, FVector::ZeroVector, FRotator::ZeroRotator));
 		if (PPV != nullptr)
 		{
 			PPV.bUnbound = true;
@@ -108,67 +99,37 @@ class ABeachVolleyballGameMode : AGameModeBase
 			PPV.Settings = PP;
 		}
 
-		// --- Side camera ---
-		SpawnActor(ABeachVolleyballCamera::StaticClass(), FVector(0, -1400, 350), FRotator(0, 90, 0));
-	}
-
-	UFUNCTION(BlueprintOverride)
-	void Tick(float DeltaTime)
-	{
-		if (bWaitingForServe)
-		{
-			ServeTimer += DeltaTime;
-			if (ServeTimer >= ServeDelay)
-			{
-				bWaitingForServe = false;
-				ServeBall();
-			}
-		}
-
-		if (bWaitingForRestart)
-		{
-			MatchRestartTimer += DeltaTime;
-			if (MatchRestartTimer >= MatchRestartDelay)
-			{
-				bWaitingForRestart = false;
-				ResetMatch();
-			}
-		}
+		SpawnActor(ABeachVolleyballCamera, FVector(0, -1400, 350), FRotator(0, 90, 0));
 	}
 
 	private void SpawnActors()
 	{
-		// Spawn court
-		Court = Cast<ACourt>(SpawnActor(ACourt::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator));
+		Court = Cast<ACourt>(SpawnActor(ACourt, FVector::ZeroVector, FRotator::ZeroRotator));
+		SandFX = Cast<ASandFX>(SpawnActor(ASandFX, FVector::ZeroVector, FRotator::ZeroRotator));
 
-		// Spawn sand FX system (dust + upward spray)
-		SandFX = Cast<ASandFX>(SpawnActor(ASandFX::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator));
-
-		// Spawn ball
-		Ball = Cast<ABall>(SpawnActor(ABall::StaticClass(),
-			FVector(0, 0, 300), FRotator::ZeroRotator));
+		Ball = Cast<ABall>(SpawnActor(ABall, FVector(0, 0, 300), FRotator::ZeroRotator));
 		if (Ball != nullptr)
 		{
 			Ball.Sand = SandFX;
 			Ball.Court = Court;
 			Ball.GM = this;
+			Print("Ball spawned OK");
+		}
+		else
+		{
+			Print("Ball spawn FAILED");
 		}
 
-		// Spawn human player (left/negative X side)
-		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer::StaticClass(),
-			FVector(-400, 0, 100), FRotator::ZeroRotator));
+		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer, FVector(-400, 0, 100), FRotator::ZeroRotator));
 		if (HumanPawn != nullptr)
 		{
 			HumanPawn.Sand = SandFX;
 			HumanPawn.Court = Court;
 			HumanPawn.GM = this;
+			HumanPawn.Ball = Ball;
 		}
 
-		// Spawn AI player (right/positive X side)
-		AIPawn = Cast<AAIPlayer>(SpawnActor(AAIPlayer::StaticClass(),
-			FVector(400, 0, 100), FRotator::ZeroRotator));
+		AIPawn = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(400, 0, 100), FRotator::ZeroRotator));
 		if (AIPawn != nullptr)
 		{
 			AIPawn.Ball = Ball;
@@ -177,13 +138,9 @@ class ABeachVolleyballGameMode : AGameModeBase
 			AIPawn.GM = this;
 		}
 
-		// Possess human with player controller
 		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr && HumanPawn != nullptr)
-		{
 			PC.Possess(HumanPawn);
-			HumanPawn.Ball = Ball;
-		}
 	}
 
 	private void StartMatch()
@@ -205,20 +162,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void ScheduleServe()
 	{
-		if (Ball != nullptr)
-			Ball.bInPlay = false;
-
-		bWaitingForServe = true;
-		ServeTimer = 0;
-
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-		if (GS != nullptr)
-			GS.GamePhase = EGamePhase::Phase_Serving;
+		if (Ball == nullptr) return;
+		Ball.bInPlay = false;
+		System::SetTimer(this, n"ServeBall", 0.1f, bLooping = false);
 	}
 
-	private void ServeBall()
+	UFUNCTION(BlueprintCallable)
+	void ServeBall()
 	{
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		Print("ServeBall: Ball=" + (Ball != nullptr ? "OK" : "NULL") + " GS=" + (GS != nullptr ? "OK" : "NULL"));
 		if (GS == nullptr || Ball == nullptr) return;
 
 		FVector ServeOrigin;
@@ -239,7 +192,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 		GS.StartRally();
 	}
 
-	// Called by Ball when it hits floor
 	UFUNCTION(BlueprintCallable)
 	void OnBallHitFloor(FVector HitPos)
 	{
@@ -247,19 +199,18 @@ class ABeachVolleyballGameMode : AGameModeBase
 		if (GS == nullptr) return;
 		if (GS.GamePhase != EGamePhase::Phase_Rally) return;
 
-		// Determine which team's court the ball landed in
 		ETeam ScoringTeam;
 		if (HitPos.X < 0)
-			ScoringTeam = ETeam::Team_B;  // landed on A's side, B scores
+			ScoringTeam = ETeam::Team_B;
 		else
-			ScoringTeam = ETeam::Team_A;  // landed on B's side, A scores
+			ScoringTeam = ETeam::Team_A;
 
 		GS.AddPoint(ScoringTeam);
 
 		if (GS.GamePhase == EGamePhase::Phase_MatchOver)
 		{
-			bWaitingForRestart = true;
-			MatchRestartTimer = 0;
+			if (Ball != nullptr)
+				Ball.StartRestartCountdown(MatchRestartDelay);
 		}
 		else
 		{
@@ -267,14 +218,9 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 	}
 
-	// Called by Ball when it hits the net
 	UFUNCTION(BlueprintCallable)
-	void OnBallHitNet()
-	{
-		// Net touch: rally continues (ball bounces off)
-	}
+	void OnBallHitNet() { }
 
-	// Called by Player when touch limit exceeded
 	UFUNCTION(BlueprintCallable)
 	void OnTouchViolation(ETeam FaultingTeam)
 	{
@@ -286,7 +232,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 		ScheduleServe();
 	}
 
-	private void ResetMatch()
+	UFUNCTION(BlueprintCallable)
+	void ResetMatch()
 	{
 		StartMatch();
 	}

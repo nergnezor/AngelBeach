@@ -57,7 +57,7 @@ class AAIPlayer : AVolleyballPlayer
 	private void UpdateAI(float DeltaTime)
 	{
 		FVector BallLoc = Ball.GetActorLocation();
-		FVector BallVel = Ball.Velocity;
+		FVector BallVel = Ball.BallVel;
 		FVector MyLoc = GetActorLocation();
 
 		// Only care about ball on our side (positive X)
@@ -139,7 +139,7 @@ class AAIPlayer : AVolleyballPlayer
 	private FVector PredictBallPosition(float TimeAhead) const
 	{
 		FVector PPos = Ball.Position;
-		FVector PVel = Ball.Velocity;
+		FVector PVel = Ball.BallVel;
 		float Dt = 0.05f;
 		float T = 0;
 		float G = Ball.Gravity;

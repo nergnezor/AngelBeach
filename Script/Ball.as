@@ -5,8 +5,8 @@ class ABall : AActor
 	UPROPERTY(DefaultComponent, RootComponent)
 	UProceduralMeshComponent MeshComp;
 
-	// Physics state
-	FVector Velocity = FVector(0, 0, 0);
+	// Physics state (BallVel avoids clash with APawn::GetVelocity if ever reparented)
+	FVector BallVel = FVector(0, 0, 0);
 	FVector Position = FVector(0, 0, 300);
 
 	const float Gravity = -980.0f;       // cm/s²
@@ -31,61 +31,75 @@ class ABall : AActor
 	ABeachVolleyballGameMode GM;
 
 	UFUNCTION(BlueprintCallable)
-	void Launch(FVector Origin, FVector InitVelocity)
+	void Launch(FVector Origin, FVector InitVel)
 	{
 		Position = Origin;
-		Velocity = InitVelocity;
+		BallVel = InitVel;
 		SetActorLocation(Position);
 		bInPlay = true;
+		Print("Ball launched! bInPlay=true");
 	}
 
 	UFUNCTION(BlueprintCallable)
 	void HitBall(FVector ImpulseDir, float Speed)
 	{
-		Velocity = ImpulseDir.GetSafeNormal() * Speed;
+		BallVel = ImpulseDir.GetSafeNormal() * Speed;
 	}
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
+		Print("Ball BeginPlay");
 		BuildSphereMesh();
 	}
 
 	UFUNCTION(BlueprintOverride)
 	void Tick(float DeltaTime)
 	{
-		if (!bInPlay) return;
-
+		if (!bInPlay)
+		{
+			Print("Ball Tick: not in play", Duration = 0.0f);
+			return;
+		}
 		StepPhysics(DeltaTime);
 		SetActorLocation(Position);
+	}
+
+	UFUNCTION()
+	void OnRestartTimer()
+	{
+		if (GM != nullptr) GM.ResetMatch();
+	}
+
+	void StartRestartCountdown(float Delay)
+	{
+		System::SetTimer(this, n"OnRestartTimer", Delay, bLooping = false);
 	}
 
 	private void StepPhysics(float Dt)
 	{
 		// Apply gravity
-		Velocity.Z += Gravity * Dt;
+		BallVel.Z += Gravity * Dt;
 
 		// Air drag
-		float Speed = Velocity.Size();
+		float Speed = BallVel.Size();
 		if (Speed > 0.1f)
-			Velocity -= Velocity.GetSafeNormal() * Speed * AirDrag;
+			BallVel -= BallVel.GetSafeNormal() * Speed * AirDrag;
 
 		// Integrate position
-		Position += Velocity * Dt;
+		Position += BallVel * Dt;
 
 		// Floor collision
 		if (Position.Z - BallRadius <= FloorZ)
 		{
-			// Capture impact velocity before the bounce reverses it.
-			FVector ImpactVel = Velocity;
-			float vDown = Math::Max(0.0f, -Velocity.Z);
+			FVector ImpactVel = BallVel;
+			float vDown = Math::Max(0.0f, -BallVel.Z);
 
 			Position.Z = FloorZ + BallRadius;
-			Velocity.Z = -Velocity.Z * Restitution;
-			Velocity.X *= 0.85f;
-			Velocity.Y *= 0.85f;
+			BallVel.Z = -BallVel.Z * Restitution;
+			BallVel.X *= 0.85f;
+			BallVel.Y *= 0.85f;
 
-			// Spray sand upward and dent a crater (only on real impacts).
 			if (vDown > 60.0f)
 			{
 				float Strength = Math::Clamp(vDown / 500.0f, 0.2f, 3.0f);
@@ -96,26 +110,21 @@ class ABall : AActor
 					Court.DeformSand(Ground, 28.0f + Strength * 22.0f, 5.0f + Strength * 9.0f);
 			}
 
-			// Notify game mode of floor hit
 			if (GM != nullptr)
 				GM.OnBallHitFloor(Position);
 		}
 
-		// Net collision (simple AABB)
 		CheckNetCollision();
 	}
 
 	private void CheckNetCollision()
 	{
-		// Net runs along Y axis at X=0
-		float PrevX = Position.X - Velocity.X * 0.016f;
+		float PrevX = Position.X - BallVel.X * 0.016f;
 		if ((PrevX < NetX) != (Position.X < NetX))
 		{
-			// Ball crossed net line - check height
 			if (Position.Z < NetTopZ + BallRadius)
 			{
-				// Hit the net - reverse X velocity
-				Velocity.X = -Velocity.X * 0.3f;
+				BallVel.X = -BallVel.X * 0.3f;
 				Position.X = (Position.X < NetX)
 					? NetX - NetHalfThickness - BallRadius
 					: NetX + NetHalfThickness + BallRadius;
@@ -126,7 +135,6 @@ class ABall : AActor
 		}
 	}
 
-	// Generate icosphere-style procedural sphere
 	private void BuildSphereMesh()
 	{
 		TArray<FVector> Verts;
@@ -155,7 +163,7 @@ class ABall : AActor
 				Verts.Add(N * R);
 				Normals.Add(N);
 				UVs.Add(FVector2D(float(j) / Slices, float(i) / Stacks));
-				Colors.Add(FLinearColor(1, 1, 1, 1)); // white volleyball
+				Colors.Add(FLinearColor(1, 1, 1, 1));
 			}
 		}
 
@@ -176,11 +184,10 @@ class ABall : AActor
 			NoUV, NoUV, NoUV, Colors, Tangents, true);
 	}
 
-	// Return predicted landing position via forward integration
 	FVector PredictLanding(float MaxTime = 3.0f) const
 	{
 		FVector PPos = Position;
-		FVector PVel = Velocity;
+		FVector PVel = BallVel;
 		float Dt = 0.05f;
 		float T = 0;
 
