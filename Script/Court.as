@@ -223,7 +223,7 @@ class ACourt : AActor
 			NoUV, NoUV, NoUV, SandColors(), SandTan);
 	}
 
-	// Net: flat quad with dark color
+	// Net: translucent glass-like plane, 80% transparent
 	private void BuildNet()
 	{
 		TArray<FVector> V;
@@ -233,27 +233,29 @@ class ACourt : AActor
 		TArray<FLinearColor> C;
 		TArray<FProcMeshTangent> Tan;
 
-		float HW = CourtHalfWidth + 30.0f; // net slightly wider than court
+		float HW = CourtHalfWidth + 30.0f;
+		FLinearColor GlassColor = FLinearColor(0.85f, 0.92f, 1.0f, 0.2f); // light blue, 20% opaque
 
-		V.Add(FVector(-NetHalfThick, -HW, 0));
-		V.Add(FVector( NetHalfThick, -HW, 0));
-		V.Add(FVector( NetHalfThick,  HW, 0));
-		V.Add(FVector(-NetHalfThick,  HW, 0));
+		// Front face
+		V.Add(FVector(-NetHalfThick, -HW, 0));   V.Add(FVector(-NetHalfThick,  HW, 0));
+		V.Add(FVector(-NetHalfThick,  HW, NetHeight)); V.Add(FVector(-NetHalfThick, -HW, NetHeight));
+		T.Add(0); T.Add(1); T.Add(2); T.Add(0); T.Add(2); T.Add(3);
 
-		V.Add(FVector(-NetHalfThick, -HW, NetHeight));
-		V.Add(FVector( NetHalfThick, -HW, NetHeight));
-		V.Add(FVector( NetHalfThick,  HW, NetHeight));
-		V.Add(FVector(-NetHalfThick,  HW, NetHeight));
-
-		T.Add(0); T.Add(1); T.Add(5); T.Add(0); T.Add(5); T.Add(4);
-		T.Add(2); T.Add(3); T.Add(7); T.Add(2); T.Add(7); T.Add(6);
+		// Back face
+		V.Add(FVector( NetHalfThick,  HW, 0));   V.Add(FVector( NetHalfThick, -HW, 0));
+		V.Add(FVector( NetHalfThick, -HW, NetHeight)); V.Add(FVector( NetHalfThick,  HW, NetHeight));
 		T.Add(4); T.Add(5); T.Add(6); T.Add(4); T.Add(6); T.Add(7);
 
-		for (int i = 0; i < 8; i++) N.Add(FVector(0,0,1));
-		for (int i = 0; i < 8; i++) UV.Add(FVector2D(0,0));
-		for (int i = 0; i < 8; i++) C.Add(FLinearColor(0.1f, 0.1f, 0.1f, 0.85f));
+		for (int i = 0; i < 8; i++) { N.Add(FVector(1,0,0)); UV.Add(FVector2D(0,0)); C.Add(GlassColor); }
 
 		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+
+		// Apply translucent material — M_SimpleTranslucent is opaque-enough for a glass look;
+		// the light blue vertex color tints it. If it fails to load the mesh still renders.
+		UMaterialInterface GlassMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/EngineDebugMaterials/M_SimpleTranslucent"));
+		if (GlassMat != nullptr)
+			NetMesh.SetMaterial(0, GlassMat);
 	}
 
 	// Court boundary lines and center line

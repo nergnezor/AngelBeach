@@ -1,4 +1,4 @@
-// AI player with trajectory prediction and adjustable difficulty
+// AI player - trajectory prediction, role-based team play (front/back)
 
 enum EAIState
 {
@@ -8,10 +8,19 @@ enum EAIState
 	AI_Hitting
 }
 
+enum EPlayerRole
+{
+	Role_Back,   // receives serve, digs, sets from deep
+	Role_Front   // attacks, blocks near net
+}
+
 class AAIPlayer : AVolleyballPlayer
 {
 	UPROPERTY(BlueprintReadWrite)
-	float Difficulty = 0.7f;  // 0..1, higher = smarter
+	float Difficulty = 0.75f;  // 0..1
+
+	UPROPERTY(BlueprintReadWrite)
+	EPlayerRole Role = EPlayerRole::Role_Back;
 
 	UPROPERTY()
 	ABall Ball;
@@ -21,23 +30,46 @@ class AAIPlayer : AVolleyballPlayer
 	float ReactionDelay = 0.0f;
 	float ReactionTimer = 0.0f;
 	FVector TargetPosition = FVector::ZeroVector;
-	bool bHasTarget = false;
+
+	// Called by GameMode after spawning to configure this player
+	void Setup(ETeam Team, EPlayerRole InRole, float InDifficulty,
+		ABall InBall, ASandFX InSand, ACourt InCourt, ABeachVolleyballGameMode InGM)
+	{
+		TeamSide = Team;
+		Role = InRole;
+		Difficulty = InDifficulty;
+		Ball = InBall;
+		Sand = InSand;
+		Court = InCourt;
+		GM = InGM;
+		MoveSpeed = 350.0f + Difficulty * 200.0f;
+		ReactionDelay = Math::Lerp(0.7f, 0.08f, Difficulty);
+
+		// Court X extents per team (Team_A = negative X, Team_B = positive X)
+		CourtMinY = -450.0f;
+		CourtMaxY = 450.0f;
+
+		if (Team == ETeam::Team_A)
+		{
+			CourtMinX = -900.0f;
+			CourtMaxX = -5.0f;
+		}
+		else
+		{
+			CourtMinX = 5.0f;
+			CourtMaxX = 900.0f;
+		}
+	}
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
 		InitPlayer();
-		TeamSide = ETeam::Team_B;
-		MoveSpeed = 350.0f + Difficulty * 200.0f;
-
-		// Set court bounds for right side
-		CourtMinX = 5.0f;
-		CourtMaxX = 900.0f;
+		// Default bounds in case Setup() not called yet
+		CourtMinX = -900.0f;
+		CourtMaxX = -5.0f;
 		CourtMinY = -450.0f;
 		CourtMaxY = 450.0f;
-
-		// Reaction delay inversely proportional to difficulty
-		ReactionDelay = Math::Lerp(0.8f, 0.1f, Difficulty);
 	}
 
 	UFUNCTION(BlueprintOverride)
@@ -57,44 +89,81 @@ class AAIPlayer : AVolleyballPlayer
 	private void UpdateAI(float DeltaTime)
 	{
 		FVector BallLoc = Ball.GetActorLocation();
-		FVector BallVel = Ball.BallVel;
 		FVector MyLoc = GetActorLocation();
 
-		// Only care about ball on our side (positive X)
-		if (BallLoc.X < 0)
+		bool bBallOnMySide = IsOnMySide(BallLoc.X);
+
+		if (!bBallOnMySide)
 		{
-			// Ball on opponent's side - move to ready position
-			FVector ReadyPos = FVector(400.0f, 0, FloorZ + PlayerHeight);
-			MoveToward(ReadyPos, DeltaTime);
+			// Ball on opponent's side — move to ready position
+			MoveToward(ReadyPosition(), DeltaTime);
 			return;
 		}
 
-		// Predict where ball will be
-		FVector LandPos = PredictBallPosition(0.5f);
+		// Ball is on our side
+		FVector Predicted = PredictBallPosition(0.5f);
 
-		// Add error based on difficulty (lower difficulty = more error)
-		float ErrorRange = (1.0f - Difficulty) * 150.0f;
-		LandPos.X += Math::RandRange(-ErrorRange, ErrorRange);
-		LandPos.Y += Math::RandRange(-ErrorRange, ErrorRange);
+		// Positional error based on difficulty
+		float ErrorRange = (1.0f - Difficulty) * 140.0f;
+		Predicted.X += Math::RandRange(-ErrorRange, ErrorRange);
+		Predicted.Y += Math::RandRange(-ErrorRange, ErrorRange);
+		Predicted.X = Math::Clamp(Predicted.X, CourtMinX + 50.0f, CourtMaxX - 50.0f);
+		Predicted.Y = Math::Clamp(Predicted.Y, CourtMinY + 50.0f, CourtMaxY - 50.0f);
 
-		// Clamp to our court
-		LandPos.X = Math::Clamp(LandPos.X, CourtMinX + 50, CourtMaxX - 50);
-		LandPos.Y = Math::Clamp(LandPos.Y, CourtMinY + 50, CourtMaxY - 50);
-
-		TargetPosition = FVector(LandPos.X, LandPos.Y, FloorZ + PlayerHeight);
-		MoveToward(TargetPosition, DeltaTime);
-
-		// Try to hit if close enough
-		if (IsNearBall(Ball))
+		// Front player stays near net unless ball is very close to them
+		if (Role == EPlayerRole::Role_Front)
 		{
+			float NetX = CourtMinX < 0 ? -120.0f : 120.0f;
+			float BallDist = (BallLoc - MyLoc).Size2D();
+
+			if (BallDist > 200.0f)
+			{
+				// Stay near net, track ball Y only
+				FVector NetPos = FVector(NetX, Math::Clamp(BallLoc.Y, CourtMinY + 80.0f, CourtMaxY - 80.0f),
+					FloorZ + PlayerHeight);
+				MoveToward(NetPos, DeltaTime);
+			}
+			else
+			{
+				MoveToward(FVector(Predicted.X, Predicted.Y, FloorZ + PlayerHeight), DeltaTime);
+			}
+		}
+		else
+		{
+			// Back player chases the ball
+			MoveToward(FVector(Predicted.X, Predicted.Y, FloorZ + PlayerHeight), DeltaTime);
+		}
+
+		if (IsNearBall(Ball))
 			DecideHit();
+	}
+
+	private bool IsOnMySide(float BallX) const
+	{
+		if (TeamSide == ETeam::Team_A)
+			return BallX <= 0.0f;
+		return BallX >= 0.0f;
+	}
+
+	private FVector ReadyPosition() const
+	{
+		// Back player retreats deep, front player stays at net
+		if (Role == EPlayerRole::Role_Back)
+		{
+			float X = (TeamSide == ETeam::Team_A) ? -600.0f : 600.0f;
+			return FVector(X, 0, FloorZ + PlayerHeight);
+		}
+		else
+		{
+			float X = (TeamSide == ETeam::Team_A) ? -150.0f : 150.0f;
+			return FVector(X, 0, FloorZ + PlayerHeight);
 		}
 	}
 
 	private void MoveToward(FVector Target, float DeltaTime)
 	{
 		FVector MyLoc = GetActorLocation();
-		FVector Dir = (Target - MyLoc);
+		FVector Dir = Target - MyLoc;
 		Dir.Z = 0;
 		float Dist = Dir.Size2D();
 
@@ -108,10 +177,13 @@ class AAIPlayer : AVolleyballPlayer
 			MovePlayer(FVector2D::ZeroVector);
 		}
 
-		// Jump if ball is high
-		FVector BallLoc = Ball.GetActorLocation();
-		if (BallLoc.Z > PlayerHeight * 1.8f && bIsGrounded && Dist < 200.0f)
-			Jump();
+		// Jump to reach high balls
+		if (Ball != nullptr)
+		{
+			FVector BallLoc = Ball.GetActorLocation();
+			if (BallLoc.Z > PlayerHeight * 1.8f && bIsGrounded && Dist < 200.0f)
+				Jump();
+		}
 	}
 
 	private void DecideHit()
@@ -120,14 +192,25 @@ class AAIPlayer : AVolleyballPlayer
 		int Touches = 0;
 		if (GS != nullptr) Touches = GS.TouchesThisRally;
 
-		if (Touches < 2)
+		if (Role == EPlayerRole::Role_Front && Touches >= 2)
 		{
-			// First or second touch: set up
+			// Front player on 3rd touch: spike
+			if (Difficulty > 0.4f)
+				TrySpike(Ball);
+			else
+				TrySet(Ball);
+		}
+		else if (Role == EPlayerRole::Role_Back && Touches == 0)
+		{
+			// Back player receives: dig/pass up
+			TryPass(Ball);
+		}
+		else if (Touches < 2)
+		{
 			TrySet(Ball);
 		}
 		else
 		{
-			// Third touch: spike at difficulty-based accuracy
 			if (Difficulty > 0.5f)
 				TrySpike(Ball);
 			else
@@ -135,7 +218,6 @@ class AAIPlayer : AVolleyballPlayer
 		}
 	}
 
-	// Forward-integrate ball trajectory to predict future position
 	private FVector PredictBallPosition(float TimeAhead) const
 	{
 		FVector PPos = Ball.Position;
@@ -161,7 +243,7 @@ class AAIPlayer : AVolleyballPlayer
 	private void FindBall()
 	{
 		TArray<AActor> Found;
-		GetAllActorsOfClass(ABall::StaticClass(), Found);
+		GetAllActorsOfClass(ABall, Found);
 		if (Found.Num() > 0)
 			Ball = Cast<ABall>(Found[0]);
 	}
