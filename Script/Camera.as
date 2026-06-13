@@ -1,6 +1,7 @@
 // Side camera with soft ball-following
 
-class ABeachVolleyballCamera : AActor
+// Extends APawn so Tick is enabled (AActor has bCanEverTick=false by default).
+class ABeachVolleyballCamera : APawn
 {
 	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
