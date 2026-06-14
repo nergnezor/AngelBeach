@@ -123,7 +123,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 
 		// Team A: back player = human-controlled (AI until gamepad input)
-		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer, FVector(-600, 100, 100), FRotator::ZeroRotator));
+		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer, FVector(-600, 100, 90), FRotator::ZeroRotator));
 		if (HumanPawn != nullptr)
 		{
 			HumanPawn.Sand = SandFX;
@@ -141,18 +141,22 @@ class ABeachVolleyballGameMode : AGameModeBase
 			}
 		}
 
-		PlayerA2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(-150, -100, 100), FRotator::ZeroRotator));
+		PlayerA2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(-150, -100, 90), FRotator::ZeroRotator));
 		if (PlayerA2 != nullptr)
 			PlayerA2.Setup(ETeam::Team_A, EPlayerRole::Role_Front, 0.80f, Ball, SandFX, Court, this);
 
 		// Team B: back player deep right, front player near net right
-		PlayerB1 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(600, -100, 100), FRotator::ZeroRotator));
+		PlayerB1 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(600, -100, 90), FRotator::ZeroRotator));
 		if (PlayerB1 != nullptr)
 			PlayerB1.Setup(ETeam::Team_B, EPlayerRole::Role_Back, 0.75f, Ball, SandFX, Court, this);
 
-		PlayerB2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(150, 100, 100), FRotator::ZeroRotator));
+		PlayerB2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(150, 100, 90), FRotator::ZeroRotator));
 		if (PlayerB2 != nullptr)
 			PlayerB2.Setup(ETeam::Team_B, EPlayerRole::Role_Front, 0.80f, Ball, SandFX, Court, this);
+
+		// Wire up teammates so AI can coordinate
+		if (PlayerA2 != nullptr && HumanPawn != nullptr) PlayerA2.Teammate = nullptr; // A2's teammate is human
+		if (PlayerB1 != nullptr && PlayerB2 != nullptr) { PlayerB1.Teammate = PlayerB2; PlayerB2.Teammate = PlayerB1; }
 	}
 
 	private void StartMatch()
