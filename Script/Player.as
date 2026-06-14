@@ -47,8 +47,7 @@ class AVolleyballPlayer : APawn
 	// Base setup, called by subclasses from their BeginPlay.
 	void InitPlayer()
 	{
-		FVector Loc = GetActorLocation();
-		FloorZ = Loc.Z;
+		FloorZ = 0.0f;
 	}
 
 	// Base per-frame update, called by subclasses from their Tick.
@@ -244,68 +243,109 @@ class AVolleyballPlayer : APawn
 		TArray<FLinearColor> C;
 
 		FLinearColor Team = TeamColor();
-		FLinearColor Skin = FLinearColor(0.95f, 0.78f, 0.60f, 1);
+		FLinearColor Skin  = FLinearColor(0.95f, 0.78f, 0.60f, 1);
+		FLinearColor Short = FLinearColor(Team.R * 0.6f, Team.G * 0.6f, Team.B * 0.6f, 1); // darker shorts
 
-		float hipZ = -5.0f;
-		float neckZ = 40.0f;
-		float shoulderZ = 32.0f;
-		float shoulderY = 15.0f;
-		float hipY = 8.0f;
-		float footZ = -PlayerHeight;
+		float Bob      = Math::Sin(WalkPhase * 2.0f) * 2.5f;
+		float Walk     = WalkPhase;
 
-		float bob = Math::Sin(WalkPhase * 2.0f) * 3.0f;
+		// Skeleton landmarks (local space, origin = feet level + PlayerHeight)
+		float PelvisZ  = -8.0f  + Bob;
+		float WaistZ   =  8.0f  + Bob;
+		float ChestZ   = 28.0f  + Bob;
+		float NeckZ    = 44.0f  + Bob;
+		float HeadZ    = NeckZ  + 14.0f;
+		float ShoulderY = 16.0f;
+		float ShoulderZ = ChestZ - 4.0f;
+		float HipY     =  9.0f;
+		float KneeY    =  7.0f;
+		float ThighLen = 38.0f;
+		float ShinLen  = 38.0f;
+		float UpperArmLen = 24.0f;
+		float ForeArmLen  = 22.0f;
 
-		// Torso + head
-		AddTube(V, T, N, UV, C, FVector(0, 0, hipZ + bob), FVector(0, 0, neckZ + bob),
-			13.0f, 10.0f, 6, Team);
-		AddSphere(V, T, N, UV, C, FVector(0, 0, neckZ + 14.0f + bob), 12.0f, 6, 8, Skin);
+		// --- Torso ---
+		AddTube(V, T, N, UV, C,
+			FVector(0, 0, PelvisZ), FVector(0, 0, WaistZ), 11.0f, 10.0f, 8, Short);
+		AddTube(V, T, N, UV, C,
+			FVector(0, 0, WaistZ),  FVector(0, 0, NeckZ),  10.0f,  8.0f, 8, Team);
+
+		// Head
+		AddSphere(V, T, N, UV, C, FVector(0, 0, HeadZ), 11.0f, 7, 10, Skin);
 
 		// --- Arms ---
-		FVector shL = FVector(0,  shoulderY, shoulderZ + bob);
-		FVector shR = FVector(0, -shoulderY, shoulderZ + bob);
-		FVector handL;
-		FVector handR;
+		FVector ShL = FVector(0,  ShoulderY, ShoulderZ);
+		FVector ShR = FVector(0, -ShoulderY, ShoulderZ);
+		FVector ElbowL, ElbowR, HandL, HandR;
 
 		if (ReachTimer > 0.0f)
 		{
-			handL = shL + ReachDir * 48.0f + FVector(0,  8, 0);
-			handR = shR + ReachDir * 48.0f + FVector(0, -8, 0);
+			FVector Reach = ReachDir * UpperArmLen;
+			ElbowL = ShL + Reach + FVector(0,  3, 0);
+			ElbowR = ShR + Reach + FVector(0, -3, 0);
+			HandL  = ElbowL + ReachDir * ForeArmLen;
+			HandR  = ElbowR + ReachDir * ForeArmLen;
 		}
 		else if (!bIsGrounded)
 		{
-			handL = shL + FVector(0,  6, 44.0f);
-			handR = shR + FVector(0, -6, 44.0f);
+			ElbowL = ShL + FVector(0,  4, UpperArmLen * 0.6f);
+			ElbowR = ShR + FVector(0, -4, UpperArmLen * 0.6f);
+			HandL  = ElbowL + FVector(0,  2, ForeArmLen * 0.8f);
+			HandR  = ElbowR + FVector(0, -2, ForeArmLen * 0.8f);
 		}
 		else
 		{
-			float arm = Math::Sin(WalkPhase) * 10.0f;
-			handL = shL + FVector( arm,  10, -34.0f);
-			handR = shR + FVector(-arm, -10, -34.0f);
+			float Swing = Math::Sin(Walk) * 12.0f;
+			ElbowL = ShL + FVector( Swing * 0.4f,  5, -UpperArmLen * 0.7f);
+			ElbowR = ShR + FVector(-Swing * 0.4f, -5, -UpperArmLen * 0.7f);
+			HandL  = ElbowL + FVector( Swing * 0.6f,  4, -ForeArmLen * 0.9f);
+			HandR  = ElbowR + FVector(-Swing * 0.6f, -4, -ForeArmLen * 0.9f);
 		}
 
-		AddTube(V, T, N, UV, C, shL, handL, 4.5f, 3.0f, 5, Team);
-		AddTube(V, T, N, UV, C, shR, handR, 4.5f, 3.0f, 5, Team);
+		AddTube(V, T, N, UV, C, ShL,    ElbowL, 4.5f, 3.5f, 6, Team);
+		AddTube(V, T, N, UV, C, ElbowL, HandL,  3.5f, 2.5f, 6, Skin);
+		AddTube(V, T, N, UV, C, ShR,    ElbowR, 4.5f, 3.5f, 6, Team);
+		AddTube(V, T, N, UV, C, ElbowR, HandR,  3.5f, 2.5f, 6, Skin);
 
 		// --- Legs ---
-		FVector hipL = FVector(0,  hipY, hipZ + bob);
-		FVector hipR = FVector(0, -hipY, hipZ + bob);
-		FVector footL;
-		FVector footR;
+		FVector HipL = FVector(0,  HipY, PelvisZ);
+		FVector HipR = FVector(0, -HipY, PelvisZ);
+		FVector KneeL, KneeR, AnkleL, AnkleR;
 
 		if (!bIsGrounded)
 		{
-			footL = FVector(-8,  hipY + 2, hipZ - 42.0f);
-			footR = FVector(-8, -hipY - 2, hipZ - 42.0f);
+			KneeL  = HipL  + FVector(-6,  KneeY, -ThighLen * 0.9f);
+			KneeR  = HipR  + FVector(-6, -KneeY, -ThighLen * 0.9f);
+			AnkleL = KneeL + FVector( 8,  2, -ShinLen * 0.7f);
+			AnkleR = KneeR + FVector( 8, -2, -ShinLen * 0.7f);
 		}
 		else
 		{
-			float swing = Math::Sin(WalkPhase) * 16.0f;
-			footL = FVector( swing,  hipY, footZ);
-			footR = FVector(-swing, -hipY, footZ);
+			float SwingL =  Math::Sin(Walk) * 18.0f;
+			float SwingR = -Math::Sin(Walk) * 18.0f;
+			float KneeFwdL = Math::Max(0.0f,  Math::Sin(Walk)) * 8.0f;
+			float KneeFwdR = Math::Max(0.0f, -Math::Sin(Walk)) * 8.0f;
+
+			KneeL  = HipL  + FVector(KneeFwdL,  HipY * 0.4f, -ThighLen + SwingL * 0.1f);
+			KneeR  = HipR  + FVector(KneeFwdR, -HipY * 0.4f, -ThighLen + SwingR * 0.1f);
+			AnkleL = KneeL + FVector(SwingL * 0.5f,  1, -ShinLen);
+			AnkleR = KneeR + FVector(SwingR * 0.5f, -1, -ShinLen);
+
+			float FloorLocal = -PlayerHeight + 4.0f;
+			AnkleL.Z = Math::Max(AnkleL.Z, FloorLocal);
+			AnkleR.Z = Math::Max(AnkleR.Z, FloorLocal);
 		}
 
-		AddTube(V, T, N, UV, C, hipL, footL, 6.0f, 4.5f, 5, Team);
-		AddTube(V, T, N, UV, C, hipR, footR, 6.0f, 4.5f, 5, Team);
+		AddTube(V, T, N, UV, C, HipL,   KneeL,  6.5f, 5.0f, 7, Short);
+		AddTube(V, T, N, UV, C, KneeL,  AnkleL, 5.0f, 3.5f, 7, Skin);
+		AddTube(V, T, N, UV, C, HipR,   KneeR,  6.5f, 5.0f, 7, Short);
+		AddTube(V, T, N, UV, C, KneeR,  AnkleR, 5.0f, 3.5f, 7, Skin);
+
+		// Feet
+		FVector FootDirL = FVector( Math::Sin(Walk) * 0.3f + 0.7f, 0, 0).GetSafeNormal();
+		FVector FootDirR = FVector(-Math::Sin(Walk) * 0.3f + 0.7f, 0, 0).GetSafeNormal();
+		AddTube(V, T, N, UV, C, AnkleL, AnkleL + FootDirL * 10.0f, 3.5f, 2.0f, 6, Skin);
+		AddTube(V, T, N, UV, C, AnkleR, AnkleR + FootDirR * 10.0f, 3.5f, 2.0f, 6, Skin);
 
 		TArray<FVector2D> NoUV;
 		TArray<FProcMeshTangent> Tan;
