@@ -3,6 +3,23 @@ Build/
 DerivedDataCache/
 Intermediate/
 Saved/
+PackagedBuilds/
+
+# Editor metadata
+.vscode/
+Content/Collections/
+Content/Developers/
+
+# Binary assets (keep sources in engine plugins, not git)
+Content/Characters/
+Content/Collections/
+Content/Developers/
+Content/*.uasset
+# Level maps — CourtLevel.umap is tracked, others are not
+Content/*.umap
+!Content/CourtLevel.umap
+
+# IDE and compiler artifacts
 *.VC.db
 *.opensdf
 *.opendb
@@ -11,4 +28,3 @@ Saved/
 *.sln
 *.xcworkspace
 *.xcodeproj
-PackagedBuilds/

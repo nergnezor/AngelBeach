@@ -37,7 +37,6 @@ class ABall : AActor
 		BallVel = InitVel;
 		SetActorLocation(Position);
 		bInPlay = true;
-		Print("Ball launched! bInPlay=true");
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -49,7 +48,6 @@ class ABall : AActor
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		Print("Ball BeginPlay");
 		BuildSphereMesh();
 	}
 
@@ -57,10 +55,7 @@ class ABall : AActor
 	void Tick(float DeltaTime)
 	{
 		if (!bInPlay)
-		{
-			Print("Ball Tick: not in play", Duration = 0.0f);
 			return;
-		}
 		StepPhysics(DeltaTime);
 		SetActorLocation(Position);
 	}
