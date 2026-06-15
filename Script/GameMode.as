@@ -32,7 +32,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		Print("GameMode BeginPlay");
 		SetupWorld();
 		SpawnActors();
 		StartMatch();
@@ -187,7 +186,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 	void ServeBall()
 	{
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-		Print("ServeBall: Ball=" + (Ball != nullptr ? "OK" : "NULL") + " GS=" + (GS != nullptr ? "OK" : "NULL"));
 		if (GS == nullptr || Ball == nullptr) return;
 
 		FVector ServeOrigin;

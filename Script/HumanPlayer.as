@@ -150,9 +150,13 @@ class AHumanPlayer : AVolleyballPlayer
 		else
 			MovePlayer(FVector2D::ZeroVector);
 
-		if (Ball != nullptr && Ball.GetActorLocation().Z > PlayerHeight * 1.8f
-			&& bIsGrounded && Dir.Size2D() < 200.0f)
-			Jump();
+		// Only jump when ball is very close and high AND rising — not every frame
+		if (Ball != nullptr && bIsGrounded && Dir.Size2D() < 120.0f)
+		{
+			FVector BallLoc = Ball.GetActorLocation();
+			if (BallLoc.Z > PlayerHeight * 2.2f && Ball.BallVel.Z > 0)
+				Jump();
+		}
 	}
 
 	private FVector PredictBall(float TimeAhead) const
