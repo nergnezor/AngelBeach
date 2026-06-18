@@ -84,7 +84,7 @@ class AVolleyballPlayer : APawn
 	private UVolleyballAnimInstance Anim;
 	private EHitType CurrentHit = EHitType::Hit_None;
 	private float HitAnimTimer = 0.0f;
-	private float HitAnimDuration = 0.45f;  // hit pose blends out over this time
+	private float HitAnimDuration = 0.65f;  // hit pose swings up and back over this time
 
 	void InitPlayer()
 	{
@@ -293,15 +293,17 @@ class AVolleyballPlayer : APawn
 
 		if (CurrentHit == EHitType::Hit_Bump)
 		{
-			// Bagger/dig: both arms straight down-forward, clasped together low
-			PitchR = 35.0f;  YawR = -10.0f;
-			PitchL = 35.0f;  YawL =  10.0f;
+			// Bagger/dig: both arms swing forward and together low in front.
+			// Pitch 90 = arms straight out forward (clear, readable bump).
+			PitchR = 90.0f;  YawR = -20.0f;
+			PitchL = 90.0f;  YawL =  20.0f;
 		}
 		else if (CurrentHit == EHitType::Hit_Set)
 		{
-			// Handpass/set: both arms up overhead
-			PitchR = 165.0f; YawR = -15.0f;
-			PitchL = 165.0f; YawL =  15.0f;
+			// Handpass/set: both arms up overhead (same axis as the spike that
+			// we confirmed reads clearly at ~180).
+			PitchR = 175.0f; YawR = -20.0f;
+			PitchL = 175.0f; YawL =  20.0f;
 		}
 		else if (CurrentHit == EHitType::Hit_Spike)
 		{
@@ -314,6 +316,90 @@ class AVolleyballPlayer : APawn
 
 		Anim.ArmRotR = FRotator(PitchR * Swing, YawR * Swing, 0.0f);
 		Anim.ArmRotL = FRotator(PitchL * Swing, YawL * Swing, 0.0f);
+	}
+
+	// --- Physical ball contact ---------------------------------------------
+	// The ball calls these. The player no longer teleports the ball's velocity;
+	// instead the ball bounces off the player's arm region, and we trigger the
+	// matching animation + register the touch.
+
+	// World-space center of the arm/hand contact region (chest/arm height).
+	FVector ContactCenter() const
+	{
+		FVector Loc = GetActorLocation();
+		// Arms reach a bit in front and around upper body.
+		return Loc + FVector(0, 0, ContactZOffset);
+	}
+
+	float ContactZOffset = 25.0f;   // arm region relative to capsule center
+	float ContactRadius  = 75.0f;   // how far the arms can reach the ball
+
+	// Where this player wants to send the ball (set by AI each frame). The ball
+	// uses this as the bounce direction on contact.
+	FVector DesiredAim = FVector::ZeroVector;
+	bool bHasAim = false;
+
+	// Called by the ball when it physically touches this player. Returns the new
+	// ball velocity. Picks the hit type from contact height and triggers anim.
+	FVector OnBallContact(FVector BallPos)
+	{
+		FVector Center = ContactCenter();
+		float ContactZ = BallPos.Z;
+
+		// Choose hit type from where the ball meets the body.
+		EHitType Type;
+		if (ContactZ > Center.Z + 55.0f)
+			Type = bIsGrounded ? EHitType::Hit_Set : EHitType::Hit_Spike;
+		else
+			Type = EHitType::Hit_Bump;
+
+		// Bounce direction: toward the aim if the AI gave one, else up-and-over.
+		float Sign = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
+		FVector Dir;
+		if (bHasAim)
+		{
+			Dir = (DesiredAim - BallPos).GetSafeNormal();
+		}
+		else
+		{
+			Dir = FVector(Sign * 0.4f, 0, 1.0f).GetSafeNormal();
+		}
+
+		// Per-hit speed + arc shaping.
+		float OutSpeed;
+		if (Type == EHitType::Hit_Spike)
+		{
+			Dir.Z = Math::Min(Dir.Z, -0.25f);   // drive down
+			OutSpeed = 1300.0f;
+		}
+		else if (Type == EHitType::Hit_Set)
+		{
+			Dir.Z = Math::Max(Dir.Z, 0.7f);     // soft high arc
+			OutSpeed = 620.0f;
+		}
+		else // bump
+		{
+			Dir.Z = Math::Max(Dir.Z, 0.75f);    // pop it up
+			OutSpeed = 560.0f;
+		}
+
+		TriggerHit(Type, Dir);
+		RegisterHit(GetWorldBall());
+		bHasAim = false;
+		return Dir.GetSafeNormal() * OutSpeed;
+	}
+
+	// The ball passes itself for touch registration; we keep a cached ref.
+	private ABall CachedBall;
+	private ABall GetWorldBall()
+	{
+		if (CachedBall == nullptr)
+		{
+			TArray<AActor> Found;
+			GetAllActorsOfClass(ABall, Found);
+			if (Found.Num() > 0) CachedBall = Cast<ABall>(Found[0]);
+		}
+		return CachedBall;
 	}
 
 	// Called by gameplay code each time a contact happens. Sets which upper-body
@@ -403,7 +489,7 @@ class AVolleyballPlayer : APawn
 		return (GetActorLocation() - Ball.GetActorLocation()).Size() < 120.0f;
 	}
 
-	private void RegisterHit(ABall Ball)
+	protected void RegisterHit(ABall Ball)
 	{
 		bCanHit = false; HitTimer = 0;
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
@@ -412,7 +498,11 @@ class AVolleyballPlayer : APawn
 			bool bValid = GS.RegisterTouch(TeamSide);
 			if (!bValid && GM != nullptr) GM.OnTouchViolation(TeamSide);
 		}
+		OnTouchRegistered();
 	}
+
+	// Hook for subclasses (AI) to react when this player legally touches the ball.
+	protected void OnTouchRegistered() {}
 
 	private FLinearColor TeamColor() const
 	{

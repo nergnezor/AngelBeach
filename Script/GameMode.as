@@ -29,9 +29,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 	default GameStateClass = ABeachVolleyballGameState;
 	default DefaultPawnClass = nullptr;
 
+	// Debug: global slow-motion so contact timing / animations are easy to read.
+	// Set to 1.0 for normal speed.
+	float TimeScale = 0.5f;
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
+		Gameplay::SetGlobalTimeDilation(TimeScale);
 		SetupWorld();
 		SpawnActors();
 		StartMatch();

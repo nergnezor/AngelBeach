@@ -22,6 +22,10 @@ class ABall : AActor
 
 	bool bInPlay = false;
 
+	// Brief lockout after a player contact so one touch doesn't register twice
+	// while the ball is still overlapping the player.
+	float PlayerHitCooldown = 0.0f;
+
 	// References (set by GameMode)
 	UPROPERTY()
 	ASandFX Sand;
@@ -73,6 +77,9 @@ class ABall : AActor
 
 	private void StepPhysics(float Dt)
 	{
+		if (PlayerHitCooldown > 0.0f)
+			PlayerHitCooldown -= Dt;
+
 		// Apply gravity
 		BallVel.Z += Gravity * Dt;
 
@@ -83,6 +90,9 @@ class ABall : AActor
 
 		// Integrate position
 		Position += BallVel * Dt;
+
+		// Player body/arm collision — ball physically bounces off players
+		CheckPlayerCollision();
 
 		// Floor collision
 		if (Position.Z - BallRadius <= FloorZ)
@@ -110,6 +120,40 @@ class ABall : AActor
 		}
 
 		CheckNetCollision();
+	}
+
+	// Bounce the ball off any player whose arm region it overlaps. The player
+	// decides the outgoing velocity (hit type, aim, arc) in OnBallContact.
+	private void CheckPlayerCollision()
+	{
+		if (PlayerHitCooldown > 0.0f) return;
+
+		TArray<AActor> Players;
+		GetAllActorsOfClass(AVolleyballPlayer, Players);
+
+		for (AActor A : Players)
+		{
+			AVolleyballPlayer P = Cast<AVolleyballPlayer>(A);
+			if (P == nullptr) continue;
+
+			FVector Center = P.ContactCenter();
+			float Reach = P.ContactRadius + BallRadius;
+			if ((Position - Center).SizeSquared() > Reach * Reach)
+				continue;
+
+			// Contact: let the player set the new velocity and play its anim.
+			FVector NewVel = P.OnBallContact(Position);
+			if (NewVel.SizeSquared() > 1.0f)
+				BallVel = NewVel;
+
+			// Push the ball just outside the contact sphere so it doesn't stick.
+			FVector Out = (Position - Center).GetSafeNormal();
+			if (Out.SizeSquared() < 0.01f) Out = FVector(0, 0, 1);
+			Position = Center + Out * (Reach + 1.0f);
+
+			PlayerHitCooldown = 0.25f;
+			break;  // only one contact per frame
+		}
 	}
 
 	private void CheckNetCollision()
