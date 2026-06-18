@@ -31,7 +31,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	// Debug: global slow-motion so contact timing / animations are easy to read.
 	// Set to 1.0 for normal speed.
-	float TimeScale = 0.5f;
+	float TimeScale = 1.0f;
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()

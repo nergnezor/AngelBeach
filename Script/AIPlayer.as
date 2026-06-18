@@ -139,8 +139,6 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	private void PlayHitter(int Touches, FVector Landing, float DeltaTime)
 	{
-		float BallZ = Ball.Position.Z;
-
 		if (Touches >= 2)
 		{
 			// ATTACK: get under a high ball, jump, and spike at the peak
@@ -148,24 +146,45 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// RECEIVE (touch 0) or SET (touch 1): move under the landing spot
+		// Decide our intended contact type for this touch.
+		EHitType Intend = (Touches == 0) ? EHitType::Hit_Bump : EHitType::Hit_Set;
+
+		// Aim where we want to send it (sets the bounce direction for contact).
+		if (Touches == 0) DoDig();
+		else              DoSet();
+
+		// Start reaching the arms out as soon as the ball is getting close, so
+		// the gesture is a held, deliberate motion — not a one-frame twitch.
+		float BallDist = (GetActorLocation() - Ball.Position).Size();
+		if (BallDist < ReachDistance)
+		{
+			FaceBall();
+			Reach(Intend);
+		}
+
+		// Move to stand under the predicted landing spot.
 		FVector Goal = ClampToCourt(Landing);
-		MoveToward2D(Goal, DeltaTime);
+		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		if (!IsWithinReach()) return;
+		// Once we're basically there, STOP and plant — don't run through the ball.
+		if (DistToGoal > PlantRadius)
+			MoveToward2D(Goal, DeltaTime);
+		else
+			MovePlayer(FVector2D::ZeroVector);
+	}
 
-		if (Touches == 0)
-		{
-			// Dig only when the ball has dropped to a reachable height
-			if (BallZ <= DigMaxZ + PlayerHeight)
-				DoDig();
-		}
-		else // Touches == 1
-		{
-			// Set when ball is around chest/head height
-			if (BallZ >= SetMinZ && BallZ <= SetMaxZ + PlayerHeight)
-				DoSet();
-		}
+	// Start extending the arms when the ball is within this distance (cm).
+	const float ReachDistance = 250.0f;
+
+	// How close (cm) we must be to the landing spot before we plant and reach.
+	const float PlantRadius = 60.0f;
+
+	private void FaceBall()
+	{
+		FVector To = Ball.Position - GetActorLocation();
+		To.Z = 0;
+		if (To.SizeSquared() > 1.0f)
+			SetActorRotation(To.Rotation());
 	}
 
 	// ---------------------------------------------------------------
@@ -193,11 +212,14 @@ class AAIPlayer : AVolleyballPlayer
 		if (bIsGrounded && Horiz < 130.0f && BallZ > SpikeMinZ && Ball.BallVel.Z < 120.0f)
 			Jump();
 
-		// Spike at contact: airborne and ball within arm's reach above head
-		if (!bIsGrounded && IsWithinReach() && BallZ > PlayerHeight + 120.0f)
+		// When close, aim the spike and hold the swinging arm up so the hand is
+		// in place to strike. The ball bounces off the hand/forearm on contact.
+		if (Horiz < 130.0f)
+		{
+			FaceBall();
 			DoSpike();
-		else if (bIsGrounded && IsWithinReach() && BallZ <= SpikeMinZ)
-			DoSet();   // ball came in low — recover with a controlled set over
+			Reach(EHitType::Hit_Spike);
+		}
 	}
 
 	// ---------------------------------------------------------------
@@ -365,6 +387,12 @@ class AAIPlayer : AVolleyballPlayer
 		bIMadeLastTouch = true;
 		if (Teammate != nullptr)
 			Teammate.bIMadeLastTouch = false;
+	}
+
+	// No two contacts in a row — I'm transparent to the ball right after I hit it.
+	bool CanContactBall() const override
+	{
+		return !bIMadeLastTouch;
 	}
 
 	protected void FindBall()
