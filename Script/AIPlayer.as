@@ -201,40 +201,37 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// ---------------------------------------------------------------
-	// Contacts
+	// Contacts — the ball now physically bounces off the player. These set the
+	// AIM target so OnBallContact (on the base player) knows where to send it.
 	// ---------------------------------------------------------------
 	private void DoDig()
 	{
-		// Bump the ball up toward where the setter wants it (near our net, center)
+		// Aim the bump up toward where the setter wants it (near our net, center)
 		float Sign = MySign();
-		FVector SetSpot = FVector(Sign * 180.0f, 0.0f, 220.0f);
-		FVector ToSet = (SetSpot - Ball.Position);
-		ToSet.Z = Math::Max(ToSet.Z, 260.0f);   // ensure it goes UP
-		HitToward(ToSet.GetSafeNormal(), 560.0f, EHitType::Hit_Bump);
+		AimAt(FVector(Sign * 180.0f, 0.0f, 260.0f));
 	}
 
 	private void DoSet()
 	{
-		// Soft high arc to the attacker's position at the net
+		// Aim a high arc to the attacker's position at the net
 		float Sign = MySign();
 		FVector AttackSpot = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
 			? Teammate.GetActorLocation()
 			: FVector(Sign * 150.0f, Ball.Position.Y * 0.4f, FloorZ + PlayerHeight);
-		// Aim above the attacker so they can rise into the spike
-		FVector Target = AttackSpot + FVector(Sign * 20.0f, 0, 320.0f);
-		FVector Dir = (Target - Ball.Position);
-		Dir.Z = Math::Max(Dir.Z, 300.0f);
-		HitToward(Dir.GetSafeNormal(), 600.0f, EHitType::Hit_Set);
+		AimAt(AttackSpot + FVector(Sign * 20.0f, 0, 320.0f));
 	}
 
 	private void DoSpike()
 	{
-		// Drive the ball down into the opponent's open court
-		FVector Aim = PickAttackTarget();
-		FVector Dir = (Aim - Ball.Position);
-		Dir.Z = Math::Min(Dir.Z, -200.0f);   // force a downward angle
-		float Speed = Math::Lerp(900.0f, 1500.0f, Difficulty);
-		HitToward(Dir.GetSafeNormal(), Speed, EHitType::Hit_Spike);
+		// Aim down into the opponent's open court; OnBallContact forces the angle.
+		AimAt(PickAttackTarget());
+	}
+
+	// Tell the base player where to send the ball on the next physical contact.
+	private void AimAt(FVector WorldTarget)
+	{
+		DesiredAim = WorldTarget;
+		bHasAim = true;
 	}
 
 	// Aim for the opponent's open court, away from their players
@@ -361,30 +358,13 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// ---------------------------------------------------------------
-	private void HitToward(FVector Dir, float Speed, EHitType Type = EHitType::Hit_Bump)
+	// The base player registers the touch when the ball physically bounces off
+	// us; we just record that it was us, so the teammate takes the next contact.
+	void OnTouchRegistered() override
 	{
-		Ball.HitBall(Dir, Speed);
-		TriggerHit(Type, Dir);
-		RegisterHitBall();
-	}
-
-	private void RegisterHitBall()
-	{
-		bCanHit = false;
-		HitTimer = 0;
-
-		// Mark me as the last toucher so my teammate takes the next contact.
 		bIMadeLastTouch = true;
 		if (Teammate != nullptr)
 			Teammate.bIMadeLastTouch = false;
-
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-		if (GS != nullptr)
-		{
-			bool bValid = GS.RegisterTouch(TeamSide);
-			if (!bValid && GM != nullptr)
-				GM.OnTouchViolation(TeamSide);
-		}
 	}
 
 	protected void FindBall()
