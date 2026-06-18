@@ -147,14 +147,19 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// Team B: back player deep right, front player near net right
 		PlayerB1 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(600, -100, 90), FRotator::ZeroRotator));
 		if (PlayerB1 != nullptr)
+		{
 			PlayerB1.Setup(ETeam::Team_B, EPlayerRole::Role_Back, 0.75f, Ball, SandFX, Court, this);
+			PlayerB1.bDebugAI = true;
+			PlayerB1.bDebugHit = true;
+		}
 
 		PlayerB2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(150, 100, 90), FRotator::ZeroRotator));
 		if (PlayerB2 != nullptr)
 			PlayerB2.Setup(ETeam::Team_B, EPlayerRole::Role_Front, 0.80f, Ball, SandFX, Court, this);
 
-		// Wire up teammates so AI can coordinate
-		if (PlayerA2 != nullptr && HumanPawn != nullptr) PlayerA2.Teammate = nullptr; // A2's teammate is human
+		// Wire up teammates so AI can coordinate. HumanPawn is now an AAIPlayer,
+		// so it pairs with PlayerA2 just like the Team B duo.
+		if (PlayerA2 != nullptr && HumanPawn != nullptr) { PlayerA2.Teammate = HumanPawn; HumanPawn.Teammate = PlayerA2; }
 		if (PlayerB1 != nullptr && PlayerB2 != nullptr) { PlayerB1.Teammate = PlayerB2; PlayerB2.Teammate = PlayerB1; }
 	}
 

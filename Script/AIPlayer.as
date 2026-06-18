@@ -1,6 +1,6 @@
-// AI player - trajectory prediction, coordinated team play
+// AI player - volleyball state machine: Receive -> Set -> Attack with proper
+// roles, height-aware contacts, and team coordination (no flip-flopping).
 
-enum EAIState { AI_Idle, AI_Positioning, AI_Approach, AI_Hitting }
 enum EPlayerRole { Role_Back, Role_Front }
 
 class AAIPlayer : AVolleyballPlayer
@@ -13,6 +13,20 @@ class AAIPlayer : AVolleyballPlayer
 	float ReactionDelay = 0.0f;
 	float ReactionTimer = 0.0f;
 
+	// True if I made my team's most recent contact — so my teammate takes the
+	// next touch (digger != setter != attacker), preventing one player from
+	// making all three touches and committing a fourth-touch fault.
+	bool bIMadeLastTouch = false;
+
+	// --- Contact-height windows (relative to ball Z) ---
+	// Dig:   ball low, near waist/chest      -> bump it up
+	// Set:   ball at chest/head height       -> soft high arc
+	// Spike: ball above head while airborne  -> drive it down
+	const float DigMaxZ   = 130.0f;   // ball below this = dig
+	const float SetMinZ   = 110.0f;
+	const float SetMaxZ   = 220.0f;
+	const float SpikeMinZ = 200.0f;   // need a jump to reach
+
 	void Setup(ETeam Team, EPlayerRole InRole, float InDifficulty,
 		ABall InBall, ASandFX InSand, ACourt InCourt, ABeachVolleyballGameMode InGM)
 	{
@@ -23,8 +37,8 @@ class AAIPlayer : AVolleyballPlayer
 		Sand = InSand;
 		Court = InCourt;
 		GM = InGM;
-		MoveSpeed = 400.0f + Difficulty * 200.0f;
-		ReactionDelay = Math::Lerp(0.5f, 0.05f, Difficulty);
+		MoveSpeed = 420.0f + Difficulty * 220.0f;
+		ReactionDelay = Math::Lerp(0.35f, 0.04f, Difficulty);
 
 		CourtMinY = -450.0f;
 		CourtMaxY = 450.0f;
@@ -54,128 +68,303 @@ class AAIPlayer : AVolleyballPlayer
 		UpdateAI(DeltaTime);
 	}
 
-	private void UpdateAI(float DeltaTime)
+	// ---------------------------------------------------------------
+	// Main decision loop (protected so AHumanPlayer can reuse it as its
+	// AI fallback when no gamepad input is active)
+	// ---------------------------------------------------------------
+	protected void UpdateAI(float DeltaTime)
 	{
-		FVector BallLoc = Ball.GetActorLocation();
-		FVector MyLoc   = GetActorLocation();
-		bool bMySide    = IsOnMySide(BallLoc.X);
-
-		if (!bMySide)
+		// Ball is on the opponent's side: hold defensive ready position and clear
+		// our touch-ownership so the next receive starts fresh.
+		if (!IsBallComingToMySide())
 		{
-			MoveToward(ReadyPos(), DeltaTime);
+			bIMadeLastTouch = false;
+			if (bDebugAI) Log(DebugTag() + " DEFEND ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
+			MoveToward2D(DefendPos(), DeltaTime);
 			return;
 		}
 
-		// Predict where the ball will be when we could reach it
-		float TimeToReach = EstimateTimeToReach();
-		FVector LandPos   = PredictBall(TimeToReach);
+		int Touches = TeamTouches();          // how many times WE have touched it
+		FVector Landing = Ball.PredictLanding();
 
-		// Am I the closest teammate to the ball?
-		bool bIAmClosest = IAmClosestToBall();
-
-		if (bIAmClosest)
+		// Decide my job for this contact based on touch count + role
+		if (AmIHitter(Landing))
 		{
-			// Chase the predicted landing spot
-			FVector Goal = FVector(
-				Math::Clamp(LandPos.X, CourtMinX + 40.0f, CourtMaxX - 40.0f),
-				Math::Clamp(LandPos.Y, CourtMinY + 40.0f, CourtMaxY - 40.0f),
-				FloorZ + PlayerHeight);
-			MoveToward(Goal, DeltaTime);
-
-			if (IsNearBall(Ball))
-				DecideHit();
+			if (bDebugAI) Log(DebugTag() + " HITTER t=" + Touches + " ballZ=" + int(Ball.Position.Z) + " grounded=" + bIsGrounded);
+			PlayHitter(Touches, Landing, DeltaTime);
 		}
 		else
 		{
-			// I'm the support player — move to ideal support position
-			MoveToward(SupportPos(LandPos), DeltaTime);
+			if (bDebugAI) Log(DebugTag() + " SUPPORT t=" + Touches);
+			PlaySupport(Landing, DeltaTime);
 		}
 	}
 
-	// Where should I be when NOT hitting?
-	private FVector SupportPos(FVector BallLandPos) const
+	// Temporary diagnostics — set true on ONE player from GameMode to inspect.
+	bool bDebugAI = false;
+	private FString DebugTag() const
 	{
-		float Sign = (TeamSide == ETeam::Team_A) ? -1.0f : 1.0f;
-		if (Role == EPlayerRole::Role_Front)
-		{
-			// Front player: stay near net, track ball Y, ready to attack
-			float NetX = Sign * 160.0f;
-			float Y = Math::Clamp(BallLandPos.Y, CourtMinY + 100.0f, CourtMaxY - 100.0f);
-			return FVector(NetX, Y, FloorZ + PlayerHeight);
-		}
-		else
-		{
-			// Back player: hold deep cover position
-			float DeepX = Sign * 650.0f;
-			float Y = Math::Clamp(BallLandPos.Y * 0.5f, CourtMinY + 100.0f, CourtMaxY - 100.0f);
-			return FVector(DeepX, Y, FloorZ + PlayerHeight);
-		}
+		FString T = (TeamSide == ETeam::Team_A) ? "A" : "B";
+		FString R = (Role == EPlayerRole::Role_Front) ? "Front" : "Back";
+		return T + "/" + R;
 	}
 
-	private FVector ReadyPos() const
+	// ---------------------------------------------------------------
+	// Role assignment — deterministic so the two players never swap
+	// mid-rally and end up chasing the same ball.
+	// ---------------------------------------------------------------
+	private bool AmIHitter(FVector Landing) const
 	{
-		float Sign = (TeamSide == ETeam::Team_A) ? -1.0f : 1.0f;
-		float X = (Role == EPlayerRole::Role_Front) ? Sign * 200.0f : Sign * 650.0f;
-		return FVector(X, 0, FloorZ + PlayerHeight);
+		if (Teammate == nullptr) return true;
+
+		// I never take two contacts in a row — if I made the last touch, it's
+		// my teammate's turn now. This guarantees digger != setter != attacker.
+		if (bIMadeLastTouch) return false;
+		if (Teammate.bIMadeLastTouch) return true;
+
+		// Fresh ball coming over (no team touches yet): closest player digs,
+		// with the back player favored for deep balls (typical serve receive).
+		float MyDist    = (GetActorLocation() - Landing).Size2D();
+		float TheirDist = (Teammate.GetActorLocation() - Landing).Size2D();
+
+		bool bDeep = IsDeep(Landing.X);
+		if (bDeep && Role == EPlayerRole::Role_Back)  return true;
+		if (bDeep && Role == EPlayerRole::Role_Front) return false;
+
+		return MyDist <= TheirDist;
 	}
 
-	private void DecideHit()
+	// ---------------------------------------------------------------
+	// I am the player who will contact the ball this touch
+	// ---------------------------------------------------------------
+	private void PlayHitter(int Touches, FVector Landing, float DeltaTime)
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-		int Touches = (GS != nullptr) ? GS.TouchesThisRally : 0;
+		float BallZ = Ball.Position.Z;
 
-		FVector BallLoc = Ball.GetActorLocation();
-		float Sign = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
+		if (Touches >= 2)
+		{
+			// ATTACK: get under a high ball, jump, and spike at the peak
+			ApproachForSpike(DeltaTime);
+			return;
+		}
 
-		if (Touches == 0 || (Role == EPlayerRole::Role_Back && Touches <= 1 && !IsTeammateFront()))
+		// RECEIVE (touch 0) or SET (touch 1): move under the landing spot
+		FVector Goal = ClampToCourt(Landing);
+		MoveToward2D(Goal, DeltaTime);
+
+		if (!IsWithinReach()) return;
+
+		if (Touches == 0)
 		{
-			// Dig/receive: lift the ball up toward our front player
-			FVector FrontPos = (Teammate != nullptr)
-				? Teammate.GetActorLocation()
-				: FVector(Sign * 200.0f, 0, FloorZ + PlayerHeight);
-			FVector ToFront = (FrontPos - BallLoc + FVector(0, 0, 200.0f)).GetSafeNormal();
-			HitToward(ToFront, 550.0f);
+			// Dig only when the ball has dropped to a reachable height
+			if (BallZ <= DigMaxZ + PlayerHeight)
+				DoDig();
 		}
-		else if (Touches == 1)
+		else // Touches == 1
 		{
-			// Set: high arc to front player for attack
-			FVector AttackPos = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
-				? Teammate.GetActorLocation()
-				: FVector(Sign * 150.0f, BallLoc.Y * 0.3f, FloorZ + PlayerHeight);
-			// Aim high above the target so the front player can jump-attack
-			FVector SetTarget = AttackPos + FVector(0, 0, 250.0f);
-			FVector ToSet = (SetTarget - BallLoc).GetSafeNormal();
-			HitToward(ToSet, 620.0f);
-		}
-		else
-		{
-			// Spike or attack: aim toward opponent's open court
-			FVector AimPos = PickAttackTarget();
-			FVector ToAim  = (AimPos - BallLoc).GetSafeNormal();
-			float Speed    = (Difficulty > 0.6f) ? 1400.0f : 1000.0f;
-			HitToward(ToAim, Speed);
+			// Set when ball is around chest/head height
+			if (BallZ >= SetMinZ && BallZ <= SetMaxZ + PlayerHeight)
+				DoSet();
 		}
 	}
 
-	// Pick a spot in the opponent's court to aim for (away from where they are)
+	// ---------------------------------------------------------------
+	// I am NOT contacting this touch — get to the right support spot
+	// ---------------------------------------------------------------
+	private void PlaySupport(FVector Landing, float DeltaTime)
+	{
+		MoveToward2D(SupportPos(Landing), DeltaTime);
+	}
+
+	// ---------------------------------------------------------------
+	// Spike approach: time the jump so contact happens at the top
+	// ---------------------------------------------------------------
+	private void ApproachForSpike(float DeltaTime)
+	{
+		// Stand just behind the net under the ball's current X, ready to swing
+		FVector UnderBall = FVector(Ball.Position.X, Ball.Position.Y, FloorZ + PlayerHeight);
+		UnderBall = ClampToCourt(UnderBall);
+		MoveToward2D(UnderBall, DeltaTime);
+
+		float Horiz = (GetActorLocation() - FVector(Ball.Position.X, Ball.Position.Y, 0)).Size2D();
+		float BallZ = Ball.Position.Z;
+
+		// Jump when the ball is high, descending into strike range, and we're under it
+		if (bIsGrounded && Horiz < 130.0f && BallZ > SpikeMinZ && Ball.BallVel.Z < 120.0f)
+			Jump();
+
+		// Spike at contact: airborne and ball within arm's reach above head
+		if (!bIsGrounded && IsWithinReach() && BallZ > PlayerHeight + 120.0f)
+			DoSpike();
+		else if (bIsGrounded && IsWithinReach() && BallZ <= SpikeMinZ)
+			DoSet();   // ball came in low — recover with a controlled set over
+	}
+
+	// ---------------------------------------------------------------
+	// Contacts
+	// ---------------------------------------------------------------
+	private void DoDig()
+	{
+		// Bump the ball up toward where the setter wants it (near our net, center)
+		float Sign = MySign();
+		FVector SetSpot = FVector(Sign * 180.0f, 0.0f, 220.0f);
+		FVector ToSet = (SetSpot - Ball.Position);
+		ToSet.Z = Math::Max(ToSet.Z, 260.0f);   // ensure it goes UP
+		HitToward(ToSet.GetSafeNormal(), 560.0f, EHitType::Hit_Bump);
+	}
+
+	private void DoSet()
+	{
+		// Soft high arc to the attacker's position at the net
+		float Sign = MySign();
+		FVector AttackSpot = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
+			? Teammate.GetActorLocation()
+			: FVector(Sign * 150.0f, Ball.Position.Y * 0.4f, FloorZ + PlayerHeight);
+		// Aim above the attacker so they can rise into the spike
+		FVector Target = AttackSpot + FVector(Sign * 20.0f, 0, 320.0f);
+		FVector Dir = (Target - Ball.Position);
+		Dir.Z = Math::Max(Dir.Z, 300.0f);
+		HitToward(Dir.GetSafeNormal(), 600.0f, EHitType::Hit_Set);
+	}
+
+	private void DoSpike()
+	{
+		// Drive the ball down into the opponent's open court
+		FVector Aim = PickAttackTarget();
+		FVector Dir = (Aim - Ball.Position);
+		Dir.Z = Math::Min(Dir.Z, -200.0f);   // force a downward angle
+		float Speed = Math::Lerp(900.0f, 1500.0f, Difficulty);
+		HitToward(Dir.GetSafeNormal(), Speed, EHitType::Hit_Spike);
+	}
+
+	// Aim for the opponent's open court, away from their players
 	private FVector PickAttackTarget() const
 	{
-		float OppSign = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
+		float OppSign = -MySign();
+		float TargetX = OppSign * Math::Lerp(350.0f, 700.0f, Difficulty);
 
-		if (Teammate != nullptr)
-		{
-			// Aim away from opponent cluster — simplified: aim opposite Y side
-			float TeammateY = GetActorLocation().Y;
-			float AimY = (TeammateY > 0) ? -280.0f : 280.0f;
-			return FVector(OppSign * 600.0f, AimY, 0);
-		}
-		return FVector(OppSign * 500.0f, Math::RandRange(-200.0f, 200.0f) * (1.0f - Difficulty), 0);
+		// Aim to whichever Y half is less defended — approximate by aiming
+		// opposite our own attacker's Y, with error that shrinks with skill
+		float AimY = (GetActorLocation().Y > 0) ? -250.0f : 250.0f;
+		float Error = Math::RandRange(-180.0f, 180.0f) * (1.0f - Difficulty);
+		AimY = Math::Clamp(AimY + Error, CourtMinY + 60.0f, CourtMaxY - 60.0f);
+
+		return FVector(TargetX, AimY, FloorZ + BallRadiusGuess());
 	}
 
-	private void HitToward(FVector Dir, float Speed)
+	private float BallRadiusGuess() const { return (Ball != nullptr) ? Ball.BallRadius : 10.5f; }
+
+	// ---------------------------------------------------------------
+	// Positioning helpers
+	// ---------------------------------------------------------------
+	private FVector SupportPos(FVector Landing) const
+	{
+		float Sign = MySign();
+		if (Role == EPlayerRole::Role_Front)
+		{
+			// Front player: stay at net ready to attack, track ball Y
+			float Y = Math::Clamp(Landing.Y, CourtMinY + 100.0f, CourtMaxY - 100.0f);
+			return FVector(Sign * 170.0f, Y, FloorZ + PlayerHeight);
+		}
+		else
+		{
+			// Back player: cover deep court behind the attacker
+			float Y = Math::Clamp(Landing.Y * 0.5f, CourtMinY + 100.0f, CourtMaxY - 100.0f);
+			return FVector(Sign * 620.0f, Y, FloorZ + PlayerHeight);
+		}
+	}
+
+	// Defensive ready position while the ball is on the other side. Hold a
+	// stable spot (each player covers half the court in Y) rather than chasing
+	// the ball's Y every frame — that was causing constant side-to-side running.
+	private FVector DefendPos() const
+	{
+		float Sign = MySign();
+		float X = (Role == EPlayerRole::Role_Front) ? Sign * 220.0f : Sign * 640.0f;
+		// Front covers one Y half, back the other, for simple court coverage.
+		float Y = (Role == EPlayerRole::Role_Front) ? -150.0f : 150.0f;
+		return FVector(X, Y, FloorZ + PlayerHeight);
+	}
+
+	// ---------------------------------------------------------------
+	// Queries
+	// ---------------------------------------------------------------
+	private float MySign() const { return (TeamSide == ETeam::Team_A) ? -1.0f : 1.0f; }
+
+	private int TeamTouches() const
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr) return 0;
+		// Only count touches that belong to our team this rally
+		if (GS.LastTouchTeam == TeamSide) return GS.TouchesThisRally;
+		return 0;  // ball just crossed to us — this is our receive (touch 0)
+	}
+
+	// Should our team actively go play the ball right now? Only when the ball is
+	// genuinely on our side of the net — not while it's still high over the
+	// opponent's court (even if it's predicted to eventually cross to us).
+	private bool IsBallComingToMySide() const
+	{
+		bool bBallOnMySide = (TeamSide == ETeam::Team_A) ? Ball.Position.X <= 0.0f
+		                                                 : Ball.Position.X >= 0.0f;
+
+		// If the ball is physically on our side, it's ours to play.
+		if (bBallOnMySide) return true;
+
+		// Ball is on the opponent's side. Only commit early if it has clearly
+		// crossed toward us (moving to our side AND already low enough that the
+		// predicted landing is on our court) — otherwise hold and defend.
+		bool bMovingToMe = (TeamSide == ETeam::Team_A) ? Ball.BallVel.X < -50.0f
+		                                               : Ball.BallVel.X >  50.0f;
+		if (!bMovingToMe) return false;
+
+		FVector Landing = Ball.PredictLanding();
+		bool bLandMine = (TeamSide == ETeam::Team_A) ? Landing.X <= 0.0f
+		                                             : Landing.X >= 0.0f;
+		// Require the ball to be near or past the net before charging in.
+		bool bNearNet = Math::Abs(Ball.Position.X) < 250.0f;
+		return bLandMine && bNearNet;
+	}
+
+	private bool IsDeep(float X) const
+	{
+		if (TeamSide == ETeam::Team_A) return X < -350.0f;
+		return X > 350.0f;
+	}
+
+	// Horizontal reach to the ball's current position
+	private bool IsWithinReach() const
+	{
+		FVector ToBall = Ball.Position - GetActorLocation();
+		return ToBall.Size2D() < 110.0f;
+	}
+
+	private FVector ClampToCourt(FVector P) const
+	{
+		return FVector(
+			Math::Clamp(P.X, CourtMinX + 40.0f, CourtMaxX - 40.0f),
+			Math::Clamp(P.Y, CourtMinY + 40.0f, CourtMaxY - 40.0f),
+			FloorZ + PlayerHeight);
+	}
+
+	// ---------------------------------------------------------------
+	// Movement (no auto-jump here — jumping is decided by spike logic)
+	// ---------------------------------------------------------------
+	private void MoveToward2D(FVector Target, float Dt)
+	{
+		FVector Dir = Target - GetActorLocation();
+		Dir.Z = 0;
+		if (Dir.Size2D() > 8.0f)
+			MovePlayer(FVector2D(Dir.GetSafeNormal2D().X, Dir.GetSafeNormal2D().Y));
+		else
+			MovePlayer(FVector2D::ZeroVector);
+	}
+
+	// ---------------------------------------------------------------
+	private void HitToward(FVector Dir, float Speed, EHitType Type = EHitType::Hit_Bump)
 	{
 		Ball.HitBall(Dir, Speed);
-		TriggerReach(Dir);
+		TriggerHit(Type, Dir);
 		RegisterHitBall();
 	}
 
@@ -183,6 +372,12 @@ class AAIPlayer : AVolleyballPlayer
 	{
 		bCanHit = false;
 		HitTimer = 0;
+
+		// Mark me as the last toucher so my teammate takes the next contact.
+		bIMadeLastTouch = true;
+		if (Teammate != nullptr)
+			Teammate.bIMadeLastTouch = false;
+
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS != nullptr)
 		{
@@ -192,91 +387,7 @@ class AAIPlayer : AVolleyballPlayer
 		}
 	}
 
-	private bool IsTeammateFront() const
-	{
-		return Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front;
-	}
-
-	private bool IAmClosestToBall() const
-	{
-		if (Teammate == nullptr) return true;
-		FVector BallLoc  = Ball.GetActorLocation();
-		float MyDist     = (GetActorLocation() - BallLoc).Size2D();
-		float TheirDist  = (Teammate.GetActorLocation() - BallLoc).Size2D();
-		// Front player defers to back player on first touch when ball is deep
-		if (Role == EPlayerRole::Role_Front)
-		{
-			ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-			int Touches = (GS != nullptr) ? GS.TouchesThisRally : 0;
-			bool bBallIsDeep = IsOnDeepSide(Ball.Position.X);
-			if (Touches == 0 && bBallIsDeep) return false;
-		}
-		return MyDist <= TheirDist;
-	}
-
-	private bool IsOnDeepSide(float BallX) const
-	{
-		if (TeamSide == ETeam::Team_A) return BallX < -350.0f;
-		return BallX > 350.0f;
-	}
-
-	private bool IsOnMySide(float BallX) const
-	{
-		return (TeamSide == ETeam::Team_A) ? BallX <= 0.0f : BallX >= 0.0f;
-	}
-
-	// How long until I could intercept the ball (rough estimate in seconds)
-	private float EstimateTimeToReach() const
-	{
-		FVector BallLoc = Ball.GetActorLocation();
-		float Dist = (GetActorLocation() - BallLoc).Size2D();
-		float Speed = Math::Max(MoveSpeed, 1.0f);
-		return Math::Clamp(Dist / Speed, 0.1f, 1.5f);
-	}
-
-	private void MoveToward(FVector Target, float Dt)
-	{
-		FVector Dir = Target - GetActorLocation();
-		Dir.Z = 0;
-		float Dist = Dir.Size2D();
-
-		if (Dist > 8.0f)
-			MovePlayer(FVector2D(Dir.GetSafeNormal2D().X, Dir.GetSafeNormal2D().Y));
-		else
-			MovePlayer(FVector2D::ZeroVector);
-
-		// Jump only when close to ball AND ball is above head height AND moving upward
-		if (Ball != nullptr && bIsGrounded && IsNearBall(Ball))
-		{
-			FVector BallLoc = Ball.GetActorLocation();
-			bool bBallHigh = BallLoc.Z > PlayerHeight * 2.2f;
-			bool bBallRising = Ball.BallVel.Z > 0;
-			if (bBallHigh && bBallRising)
-				Jump();
-		}
-	}
-
-	private FVector PredictBall(float TimeAhead) const
-	{
-		FVector PPos = Ball.Position;
-		FVector PVel = Ball.BallVel;
-		float Dt = 0.033f;
-		float T = 0;
-		while (T < TimeAhead)
-		{
-			PVel.Z += Ball.Gravity * Dt;
-			PPos   += PVel * Dt;
-			T      += Dt;
-			if (PPos.Z <= Ball.FloorZ + Ball.BallRadius)
-			{
-				PPos.Z = Ball.FloorZ + Ball.BallRadius;
-				break;
-			}
-		}
-		return PPos;
-	}
-
-	private void FindBall()
+	protected void FindBall()
 	{
 		TArray<AActor> Found;
 		GetAllActorsOfClass(ABall, Found);

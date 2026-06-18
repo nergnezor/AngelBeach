@@ -174,7 +174,7 @@ genproject: check ## (Optional) generate IDE project files for this project
 # --- Run ---------------------------------------------------------------------
 run: check ## Launch the editor on this project
 	@echo ">> Launching UnrealEditor on $(PROJECT_NAME)..."
-	SDL_VIDEODRIVER=x11 "$(UE_EDITOR)" "$(UPROJECT)"
+	"$(UE_EDITOR)" "$(UPROJECT)"
 
 # --- Cleanup -----------------------------------------------------------------
 clean-project: ## Remove this project's generated build artifacts
