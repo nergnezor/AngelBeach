@@ -136,17 +136,23 @@ class ABall : AActor
 			AVolleyballPlayer P = Cast<AVolleyballPlayer>(A);
 			if (P == nullptr) continue;
 
-			FVector Center = P.ContactCenter();
-			float Reach = P.ContactRadius + BallRadius;
-			if ((Position - Center).SizeSquared() > Reach * Reach)
+			// A player who just touched the ball is transparent until someone
+			// else touches it — enforces "no two contacts in a row".
+			if (!P.CanContactBall())
 				continue;
 
-			// Contact: let the player set the new velocity and play its anim.
-			FVector NewVel = P.OnBallContact(Position);
+			// Ball only bounces off hands/forearms now.
+			FVector Center;
+			if (!P.GetArmContact(Position, BallRadius, Center))
+				continue;
+
+			// Contact: let the player compute the bounce from real physics.
+			FVector NewVel = P.OnBallContact(Position, BallVel, Center);
 			if (NewVel.SizeSquared() > 1.0f)
 				BallVel = NewVel;
 
-			// Push the ball just outside the contact sphere so it doesn't stick.
+			// Push the ball just outside the limb so it doesn't stick.
+			float Reach = 18.0f + BallRadius;
 			FVector Out = (Position - Center).GetSafeNormal();
 			if (Out.SizeSquared() < 0.01f) Out = FVector(0, 0, 1);
 			Position = Center + Out * (Reach + 1.0f);

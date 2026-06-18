@@ -222,6 +222,11 @@ class AVolleyballPlayer : APawn
 
 		if (ReachTimer > 0.0f) ReachTimer -= DeltaTime;
 
+		// Auto-reach: whenever the ball is close and I'm allowed to play it, hold
+		// the arms out toward it (pose chosen by height) so the gesture is a held
+		// motion regardless of AI role. The AI's Reach() can still override type.
+		AutoReachForBall();
+
 		// Face the direction of travel so the locomotion animation reads correctly
 		float HSpeed2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
 		if (HSpeed2 > 30.0f)
@@ -239,15 +244,12 @@ class AVolleyballPlayer : APawn
 	// these and does the actual blending in its AnimGraph.
 	private void UpdateAnimation(float DeltaTime, float HSpeed)
 	{
-		// Decay the hit blend so the upper-body montage eases back out
+		// Decay the swing timer. Keep CurrentHit set until the pose has fully
+		// relaxed (below) so the arm doesn't snap to neutral mid-gesture.
 		if (HitAnimTimer > 0.0f)
 		{
 			HitAnimTimer -= DeltaTime;
-			if (HitAnimTimer <= 0.0f)
-			{
-				HitAnimTimer = 0.0f;
-				CurrentHit = EHitType::Hit_None;
-			}
+			if (HitAnimTimer < 0.0f) HitAnimTimer = 0.0f;
 		}
 
 		if (Anim == nullptr)
@@ -269,18 +271,88 @@ class AVolleyballPlayer : APawn
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
 
-		Anim.bIsHitting = HitAnimTimer > 0.0f;
+		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
 
-		// Swing envelope: 0 at start -> 1 at mid-contact -> 0 at end, so the arm
-		// swings up into the hit and back down rather than snapping.
-		float Progress = (HitAnimDuration > 0.0f)
-			? 1.0f - Math::Clamp(HitAnimTimer / HitAnimDuration, 0.0f, 1.0f)
-			: 0.0f;
-		float Swing = Math::Sin(Progress * PI);   // 0..1..0
-		Anim.HitAlpha = Swing;
+		// Two phases:
+		//  - REACHING: while waiting for the ball, hold the arms extended toward
+		//    it (steady pose) so the hands/forearms are where the ball arrives.
+		//  - SWING: at contact, a 0->1->0 envelope swings the arms through.
+		float TargetPose;
+		if (HitAnimTimer > 0.0f)
+		{
+			float Progress = (HitAnimDuration > 0.0f)
+				? 1.0f - Math::Clamp(HitAnimTimer / HitAnimDuration, 0.0f, 1.0f)
+				: 0.0f;
+			TargetPose = Math::Sin(Progress * PI);   // 0..1..0 swing
+		}
+		else if (bReaching)
+		{
+			TargetPose = 0.85f;   // hold arms extended, ready
+		}
+		else
+		{
+			TargetPose = 0.0f;    // arms relax to neutral
+		}
 
-		UpdateArmPose(Swing);
+		// Smoothly ease the actual pose toward the target so arms move fluidly
+		// instead of snapping between reach / swing / neutral each frame.
+		float Speed = (TargetPose > CurrentPose) ? 14.0f : 8.0f;  // reach fast, relax slower
+		float Alpha = Math::Clamp(Speed * DeltaTime, 0.0f, 1.0f);
+		CurrentPose = CurrentPose + (TargetPose - CurrentPose) * Alpha;
+
+		Anim.HitAlpha = CurrentPose;
+		UpdateArmPose(CurrentPose);
+
+		// Once the gesture has fully relaxed and we're no longer hitting/reaching,
+		// release the hit type so the next contact can pick a fresh one.
+		if (HitAnimTimer <= 0.0f && !bReaching && CurrentPose < 0.02f)
+			CurrentHit = EHitType::Hit_None;
+
+		if (bDebugHit && (bReaching || CurrentPose > 0.05f))
+			Log("POSE reach=" + bReaching + " pose=" + CurrentPose
+				+ " type=" + int(CurrentHit)
+				+ " ArmRotR=" + Anim.ArmRotR.Pitch + "," + Anim.ArmRotR.Yaw);
+
+		// Reaching is re-asserted each frame by the AI; clear it so it lapses
+		// when the AI stops asking.
+		bReaching = false;
+	}
+
+	private float CurrentPose = 0.0f;   // smoothed arm-pose weight
+
+	// AI sets this each frame while preparing to play the ball, with the hit type
+	// it intends, so the arms extend toward the ball before contact.
+	bool bReaching = false;
+	void Reach(EHitType Type)
+	{
+		bReaching = true;
+		if (HitAnimTimer <= 0.0f)   // don't override an active swing
+			CurrentHit = Type;
+	}
+
+	// Distance (cm) at which any player starts reaching arms toward the ball.
+	float AutoReachDistance = 220.0f;
+
+	// Reach for the ball automatically when it's near and I may legally play it.
+	// Hit type is picked from the ball's height relative to my body.
+	private void AutoReachForBall()
+	{
+		if (!CanContactBall()) return;
+		ABall B = GetWorldBall();
+		if (B == nullptr || !B.bInPlay) return;
+
+		float Dist = (GetActorLocation() - B.Position).Size();
+		if (Dist > AutoReachDistance) return;
+
+		float HeadZ = GetActorLocation().Z + PlayerHeight;
+		EHitType Type;
+		if (B.Position.Z > HeadZ)
+			Type = bIsGrounded ? EHitType::Hit_Set : EHitType::Hit_Spike;
+		else
+			Type = EHitType::Hit_Bump;
+
+		Reach(Type);
 	}
 
 	// Compute target arm rotations for the current hit type, scaled by the swing
@@ -323,70 +395,106 @@ class AVolleyballPlayer : APawn
 	// instead the ball bounces off the player's arm region, and we trigger the
 	// matching animation + register the touch.
 
-	// World-space center of the arm/hand contact region (chest/arm height).
-	FVector ContactCenter() const
-	{
-		FVector Loc = GetActorLocation();
-		// Arms reach a bit in front and around upper body.
-		return Loc + FVector(0, 0, ContactZOffset);
-	}
+	// Ball only bounces off hands and forearms. Each is a small sphere centered
+	// on the bone, in world space. Radius is how thick the limb is for contact.
+	float ArmContactRadius = 18.0f;   // forearm/hand thickness (cm)
 
-	float ContactZOffset = 25.0f;   // arm region relative to capsule center
-	float ContactRadius  = 75.0f;   // how far the arms can reach the ball
+	// Test the ball against the hand/forearm bones. If any is within reach,
+	// fills OutCenter with that bone's position and returns true.
+	bool GetArmContact(FVector BallPos, float BallRadius, FVector& OutCenter) const
+	{
+		if (Mesh == nullptr) return false;
+
+		// Bones that can legally play the ball (hands + forearms, both sides).
+		FName Bones0 = n"hand_r";
+		FName Bones1 = n"hand_l";
+		FName Bones2 = n"lowerarm_r";
+		FName Bones3 = n"lowerarm_l";
+
+		float Reach = ArmContactRadius + BallRadius;
+		float ReachSq = Reach * Reach;
+
+		FVector P;
+		P = Mesh.GetBoneTransform(Bones0).Location;
+		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
+		P = Mesh.GetBoneTransform(Bones1).Location;
+		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
+		P = Mesh.GetBoneTransform(Bones2).Location;
+		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
+		P = Mesh.GetBoneTransform(Bones3).Location;
+		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
+
+		return false;
+	}
 
 	// Where this player wants to send the ball (set by AI each frame). The ball
 	// uses this as the bounce direction on contact.
 	FVector DesiredAim = FVector::ZeroVector;
 	bool bHasAim = false;
 
-	// Called by the ball when it physically touches this player. Returns the new
-	// ball velocity. Picks the hit type from contact height and triggers anim.
-	FVector OnBallContact(FVector BallPos)
-	{
-		FVector Center = ContactCenter();
-		float ContactZ = BallPos.Z;
+	// Whether this player is allowed to touch the ball right now. Overridden by
+	// AI so a player who made the team's last touch is "transparent" until a
+	// different player (teammate or opponent) touches it — no double contacts.
+	bool CanContactBall() const { return true; }
 
-		// Choose hit type from where the ball meets the body.
+	// Called by the ball when it physically touches this player. The ball gives
+	// its current velocity; we return the post-contact velocity using REAL
+	// collision physics: reflect the incoming velocity about the contact normal
+	// (with restitution) and add the velocity imparted by the arm swing. The arm
+	// is angled toward the player's aim, so a real reflection sends it there —
+	// no teleporting to a fixed speed/direction.
+	FVector OnBallContact(FVector BallPos, FVector BallVelIn, FVector Center)
+	{
+		// Choose hit type from where the ball meets the body, relative to the
+		// player's own height (head ~ feet + 2*PlayerHeight).
+		float HeadZ = GetActorLocation().Z + PlayerHeight;
 		EHitType Type;
-		if (ContactZ > Center.Z + 55.0f)
+		if (BallPos.Z > HeadZ)
 			Type = bIsGrounded ? EHitType::Hit_Set : EHitType::Hit_Spike;
 		else
 			Type = EHitType::Hit_Bump;
 
-		// Bounce direction: toward the aim if the AI gave one, else up-and-over.
+		// Contact normal: the surface the ball bounces off. Base it on the real
+		// geometric normal (ball relative to body) but tilt it toward the aim so
+		// the player "angles" their arms like a real player would.
+		FVector GeoNormal = (BallPos - Center).GetSafeNormal();
+		if (GeoNormal.SizeSquared() < 0.01f) GeoNormal = FVector(0, 0, 1);
+
+		FVector AimDir;
 		float Sign = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
-		FVector Dir;
 		if (bHasAim)
-		{
-			Dir = (DesiredAim - BallPos).GetSafeNormal();
-		}
+			AimDir = (DesiredAim - BallPos).GetSafeNormal();
 		else
-		{
-			Dir = FVector(Sign * 0.4f, 0, 1.0f).GetSafeNormal();
-		}
+			AimDir = FVector(Sign * 0.4f, 0, 1.0f).GetSafeNormal();
 
-		// Per-hit speed + arc shaping.
-		float OutSpeed;
-		if (Type == EHitType::Hit_Spike)
-		{
-			Dir.Z = Math::Min(Dir.Z, -0.25f);   // drive down
-			OutSpeed = 1300.0f;
-		}
-		else if (Type == EHitType::Hit_Set)
-		{
-			Dir.Z = Math::Max(Dir.Z, 0.7f);     // soft high arc
-			OutSpeed = 620.0f;
-		}
-		else // bump
-		{
-			Dir.Z = Math::Max(Dir.Z, 0.75f);    // pop it up
-			OutSpeed = 560.0f;
-		}
+		// Blend geometric normal with aim (how much the player controls the angle)
+		FVector Normal = (GeoNormal * 0.35f + AimDir * 0.65f).GetSafeNormal();
 
-		TriggerHit(Type, Dir);
+		// Reflect incoming velocity about the contact normal with restitution.
+		// (A controlled contact kills most incoming speed; the swing adds power.)
+		float ContactRestitution = 0.35f;
+		float VDotN = BallVelIn.DotProduct(Normal);
+		FVector Reflected = BallVelIn - Normal * (2.0f * VDotN);
+		Reflected *= ContactRestitution;
+
+		// Arm swing impulse along the aim direction — this is the "hit power".
+		// Different contacts impart different energy, like real technique.
+		float SwingPower;
+		if      (Type == EHitType::Hit_Spike) SwingPower = 1150.0f;
+		else if (Type == EHitType::Hit_Set)   SwingPower = 520.0f;
+		else                                  SwingPower = 600.0f;  // bump
+
+		FVector SwingDir = AimDir;
+		if (Type == EHitType::Hit_Spike) SwingDir.Z = Math::Min(SwingDir.Z, -0.2f);
+		else                             SwingDir.Z = Math::Max(SwingDir.Z, 0.45f);
+		SwingDir = SwingDir.GetSafeNormal();
+
+		FVector OutVel = Reflected + SwingDir * SwingPower;
+
+		TriggerHit(Type, SwingDir);
 		RegisterHit(GetWorldBall());
 		bHasAim = false;
-		return Dir.GetSafeNormal() * OutSpeed;
+		return OutVel;
 	}
 
 	// The ball passes itself for touch registration; we keep a cached ref.
