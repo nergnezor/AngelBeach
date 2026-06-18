@@ -1,6 +1,49 @@
-// Base player pawn - movement, jump, hit actions, skeletal (Manny) body
-// Animation is driven from script via Single Node mode: we swap the active
-// animation sequence based on movement state (idle / run / jump / fall).
+// Base player pawn - movement, jump, hit actions, skeletal (Manny) body.
+//
+// Animation architecture (no engine fork needed):
+//   - This script drives an AnimInstance (UVolleyballAnimInstance) by writing
+//     BlueprintReadWrite properties every frame (Speed, bIsInAir, hit state...).
+//   - An Animation Blueprint reparented to UVolleyballAnimInstance reads those
+//     properties in its AnimGraph and runs a BLENDED state machine + blendspaces
+//     (idle/walk/run blend on Speed, jump/fall, and hit montages per EHitType).
+//   - To add a new move later: add an EHitType value + set it here, then add a
+//     state/clip in the Anim Blueprint. Logic stays in code; blending in the graph.
+
+// Which volleyball contact the player is performing (read by the Anim Blueprint
+// to pick bump / set / spike upper-body animation).
+enum EHitType
+{
+	Hit_None,
+	Hit_Bump,   // bagger / dig — forearm pass, arms low together
+	Hit_Set,    // handpass — overhead two-hand set
+	Hit_Spike,  // attack — overhead one-arm swing
+}
+
+// Data carrier between gameplay code and the Animation Blueprint. Holds no
+// animation logic itself — the AnimGraph (in the Anim BP) does the blending.
+class UVolleyballAnimInstance : UAnimInstance
+{
+	// Locomotion
+	UPROPERTY(BlueprintReadWrite) float Speed = 0.0f;        // horizontal speed (cm/s)
+	UPROPERTY(BlueprintReadWrite) float ForwardSpeed = 0.0f; // signed, for fwd/bwd blend
+	UPROPERTY(BlueprintReadWrite) float StrafeSpeed = 0.0f;  // signed, for left/right blend
+	UPROPERTY(BlueprintReadWrite) bool  bIsMoving = false;
+
+	// Air state
+	UPROPERTY(BlueprintReadWrite) bool  bIsInAir = false;
+	UPROPERTY(BlueprintReadWrite) float VerticalSpeed = 0.0f; // +up / -down, for jump/fall blend
+
+	// Hit / contact state (upper-body montage selection)
+	UPROPERTY(BlueprintReadWrite) bool     bIsHitting = false;
+	UPROPERTY(BlueprintReadWrite) EHitType HitType = EHitType::Hit_None;
+	UPROPERTY(BlueprintReadWrite) float    HitAlpha = 0.0f;   // 0 -> 1 -> 0 swing envelope
+
+	// Ready-to-use arm rotations computed per hit type in code, so the Anim
+	// Blueprint plugs them STRAIGHT into a Transform (Modify) Bone Rotation pin
+	// — no Make Rotator, no per-type branching needed in the graph.
+	UPROPERTY(BlueprintReadWrite) FRotator ArmRotR = FRotator::ZeroRotator;
+	UPROPERTY(BlueprintReadWrite) FRotator ArmRotL = FRotator::ZeroRotator;
+}
 
 class AVolleyballPlayer : APawn
 {
@@ -37,14 +80,11 @@ class AVolleyballPlayer : APawn
 	private float ReachTimer = 0.0f;
 	private FVector ReachDir = FVector(0, 0, 1);
 
-	// Animation clips (loaded once in SetupMesh)
-	private UAnimSequence AnimIdle;
-	private UAnimSequence AnimRun;
-	private UAnimSequence AnimJump;
-	private UAnimSequence AnimFall;
-
-	// Which clip is currently playing, so we only switch when state changes
-	private int CurrentAnim = -1;  // 0 idle, 1 run, 2 jump, 3 fall
+	// Animation: we write state into this each frame; the Anim Blueprint blends.
+	private UVolleyballAnimInstance Anim;
+	private EHitType CurrentHit = EHitType::Hit_None;
+	private float HitAnimTimer = 0.0f;
+	private float HitAnimDuration = 0.45f;  // hit pose blends out over this time
 
 	void InitPlayer()
 	{
@@ -72,15 +112,20 @@ class AVolleyballPlayer : APawn
 		Mesh.SetRelativeLocation(FVector(0, 0, -PlayerHeight));
 		Mesh.SetRelativeRotation(FRotator(0, -90, 0));
 
-		// Drive animation directly from script (no Anim Blueprint needed)
-		Mesh.SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		// Use a blended Animation Blueprint when available (preferred — gives
+		// idle/walk/run blendspace + jump/fall + bump/set/spike montages), and
+		// fall back to the raw Angelscript anim instance otherwise so the game
+		// still runs before the Anim BP is authored in the editor.
+		Mesh.SetAnimationMode(EAnimationMode::AnimationBlueprint);
 
-		AnimIdle = LoadAnim("MM_Idle");
-		AnimRun  = LoadAnim("MM_Run_Fwd");
-		AnimJump = LoadAnim("MM_Jump");
-		AnimFall = LoadAnim("MM_Fall_Loop");
+		UClass AnimBP = Cast<UClass>(LoadObject(nullptr,
+			"/Game/Characters/Mannequin/ABP_VolleyballPlayer.ABP_VolleyballPlayer_C"));
+		if (AnimBP != nullptr)
+			Mesh.SetAnimInstanceClass(AnimBP);
+		else
+			Mesh.SetAnimInstanceClass(UVolleyballAnimInstance);
 
-		SetAnim(0);  // start in idle
+		Anim = Cast<UVolleyballAnimInstance>(Mesh.GetAnimInstance());
 
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
@@ -106,32 +151,6 @@ class AVolleyballPlayer : APawn
 					MID.SetVectorParameterValue(n"Color", TeamColor());
 			}
 		}
-	}
-
-	private UAnimSequence LoadAnim(FString Clip) const
-	{
-		FString Path = "/MoverExamples/Characters/Mannequins/Animations/Manny/"
-			+ Clip + "." + Clip;
-		return Cast<UAnimSequence>(LoadObject(nullptr, Path));
-	}
-
-	// Switch the active single-node animation, looping locomotion/fall, one-shot jump
-	private void SetAnim(int Which)
-	{
-		if (Mesh == nullptr || Which == CurrentAnim) return;
-		CurrentAnim = Which;
-
-		UAnimSequence Seq;
-		bool bLoop = true;
-		if      (Which == 0) Seq = AnimIdle;
-		else if (Which == 1) Seq = AnimRun;
-		else if (Which == 2) { Seq = AnimJump; bLoop = false; }
-		else                 Seq = AnimFall;
-
-		if (Seq == nullptr) return;
-		Mesh.SetAnimation(Seq);
-		Mesh.SetPlayRate(1.0f);
-		Mesh.Play(bLoop);
 	}
 
 	private void ApplyTeamMaterial()
@@ -213,35 +232,112 @@ class AVolleyballPlayer : APawn
 			SetActorRotation(Math::LerpShortestPath(Cur, Want, Alpha));
 		}
 
-		UpdateAnimation(HSpeed2);
+		UpdateAnimation(DeltaTime, HSpeed2);
 	}
 
-	private void UpdateAnimation(float HSpeed)
+	// Feed movement + hit state into the AnimInstance. The Anim Blueprint reads
+	// these and does the actual blending in its AnimGraph.
+	private void UpdateAnimation(float DeltaTime, float HSpeed)
 	{
-		if (Mesh == nullptr) return;
+		// Decay the hit blend so the upper-body montage eases back out
+		if (HitAnimTimer > 0.0f)
+		{
+			HitAnimTimer -= DeltaTime;
+			if (HitAnimTimer <= 0.0f)
+			{
+				HitAnimTimer = 0.0f;
+				CurrentHit = EHitType::Hit_None;
+			}
+		}
 
-		if (!bIsGrounded)
+		if (Anim == nullptr)
 		{
-			// Jump anim on the way up, fall-loop once descending
-			SetAnim(PlayerVelocity.Z > 0.0f ? 2 : 3);
+			if (Mesh != nullptr)
+				Anim = Cast<UVolleyballAnimInstance>(Mesh.GetAnimInstance());
+			if (Anim == nullptr) return;
 		}
-		else if (HSpeed > 40.0f)
-		{
-			// Run; scale play rate with speed so slow shuffles read slower
-			SetAnim(1);
-			Mesh.SetPlayRate(Math::Clamp(HSpeed / MoveSpeed, 0.5f, 1.4f));
-		}
-		else
-		{
-			SetAnim(0);
-		}
+
+		// Local-space velocity so the Anim BP can blend fwd/back/strafe directionally
+		FVector Fwd   = GetActorForwardVector();
+		FVector Right = GetActorRightVector();
+		FVector FlatVel = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+
+		Anim.Speed         = HSpeed;
+		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
+		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
+		Anim.bIsMoving     = HSpeed > 40.0f;
+		Anim.bIsInAir      = !bIsGrounded;
+		Anim.VerticalSpeed = PlayerVelocity.Z;
+
+		Anim.bIsHitting = HitAnimTimer > 0.0f;
+		Anim.HitType    = CurrentHit;
+
+		// Swing envelope: 0 at start -> 1 at mid-contact -> 0 at end, so the arm
+		// swings up into the hit and back down rather than snapping.
+		float Progress = (HitAnimDuration > 0.0f)
+			? 1.0f - Math::Clamp(HitAnimTimer / HitAnimDuration, 0.0f, 1.0f)
+			: 0.0f;
+		float Swing = Math::Sin(Progress * PI);   // 0..1..0
+		Anim.HitAlpha = Swing;
+
+		UpdateArmPose(Swing);
 	}
 
-	protected void TriggerReach(FVector WorldDir)
+	// Compute target arm rotations for the current hit type, scaled by the swing
+	// envelope. The Anim BP feeds ArmRotR/ArmRotL straight into Modify Bone.
+	// Rotator is (Pitch, Yaw, Roll).
+	private void UpdateArmPose(float Swing)
+	{
+		// Neutral when not hitting
+		float PitchR = 0; float YawR = 0; float PitchL = 0; float YawL = 0;
+
+		if (CurrentHit == EHitType::Hit_Bump)
+		{
+			// Bagger/dig: both arms straight down-forward, clasped together low
+			PitchR = 35.0f;  YawR = -10.0f;
+			PitchL = 35.0f;  YawL =  10.0f;
+		}
+		else if (CurrentHit == EHitType::Hit_Set)
+		{
+			// Handpass/set: both arms up overhead
+			PitchR = 165.0f; YawR = -15.0f;
+			PitchL = 165.0f; YawL =  15.0f;
+		}
+		else if (CurrentHit == EHitType::Hit_Spike)
+		{
+			// Spike: right arm whips from high overhead down — drive purely by
+			// swing so it reads as a strike (up at start of swing, down at peak)
+			PitchR = 180.0f;
+			// left arm lifts for balance
+			PitchL = 120.0f; YawL = 20.0f;
+		}
+
+		Anim.ArmRotR = FRotator(PitchR * Swing, YawR * Swing, 0.0f);
+		Anim.ArmRotL = FRotator(PitchL * Swing, YawL * Swing, 0.0f);
+	}
+
+	// Called by gameplay code each time a contact happens. Sets which upper-body
+	// hit montage the Anim Blueprint should blend in.
+	protected void TriggerHit(EHitType Type, FVector WorldDir)
 	{
 		ReachDir = WorldDir.GetSafeNormal();
-		ReachTimer = 0.35f;
+		CurrentHit = Type;
+		HitAnimTimer = HitAnimDuration;
+		if (bDebugHit)
+		{
+			FString Cls = (Anim != nullptr) ? "" + Anim.GetClass().GetName() : "NULL";
+			Log("HIT type=" + int(Type) + " AnimInstance=" + Cls);
+		}
 	}
+
+	bool bDebugHit = false;
+
+	// Back-compat: a generic reach with no specific hit type.
+	protected void TriggerReach(FVector WorldDir)
+	{
+		TriggerHit(EHitType::Hit_Bump, WorldDir);
+	}
+
 
 	UFUNCTION(BlueprintCallable)
 	void MovePlayer(FVector2D Input)
@@ -267,7 +363,7 @@ class AVolleyballPlayer : APawn
 		float XDir = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
 		FVector Dir = FVector(XDir * 0.4f, 0, 1.0f).GetSafeNormal();
 		Ball.HitBall(Dir, 520.0f);
-		TriggerReach(FVector(0, 0, 1));
+		TriggerHit(EHitType::Hit_Bump, FVector(0, 0, 1));
 		RegisterHit(Ball);
 	}
 
@@ -278,7 +374,7 @@ class AVolleyballPlayer : APawn
 		float XDir = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
 		FVector Dir = FVector(XDir * 0.65f, 0, 0.76f).GetSafeNormal();
 		Ball.HitBall(Dir, 620.0f);
-		TriggerReach(FVector(XDir * 0.5f, 0, 1.0f));
+		TriggerHit(EHitType::Hit_Set, FVector(XDir * 0.5f, 0, 1.0f));
 		RegisterHit(Ball);
 	}
 
@@ -289,15 +385,16 @@ class AVolleyballPlayer : APawn
 		float XDir = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
 		FVector ToNet = FVector(XDir, 0, -0.35f).GetSafeNormal();
 		Ball.HitBall(ToNet, 1300.0f);
-		TriggerReach(FVector(XDir * 0.4f, 0, 1.0f));
+		TriggerHit(EHitType::Hit_Spike, FVector(XDir * 0.4f, 0, 1.0f));
 		RegisterHit(Ball);
 	}
 
-	void HitToward(FVector Dir, float Speed, ABall Ball)
+	// Generic hit toward a direction with an explicit hit type (used by AI).
+	void HitToward(FVector Dir, float Speed, ABall Ball, EHitType Type = EHitType::Hit_Bump)
 	{
 		if (Ball == nullptr || !bCanHit) return;
 		Ball.HitBall(Dir, Speed);
-		TriggerReach(Dir);
+		TriggerHit(Type, Dir);
 		RegisterHit(Ball);
 	}
 
