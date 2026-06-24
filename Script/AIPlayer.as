@@ -91,7 +91,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (AmIHitter(Landing))
 		{
 			if (bDebugAI) Log(DebugTag() + " HITTER t=" + Touches + " ballZ=" + int(Ball.Position.Z) + " grounded=" + bIsGrounded);
-			PlayHitter(Touches, Landing, DeltaTime);
+			PlayHitter(Touches, DeltaTime);
 		}
 		else
 		{
@@ -137,7 +137,7 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
 	// ---------------------------------------------------------------
-	private void PlayHitter(int Touches, FVector Landing, float DeltaTime)
+	private void PlayHitter(int Touches, float DeltaTime)
 	{
 		if (Touches >= 2)
 		{
@@ -146,39 +146,52 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// Decide our intended contact type for this touch.
-		EHitType Intend = (Touches == 0) ? EHitType::Hit_Bump : EHitType::Hit_Set;
+		// Decide our intended contact type. A fingerpass (set) is only legal if we
+		// can get UNDER the ball with our forehead in time: we must be close to its
+		// horizontal position AND the ball must be at/above forehead height. If not,
+		// we're late/low — play it with a bagger (forearm pass) instead.
+		EHitType Intend;
+		if (Touches == 0)
+		{
+			Intend = EHitType::Hit_Bump;   // first touch (receive) is always a dig
+		}
+		else
+		{
+			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
+			float HorizToBall = (GetActorLocation() - FVector(Ball.Position.X, Ball.Position.Y, 0)).Size2D();
+			bool bUnderBall = HorizToBall < UnderBallRadius;
+			bool bHighEnough = Ball.Position.Z > ForeheadZ;
+			Intend = (bUnderBall && bHighEnough) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
-		if (Touches == 0) DoDig();
-		else              DoSet();
+		if (Intend == EHitType::Hit_Bump) DoDig();
+		else                              DoSet();
 
-		// Stand so the BALL passes within arm's reach, not at the far-off ground
-		// landing spot. While the ball is still high/far, move toward the predicted
-		// landing so we get there in time; once it's low enough to play, track the
-		// ball's actual horizontal position so the platform meets it.
-		bool bBallPlayable = Ball.Position.Z < 260.0f;
-		FVector Aimpoint = bBallPlayable
-			? FVector(Ball.Position.X, Ball.Position.Y, 0)
-			: FVector(Landing.X, Landing.Y, 0);
-		FVector Goal = ClampToCourt(Aimpoint);
+		// Stand where the ball will be when it drops to PLAY height (waist/chest),
+		// not at its ground landing spot. A bagger meets the ball ~1m up while it's
+		// still travelling, so aiming at the Z=0 landing point leaves us a metre
+		// short horizontally — exactly the gap the debug meter showed (~105cm).
+		FVector PlaySpot = PredictBallAtHeight(ContactHeight());
+		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0));
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		// Keep closing until the ball is genuinely within reach. Only plant (stop)
-		// once we're close enough that the hand can actually touch the ball.
+		// Close all the way in — a small plant radius so we actually arrive under
+		// the ball rather than stopping a half-metre short.
 		if (DistToGoal > PlantRadius)
 			MoveToward2D(Goal, DeltaTime);
 		else
 			MovePlayer(FVector2D::ZeroVector);
 
-		// Reach only when the ball is actually within arm range — reaching from 2.5m
-		// away just flails at empty air. Face the ball so the platform meets it.
+		// Always face the ball while playing it, so "in front of the chest" actually
+		// points at the ball and the IK platform meets it.
+		FaceBall();
+
+		// Reach when the ball is within arm range (body ~ within reach + a margin so
+		// the gesture is already extended as the ball arrives).
 		float BallDist = (GetActorLocation() - Ball.Position).Size();
 		if (BallDist < ReachDistance)
-		{
-			FaceBall();
 			Reach(Intend);
-		}
 	}
 
 	// Start extending the arms only when the ball is within true arm range (cm).
@@ -187,6 +200,41 @@ class AAIPlayer : AVolleyballPlayer
 
 	// How close (cm) we must be to the landing spot before we plant and reach.
 	const float PlantRadius = 60.0f;
+
+	// How close (horizontally, cm) we must be under the ball to use a fingerpass
+	// (set). Beyond this we're not under it in time and must bagger instead.
+	const float UnderBallRadius = 70.0f;
+
+	// The world Z at which we want to meet the ball — roughly chest height, where a
+	// bagger platform contacts it.
+	private float ContactHeight() const
+	{
+		return GetActorLocation().Z + PlayerHeight * 0.4f;
+	}
+
+	// Simulate the ball forward and return its (X,Y,Z) when it next descends to the
+	// given height. If it never reaches that height (already below / rising away),
+	// fall back to the ground landing prediction.
+	private FVector PredictBallAtHeight(float TargetZ) const
+	{
+		FVector P = Ball.Position;
+		FVector V = Ball.BallVel;
+		const float G = -980.0f;
+		const float Dt = 0.02f;
+		float T = 0.0f;
+		while (T < 3.0f)
+		{
+			V.Z += G * Dt;
+			FVector Next = P + V * Dt;
+			// Detect a downward crossing of TargetZ between P and Next.
+			if (P.Z >= TargetZ && Next.Z <= TargetZ && V.Z < 0.0f)
+				return Next;
+			P = Next;
+			T += Dt;
+			if (P.Z <= 0.0f) break;
+		}
+		return Ball.PredictLanding();
+	}
 
 	private void FaceBall()
 	{

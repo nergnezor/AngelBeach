@@ -346,45 +346,76 @@ class AVolleyballPlayer : APawn
 		if (HitAnimTimer <= 0.0f && !bReaching && CurrentPose < 0.02f)
 			CurrentHit = EHitType::Hit_None;
 
-		if (bDebugHit && (bReaching || CurrentPose > 0.05f))
-			LogArmGeometry();
+		// Per-attempt summary tracking: while gesturing, remember how close the hand
+		// actually got to the ball. Emit ONE line when the attempt ends — far less
+		// noise than per-frame, and it answers the real question: did the hand reach
+		// the ball, and did it score a contact?
+		if (CurrentPose > 0.05f)
+		{
+			ABall TB = GetWorldBall();
+			if (TB != nullptr && TB.bInPlay && Mesh != nullptr)
+			{
+				bAttemptActive = true;
+				float DR = (TB.Position - Mesh.GetBoneTransform(n"hand_r").Location).Size();
+				float DL = (TB.Position - Mesh.GetBoneTransform(n"hand_l").Location).Size();
+				float D = Math::Min(DR, DL);
+				if (D < AttemptClosest)
+				{
+					AttemptClosest = D;
+					// Record body vs ball gap at the closest moment, split into
+					// horizontal vs vertical so we can tell WHY the hand misses:
+					// big horiz = standing beside it; big vert = ball too high/low.
+					FVector Loc = GetActorLocation();
+					AttemptHoriz = (Loc - FVector(TB.Position.X, TB.Position.Y, 0)).Size2D();
+					AttemptVert  = TB.Position.Z - (Loc.Z + PlayerHeight);  // + above head
+					AttemptPose  = CurrentPose;
+					// Facing error: angle between where we look and where the ball is.
+					FVector ToBallFlat = FVector(TB.Position.X - Loc.X, TB.Position.Y - Loc.Y, 0).GetSafeNormal();
+					AttemptFacing = GetActorForwardVector().DotProduct(ToBallFlat);  // 1=facing, -1=away
+					// THE decisive number: how far the actual hand is from the target
+					// we ASKED the IK for. Small = IK follows target (our target is
+					// wrong); large = IK ignores target (wiring/space is wrong).
+					FVector HandR = Mesh.GetBoneTransform(n"hand_r").Location;
+					AttemptHandVsTarget = (HandR - Anim.HandTargetR).Size();
+					// And how far our target itself is from the ball.
+					AttemptTargetVsBall = (Anim.HandTargetR - TB.Position).Size();
+				}
+			}
+		}
+		else if (bAttemptActive)
+		{
+			// Attempt just ended — report closest approach vs the catch radius.
+			if (bDebugHit)
+			{
+				float Catch = ArmContactRadius + 10.5f;
+				Log("ATTEMPT type=" + int(CurrentHit)
+					+ " closestHand=" + int(AttemptClosest)
+					+ " catch=" + int(Catch)
+					+ " | bodyHoriz=" + int(AttemptHoriz)
+					+ " ballVsHead=" + int(AttemptVert)
+					+ " pose=" + int(AttemptPose * 100)
+					+ " facing=" + int(AttemptFacing * 100)
+					+ " | handVsTarget=" + int(AttemptHandVsTarget)
+					+ " targetVsBall=" + int(AttemptTargetVsBall)
+					+ (AttemptClosest <= Catch ? "  -> SHOULD HIT" : "  -> MISS"));
+			}
+			bAttemptActive = false;
+			AttemptClosest = 99999.0f;
+		}
 
 		// Reaching is re-asserted each frame by the AI; clear it so it lapses
 		// when the AI stops asking.
 		bReaching = false;
 	}
 
-	// Reads the ACTUAL hand world positions after the AnimGraph + IK ran, so we
-	// can "see" where the hands ended up: offset from the head, in the player's
-	// own frame (fwd=+X in front, side=+Y right, up=+Z). This is our verification
-	// mirror — compare it against the targets we asked for in UpdateIKTargets.
-	private void LogArmGeometry()
-	{
-		if (Mesh == nullptr) return;
-		FVector Head  = Mesh.GetBoneTransform(n"head").Location;
-		FVector HandR = Mesh.GetBoneTransform(n"hand_r").Location;
-
-		FTransform AT = GetActorTransform();
-		FVector LR = AT.InverseTransformVector(HandR - Head);
-		FVector TR = AT.InverseTransformVector(Anim.HandTargetR - Head);
-
-		// Distance from the right HAND to the ball — the real question is whether
-		// the hand can actually reach the ball, not just where it points.
-		ABall B = GetWorldBall();
-		int HandToBall = -1;
-		int BodyToBall = -1;
-		if (B != nullptr && B.bInPlay)
-		{
-			HandToBall = int((B.Position - HandR).Size());
-			BodyToBall = int((B.Position - GetActorLocation()).Size());
-		}
-
-		Log("IK type=" + int(CurrentHit)
-			+ " pose=" + int(CurrentPose * 100) + " ik=" + int(IKWeight * 100)
-			+ " | handToBall=" + HandToBall + " bodyToBall=" + BodyToBall
-			+ " | R got(fwd=" + int(LR.X) + " side=" + int(LR.Y) + " up=" + int(LR.Z) + ")"
-			+ " want(fwd=" + int(TR.X) + " side=" + int(TR.Y) + " up=" + int(TR.Z) + ")");
-	}
+	private bool bAttemptActive = false;
+	private float AttemptClosest = 99999.0f;
+	private float AttemptHoriz = 0.0f;
+	private float AttemptVert = 0.0f;
+	private float AttemptPose = 0.0f;
+	private float AttemptFacing = 0.0f;
+	private float AttemptHandVsTarget = 0.0f;
+	private float AttemptTargetVsBall = 0.0f;
 
 	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
 	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
@@ -399,8 +430,10 @@ class AVolleyballPlayer : APawn
 			CurrentHit = Type;
 	}
 
-	// Distance (cm) at which any player starts reaching arms toward the ball.
-	float AutoReachDistance = 220.0f;
+	// Distance (cm) at which any player auto-reaches toward the ball. Kept tight so
+	// players don't flail at a ball that's still metres away — the AI drives the
+	// deliberate reach as it closes in; this is just a safety net at true arm range.
+	float AutoReachDistance = 130.0f;
 
 	// Reach for the ball automatically when it's near and I may legally play it.
 	// Hit type is picked from the ball's height relative to my body.
@@ -413,12 +446,21 @@ class AVolleyballPlayer : APawn
 		float Dist = (GetActorLocation() - B.Position).Size();
 		if (Dist > AutoReachDistance) return;
 
-		float HeadZ = GetActorLocation().Z + PlayerHeight;
+		// Same rule as the AI: a fingerpass (set) is only legal if we're actually
+		// UNDER the ball with the forehead — close horizontally AND ball at/above
+		// forehead height. Airborne over a high ball = spike. Otherwise bagger.
+		float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
+		float HorizToBall = (GetActorLocation() - FVector(B.Position.X, B.Position.Y, 0)).Size2D();
+		bool bUnderBall = HorizToBall < 70.0f;
+		bool bHighEnough = B.Position.Z > ForeheadZ;
+
 		EHitType Type;
-		if (B.Position.Z > HeadZ)
-			Type = bIsGrounded ? EHitType::Hit_Set : EHitType::Hit_Spike;
+		if (!bIsGrounded && bHighEnough)
+			Type = EHitType::Hit_Spike;          // jumping at a high ball
+		else if (bUnderBall && bHighEnough)
+			Type = EHitType::Hit_Set;            // under it in time -> fingerpass
 		else
-			Type = EHitType::Hit_Bump;
+			Type = EHitType::Hit_Bump;           // late/low -> bagger
 
 		Reach(Type);
 	}
@@ -452,21 +494,24 @@ class AVolleyballPlayer : APawn
 		FVector AimFlat = FVector(Aim.X, Aim.Y, 0).GetSafeNormal();
 		if (AimFlat.SizeSquared() < 0.01f) AimFlat = Fwd;
 
-		// Where the BALL is — the hands must reach toward it, not a fixed spot in
-		// front of the chest. Clamp the contact point to arm's length from the
-		// shoulders so we never ask the IK for an impossible stretch.
+		// Where the BALL is — the hands reach straight toward it, clamped to arm's
+		// length from the chest so the IK stays solvable. The player turns to face
+		// the ball (FaceBall in the AI), so this naturally ends up in front. We do
+		// NOT re-project onto the facing axes — that pushed the hand forward when the
+		// ball was to the side, making the hand end up FARTHER from the ball than the
+		// body (the bug the debug meter caught: closestHand > bodyHoriz).
 		FVector ChestMid = (ShR + ShL) * 0.5f;
-		FVector BallContact = ChestMid + Fwd * 35.0f + Up * 5.0f;  // sensible default
+		FVector BallContact = ChestMid + Fwd * 35.0f + Up * 5.0f;  // default if no ball
 		{
 			ABall B = GetWorldBall();
 			if (B != nullptr && B.bInPlay)
 			{
 				FVector ToBall = B.Position - ChestMid;
-				float ArmReach = 95.0f;            // shoulder->hand max (cm)
+				float ArmReach = 110.0f;                  // shoulder->hand max (cm)
 				if (ToBall.Size() > ArmReach)
 					BallContact = ChestMid + ToBall.GetSafeNormal() * ArmReach;
 				else
-					BallContact = B.Position;
+					BallContact = B.Position;             // ball within reach: aim right at it
 			}
 		}
 
@@ -550,7 +595,11 @@ class AVolleyballPlayer : APawn
 
 	// Ball only bounces off hands and forearms. Each is a small sphere centered
 	// on the bone, in world space. Radius is how thick the limb is for contact.
-	float ArmContactRadius = 18.0f;   // forearm/hand thickness (cm)
+	// Forearm/hand contact thickness. A real forearm-platform / cupped hands sweep
+	// a fatter volume than a single bone point, so this is generous on purpose:
+	// effective catch radius = ArmContactRadius + BallRadius (~42cm), which fairly
+	// represents an outstretched arm meeting the ball.
+	float ArmContactRadius = 32.0f;
 
 	// Test the ball against the hand/forearm bones. If any is within reach,
 	// fills OutCenter with that bone's position and returns true.
