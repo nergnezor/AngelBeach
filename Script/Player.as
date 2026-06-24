@@ -33,16 +33,35 @@ class UVolleyballAnimInstance : UAnimInstance
 	UPROPERTY(BlueprintReadWrite) bool  bIsInAir = false;
 	UPROPERTY(BlueprintReadWrite) float VerticalSpeed = 0.0f; // +up / -down, for jump/fall blend
 
-	// Hit / contact state (upper-body montage selection)
+	// Hit / contact state (drives which montage/state the Anim BP plays)
 	UPROPERTY(BlueprintReadWrite) bool     bIsHitting = false;
 	UPROPERTY(BlueprintReadWrite) EHitType HitType = EHitType::Hit_None;
 	UPROPERTY(BlueprintReadWrite) float    HitAlpha = 0.0f;   // 0 -> 1 -> 0 swing envelope
 
-	// Ready-to-use arm rotations computed per hit type in code, so the Anim
-	// Blueprint plugs them STRAIGHT into a Transform (Modify) Bone Rotation pin
-	// — no Make Rotator, no per-type branching needed in the graph.
-	UPROPERTY(BlueprintReadWrite) FRotator ArmRotR = FRotator::ZeroRotator;
-	UPROPERTY(BlueprintReadWrite) FRotator ArmRotL = FRotator::ZeroRotator;
+	// --- Full Body IK effector targets (WORLD space) ----------------------
+	// The Anim BP feeds these into a Full Body IK node. Code computes WHERE each
+	// limb should be (relative to head/shoulders and the aim direction); the IK
+	// node solves the joints so the hands/feet/hips land exactly there. This
+	// replaces the old bone-space Modify Bone approach — no more guessing axes.
+	//
+	// IK is applied with weight IKAlpha (0 = pure animation, 1 = fully driven by
+	// these targets), so arm gestures blend in/out smoothly over a contact.
+	UPROPERTY(BlueprintReadWrite) float    IKAlpha = 0.0f;
+
+	// Hands: where each palm should be, and which way it faces (for set/spike).
+	UPROPERTY(BlueprintReadWrite) FVector  HandTargetR = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector  HandTargetL = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FRotator HandRotR = FRotator::ZeroRotator;
+	UPROPERTY(BlueprintReadWrite) FRotator HandRotL = FRotator::ZeroRotator;
+
+	// Elbow pole vectors: a world point the elbow points toward, so the IK picks
+	// a natural elbow bend (forward for a set, down/out for a bump platform).
+	UPROPERTY(BlueprintReadWrite) FVector  ElbowPoleR = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector  ElbowPoleL = FVector::ZeroVector;
+
+	// Lower body: hip height offset (negative = crouch) and dive hand plant.
+	UPROPERTY(BlueprintReadWrite) float    CrouchAmount = 0.0f;  // 0..1, drives knee bend
+	UPROPERTY(BlueprintReadWrite) bool     bDiving = false;      // play dive montage
 }
 
 class AVolleyballPlayer : APawn
@@ -96,11 +115,15 @@ class AVolleyballPlayer : APawn
 	{
 		if (Mesh == nullptr) return;
 
+		// Use SKM_Manny_Simple (the renderable SkeletalMesh) copied into the project.
+		// NOTE: SK_Mannequin is the *Skeleton* asset, not a mesh — don't load that.
+		// All bundled template anim clips reference this skeleton, so they play
+		// without retargeting.
 		USkeletalMesh SkMesh = Cast<USkeletalMesh>(LoadObject(nullptr,
-			"/MoverExamples/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
+			"/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
 		if (SkMesh == nullptr)
 		{
-			// Plugin content not mounted — keep player visible with a fallback box
+			// Content not found — keep player visible with a fallback box
 			Print("VolleyballPlayer: Manny mesh failed to load, using fallback box", Duration = 8.0f);
 			SpawnFallbackBox();
 			return;
@@ -301,8 +324,22 @@ class AVolleyballPlayer : APawn
 		float Alpha = Math::Clamp(Speed * DeltaTime, 0.0f, 1.0f);
 		CurrentPose = CurrentPose + (TargetPose - CurrentPose) * Alpha;
 
+		// IK Alpha and pose SHAPE are separate concerns. The IK node should apply
+		// (nearly) fully whenever we're gesturing, so the hands actually reach the
+		// targets — NOT scaled by CurrentPose, or we'd double-dampen (40% reach *
+		// 40% IK = 16% visible motion, which read as "arms barely move").
+		// CurrentPose instead drives only the ready->contact SHAPE inside
+		// UpdateIKTargets. We ramp IKAlpha quickly to 1 once any gesture starts.
+		float TargetIK = (CurrentPose > 0.02f) ? 1.0f : 0.0f;
+		float IKSpeed = (TargetIK > IKWeight) ? 12.0f : 6.0f;
+		IKWeight = IKWeight + (TargetIK - IKWeight) * Math::Clamp(IKSpeed * DeltaTime, 0.0f, 1.0f);
+
 		Anim.HitAlpha = CurrentPose;
-		UpdateArmPose(CurrentPose);
+		Anim.IKAlpha  = IKWeight;
+		// Pose shape uses the full 0..1 gesture curve, remapped so even the 0.85
+		// reach hold reaches the contact shape (reach should look committed).
+		float Shape = Math::Clamp(CurrentPose / 0.85f, 0.0f, 1.0f);
+		UpdateIKTargets(Shape);
 
 		// Once the gesture has fully relaxed and we're no longer hitting/reaching,
 		// release the hit type so the next contact can pick a fresh one.
@@ -317,30 +354,40 @@ class AVolleyballPlayer : APawn
 		bReaching = false;
 	}
 
-	// Reads the ACTUAL bone world positions after the AnimGraph applied our
-	// rotations, so we can "see" where the right arm physically points: the
-	// hand's offset from the shoulder, in the player's local frame.
-	//   fwd  = +X (in front of chest), up = +Z, side = +Y (right)
+	// Reads the ACTUAL hand world positions after the AnimGraph + IK ran, so we
+	// can "see" where the hands ended up: offset from the head, in the player's
+	// own frame (fwd=+X in front, side=+Y right, up=+Z). This is our verification
+	// mirror — compare it against the targets we asked for in UpdateIKTargets.
 	private void LogArmGeometry()
 	{
 		if (Mesh == nullptr) return;
-		FVector Shoulder = Mesh.GetBoneTransform(n"upperarm_r").Location;
-		FVector Hand     = Mesh.GetBoneTransform(n"hand_r").Location;
-		FVector Off      = Hand - Shoulder;                 // world-space arm vector
+		FVector Head  = Mesh.GetBoneTransform(n"head").Location;
+		FVector HandR = Mesh.GetBoneTransform(n"hand_r").Location;
 
-		// Express in the player's own frame so values are intuitive.
-		FVector Local = GetActorTransform().InverseTransformVector(Off);
-		FString Tag = bAxisProbe ? ("PROBE " + ProbeAxisLabel) : ("type=" + int(CurrentHit));
-		Log("ARM " + Tag
-			+ " | hand vs shoulder  fwd=" + int(Local.X)
-			+ " side=" + int(Local.Y)
-			+ " up=" + int(Local.Z)
-			+ "  (sent Pitch=" + int(Anim.ArmRotR.Pitch)
-			+ " Yaw=" + int(Anim.ArmRotR.Yaw)
-			+ " Roll=" + int(Anim.ArmRotR.Roll) + ")");
+		FTransform AT = GetActorTransform();
+		FVector LR = AT.InverseTransformVector(HandR - Head);
+		FVector TR = AT.InverseTransformVector(Anim.HandTargetR - Head);
+
+		// Distance from the right HAND to the ball — the real question is whether
+		// the hand can actually reach the ball, not just where it points.
+		ABall B = GetWorldBall();
+		int HandToBall = -1;
+		int BodyToBall = -1;
+		if (B != nullptr && B.bInPlay)
+		{
+			HandToBall = int((B.Position - HandR).Size());
+			BodyToBall = int((B.Position - GetActorLocation()).Size());
+		}
+
+		Log("IK type=" + int(CurrentHit)
+			+ " pose=" + int(CurrentPose * 100) + " ik=" + int(IKWeight * 100)
+			+ " | handToBall=" + HandToBall + " bodyToBall=" + BodyToBall
+			+ " | R got(fwd=" + int(LR.X) + " side=" + int(LR.Y) + " up=" + int(LR.Z) + ")"
+			+ " want(fwd=" + int(TR.X) + " side=" + int(TR.Y) + " up=" + int(TR.Z) + ")");
 	}
 
-	private float CurrentPose = 0.0f;   // smoothed arm-pose weight
+	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
+	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
 
 	// AI sets this each frame while preparing to play the ball, with the hit type
 	// it intends, so the arms extend toward the ball before contact.
@@ -376,58 +423,125 @@ class AVolleyballPlayer : APawn
 		Reach(Type);
 	}
 
-	// Compute target arm rotations for the current hit type, scaled by the swing
-	// envelope. The Anim BP feeds ArmRotR/ArmRotL straight into Modify Bone.
+	// Compute WORLD-space IK targets for the current hit type. The Anim BP feeds
+	// these into a Full Body IK node, which solves the joints so the hands land
+	// exactly where we ask. Targets are anchored to the head/shoulder bones (so
+	// they track the body as it moves/jumps) and oriented toward AimDir — the
+	// direction the player wants to send the ball.
 	//
-	// Axis mapping on Manny's upperarm bones (Component Space, from probe data):
-	//   Pitch+90  => arm swings forward (fwd+30), barely lifts (up≈0)
-	//   Yaw+90    => arm swings inward across chest (side-30), slight lift
-	//   Roll-90   => arm lifts straight up (up+30), forward component negative
-	//   Roll+90   => arm drops straight down (up-30)
-	//
-	// Bump: arms forward + slightly down  => Pitch+70, Roll+20
-	// Set:  arms straight up overhead     => Roll-90 (both)
-	// Spike: right arm up then drives fwd => Roll-90 at reach, Pitch+90 at swing peak
-	//        left arm balance             => Roll-50
-	private void UpdateArmPose(float Swing)
+	// 'Blend' (0..1) is the gesture weight: at 0 the hands sit at a relaxed ready
+	// spot, at 1 they're fully at the contact pose. We lerp ready->contact so the
+	// motion eases in. IKAlpha (set by caller) controls how much the IK overrides
+	// the base animation.
+	private void UpdateIKTargets(float Blend)
 	{
-		float RollR = 0; float PitchR = 0; float YawR = 0;
-		float RollL = 0; float PitchL = 0; float YawL = 0;
+		if (Mesh == nullptr) return;
+
+		// Body anchors from the actual skeleton (track jumps, lean, run).
+		FVector Head  = Mesh.GetBoneTransform(n"head").Location;
+		FVector ShR   = Mesh.GetBoneTransform(n"upperarm_r").Location;
+		FVector ShL   = Mesh.GetBoneTransform(n"upperarm_l").Location;
+		FVector Fwd   = GetActorForwardVector();
+		FVector Right = GetActorRightVector();
+		FVector Up    = FVector(0, 0, 1);
+
+		// Where the player is sending the ball. Falls back to "up and forward".
+		FVector Aim = bHasAim
+			? (DesiredAim - Head).GetSafeNormal()
+			: (Fwd * 0.4f + Up).GetSafeNormal();
+		FVector AimFlat = FVector(Aim.X, Aim.Y, 0).GetSafeNormal();
+		if (AimFlat.SizeSquared() < 0.01f) AimFlat = Fwd;
+
+		// Where the BALL is — the hands must reach toward it, not a fixed spot in
+		// front of the chest. Clamp the contact point to arm's length from the
+		// shoulders so we never ask the IK for an impossible stretch.
+		FVector ChestMid = (ShR + ShL) * 0.5f;
+		FVector BallContact = ChestMid + Fwd * 35.0f + Up * 5.0f;  // sensible default
+		{
+			ABall B = GetWorldBall();
+			if (B != nullptr && B.bInPlay)
+			{
+				FVector ToBall = B.Position - ChestMid;
+				float ArmReach = 95.0f;            // shoulder->hand max (cm)
+				if (ToBall.Size() > ArmReach)
+					BallContact = ChestMid + ToBall.GetSafeNormal() * ArmReach;
+				else
+					BallContact = B.Position;
+			}
+		}
+
+		// Relaxed ready position: hands hang slightly forward at the sides.
+		FVector ReadyR = ShR + Fwd * 18.0f - Up * 35.0f;
+		FVector ReadyL = ShL + Fwd * 18.0f - Up * 35.0f;
+
+		FVector ContactR;
+		FVector ContactL;
+		FRotator PalmR = FRotator::ZeroRotator;
+		FRotator PalmL = FRotator::ZeroRotator;
+		FVector PoleR;
+		FVector PoleL;
+		float Crouch = 0.0f;
 
 		if (CurrentHit == EHitType::Hit_Bump)
 		{
-			// Bagger/dig: arms forward-down in front, wrists together.
-			// Pitch pushes arm forward; small Roll+ tips it slightly downward.
-			PitchR = 70.0f;  YawR = -15.0f; RollR =  20.0f;
-			PitchL = 70.0f;  YawL =  15.0f; RollL = -20.0f;
+			// Bagger/dig: arms STRAIGHT and flat, hands JOINED under the ball so the
+			// forearm platform meets it. Both hands converge on the ball contact,
+			// pulled a little low so the platform is beneath the ball.
+			FVector Platform = BallContact - Up * 12.0f;
+			ContactR = Platform - Right * 6.0f;
+			ContactL = Platform + Right * 6.0f;
+			// Elbows pulled DOWN and back so the arms lock out straight.
+			PoleR = ContactR - Up * 45.0f - Fwd * 25.0f;
+			PoleL = ContactL - Up * 45.0f - Fwd * 25.0f;
+			// Forearm platform faces up toward the aim arc.
+			PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
+			PalmL = PalmR;
+			Crouch = 0.6f;
 		}
 		else if (CurrentHit == EHitType::Hit_Set)
 		{
-			// Handpass/set: both arms up overhead, elbows bent outward.
-			// Roll-90 lifts arm straight up; Yaw opens elbows out.
-			RollR = -90.0f; YawR = -20.0f;
-			RollL =  90.0f; YawL =  20.0f;
+			// Fingerpass/set: hands form a CUP under/around the ball above the brow,
+			// elbows forward. On contact (Blend->1) the palms push up-forward toward
+			// the aim, as if shoving the ball away.
+			FVector Cup = BallContact - Up * 6.0f;               // hands just under the ball
+			FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal() * 14.0f;
+			ContactR = Cup - Right * 11.0f + Push * Blend;
+			ContactL = Cup + Right * 11.0f + Push * Blend;
+			// Elbows point FORWARD (and slightly out) — the set's signature shape.
+			PoleR = ShR + Fwd * 40.0f - Right * 10.0f;
+			PoleL = ShL + Fwd * 40.0f + Right * 10.0f;
+			PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
+			PalmL = PalmR;
+			Crouch = 0.2f;
 		}
 		else if (CurrentHit == EHitType::Hit_Spike)
 		{
-			// Spike: right arm cocks up (Roll-90) while Swing is low, then
-			// drives forward (Pitch+80) as Swing peaks. Apply Swing directly
-			// per component so the transition is smooth.
-			Anim.ArmRotR = FRotator(
-				 80.0f * Swing,           // Pitch: drives arm forward at peak
-				-10.0f * Swing,           // Yaw: slight inward at peak
-				-90.0f * (1.0f - Swing)); // Roll: arm raised at start, neutral at peak
-			// Left arm lifts for balance
-			Anim.ArmRotL = FRotator(0.0f, 20.0f * Swing, 50.0f * Swing);
-			return;
+			// Spike: right hand cocks high, then swings through the BALL down-forward
+			// along the aim. Left hand lifts for balance.
+			FVector HighR = Head + Up * 45.0f + Fwd * 5.0f - Right * 18.0f; // cocked overhead
+			FVector StrikeR = BallContact;                                   // strike the ball
+			ContactR = HighR + (StrikeR - HighR) * Blend;
+			ContactL = ShL + Up * 30.0f + Fwd * 10.0f;
+			PoleR = ContactR + Up * 30.0f - Fwd * 20.0f;
+			PoleL = ContactL - Up * 20.0f + Right * 20.0f;
+			PalmR = FVector(AimFlat.X, AimFlat.Y, -0.4f).GetSafeNormal().Rotation();
+			Crouch = 0.0f;
+		}
+		else
+		{
+			ContactR = ReadyR; ContactL = ReadyL;
+			PoleR = ShR - Up * 40.0f; PoleL = ShL - Up * 40.0f;
 		}
 
-		Anim.ArmRotR = FRotator(PitchR * Swing, YawR * Swing, RollR * Swing);
-		Anim.ArmRotL = FRotator(PitchL * Swing, YawL * Swing, RollL * Swing);
+		// Ease from ready to the contact pose by the gesture weight.
+		Anim.HandTargetR = ReadyR + (ContactR - ReadyR) * Blend;
+		Anim.HandTargetL = ReadyL + (ContactL - ReadyL) * Blend;
+		Anim.ElbowPoleR  = PoleR;
+		Anim.ElbowPoleL  = PoleL;
+		Anim.HandRotR    = PalmR;
+		Anim.HandRotL    = PalmL;
+		Anim.CrouchAmount = Crouch * Blend;
 	}
-
-	bool bAxisProbe = false;
-	private FString ProbeAxisLabel = "";
 
 	// --- Physical ball contact ---------------------------------------------
 	// The ball calls these. The player no longer teleports the ball's velocity;
