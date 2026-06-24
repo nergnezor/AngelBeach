@@ -310,13 +310,34 @@ class AVolleyballPlayer : APawn
 			CurrentHit = EHitType::Hit_None;
 
 		if (bDebugHit && (bReaching || CurrentPose > 0.05f))
-			Log("POSE reach=" + bReaching + " pose=" + CurrentPose
-				+ " type=" + int(CurrentHit)
-				+ " ArmRotR=" + Anim.ArmRotR.Pitch + "," + Anim.ArmRotR.Yaw);
+			LogArmGeometry();
 
 		// Reaching is re-asserted each frame by the AI; clear it so it lapses
 		// when the AI stops asking.
 		bReaching = false;
+	}
+
+	// Reads the ACTUAL bone world positions after the AnimGraph applied our
+	// rotations, so we can "see" where the right arm physically points: the
+	// hand's offset from the shoulder, in the player's local frame.
+	//   fwd  = +X (in front of chest), up = +Z, side = +Y (right)
+	private void LogArmGeometry()
+	{
+		if (Mesh == nullptr) return;
+		FVector Shoulder = Mesh.GetBoneTransform(n"upperarm_r").Location;
+		FVector Hand     = Mesh.GetBoneTransform(n"hand_r").Location;
+		FVector Off      = Hand - Shoulder;                 // world-space arm vector
+
+		// Express in the player's own frame so values are intuitive.
+		FVector Local = GetActorTransform().InverseTransformVector(Off);
+		FString Tag = bAxisProbe ? ("PROBE " + ProbeAxisLabel) : ("type=" + int(CurrentHit));
+		Log("ARM " + Tag
+			+ " | hand vs shoulder  fwd=" + int(Local.X)
+			+ " side=" + int(Local.Y)
+			+ " up=" + int(Local.Z)
+			+ "  (sent Pitch=" + int(Anim.ArmRotR.Pitch)
+			+ " Yaw=" + int(Anim.ArmRotR.Yaw)
+			+ " Roll=" + int(Anim.ArmRotR.Roll) + ")");
 	}
 
 	private float CurrentPose = 0.0f;   // smoothed arm-pose weight
@@ -357,38 +378,56 @@ class AVolleyballPlayer : APawn
 
 	// Compute target arm rotations for the current hit type, scaled by the swing
 	// envelope. The Anim BP feeds ArmRotR/ArmRotL straight into Modify Bone.
-	// Rotator is (Pitch, Yaw, Roll).
+	//
+	// Axis mapping on Manny's upperarm bones (Component Space, from probe data):
+	//   Pitch+90  => arm swings forward (fwd+30), barely lifts (up≈0)
+	//   Yaw+90    => arm swings inward across chest (side-30), slight lift
+	//   Roll-90   => arm lifts straight up (up+30), forward component negative
+	//   Roll+90   => arm drops straight down (up-30)
+	//
+	// Bump: arms forward + slightly down  => Pitch+70, Roll+20
+	// Set:  arms straight up overhead     => Roll-90 (both)
+	// Spike: right arm up then drives fwd => Roll-90 at reach, Pitch+90 at swing peak
+	//        left arm balance             => Roll-50
 	private void UpdateArmPose(float Swing)
 	{
-		// Neutral when not hitting
-		float PitchR = 0; float YawR = 0; float PitchL = 0; float YawL = 0;
+		float RollR = 0; float PitchR = 0; float YawR = 0;
+		float RollL = 0; float PitchL = 0; float YawL = 0;
 
 		if (CurrentHit == EHitType::Hit_Bump)
 		{
-			// Bagger/dig: both arms swing forward and together low in front.
-			// Pitch 90 = arms straight out forward (clear, readable bump).
-			PitchR = 90.0f;  YawR = -20.0f;
-			PitchL = 90.0f;  YawL =  20.0f;
+			// Bagger/dig: arms forward-down in front, wrists together.
+			// Pitch pushes arm forward; small Roll+ tips it slightly downward.
+			PitchR = 70.0f;  YawR = -15.0f; RollR =  20.0f;
+			PitchL = 70.0f;  YawL =  15.0f; RollL = -20.0f;
 		}
 		else if (CurrentHit == EHitType::Hit_Set)
 		{
-			// Handpass/set: both arms up overhead (same axis as the spike that
-			// we confirmed reads clearly at ~180).
-			PitchR = 175.0f; YawR = -20.0f;
-			PitchL = 175.0f; YawL =  20.0f;
+			// Handpass/set: both arms up overhead, elbows bent outward.
+			// Roll-90 lifts arm straight up; Yaw opens elbows out.
+			RollR = -90.0f; YawR = -20.0f;
+			RollL =  90.0f; YawL =  20.0f;
 		}
 		else if (CurrentHit == EHitType::Hit_Spike)
 		{
-			// Spike: right arm whips from high overhead down — drive purely by
-			// swing so it reads as a strike (up at start of swing, down at peak)
-			PitchR = 180.0f;
-			// left arm lifts for balance
-			PitchL = 120.0f; YawL = 20.0f;
+			// Spike: right arm cocks up (Roll-90) while Swing is low, then
+			// drives forward (Pitch+80) as Swing peaks. Apply Swing directly
+			// per component so the transition is smooth.
+			Anim.ArmRotR = FRotator(
+				 80.0f * Swing,           // Pitch: drives arm forward at peak
+				-10.0f * Swing,           // Yaw: slight inward at peak
+				-90.0f * (1.0f - Swing)); // Roll: arm raised at start, neutral at peak
+			// Left arm lifts for balance
+			Anim.ArmRotL = FRotator(0.0f, 20.0f * Swing, 50.0f * Swing);
+			return;
 		}
 
-		Anim.ArmRotR = FRotator(PitchR * Swing, YawR * Swing, 0.0f);
-		Anim.ArmRotL = FRotator(PitchL * Swing, YawL * Swing, 0.0f);
+		Anim.ArmRotR = FRotator(PitchR * Swing, YawR * Swing, RollR * Swing);
+		Anim.ArmRotL = FRotator(PitchL * Swing, YawL * Swing, RollL * Swing);
 	}
+
+	bool bAxisProbe = false;
+	private FString ProbeAxisLabel = "";
 
 	// --- Physical ball contact ---------------------------------------------
 	// The ball calls these. The player no longer teleports the ball's velocity;
