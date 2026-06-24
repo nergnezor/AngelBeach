@@ -160,7 +160,11 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		PlayerB2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(150, 100, 90), FRotator::ZeroRotator));
 		if (PlayerB2 != nullptr)
+		{
 			PlayerB2.Setup(ETeam::Team_B, EPlayerRole::Role_Front, 0.80f, Ball, SandFX, Court, this);
+			PlayerB2.bDebugAI = true;
+			PlayerB2.bDebugHit = true;
+		}
 
 		// Wire up teammates so AI can coordinate. HumanPawn is now an AAIPlayer,
 		// so it pairs with PlayerA2 just like the Team B duo.

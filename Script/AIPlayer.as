@@ -153,28 +153,37 @@ class AAIPlayer : AVolleyballPlayer
 		if (Touches == 0) DoDig();
 		else              DoSet();
 
-		// Start reaching the arms out as soon as the ball is getting close, so
-		// the gesture is a held, deliberate motion — not a one-frame twitch.
+		// Stand so the BALL passes within arm's reach, not at the far-off ground
+		// landing spot. While the ball is still high/far, move toward the predicted
+		// landing so we get there in time; once it's low enough to play, track the
+		// ball's actual horizontal position so the platform meets it.
+		bool bBallPlayable = Ball.Position.Z < 260.0f;
+		FVector Aimpoint = bBallPlayable
+			? FVector(Ball.Position.X, Ball.Position.Y, 0)
+			: FVector(Landing.X, Landing.Y, 0);
+		FVector Goal = ClampToCourt(Aimpoint);
+		float DistToGoal = (GetActorLocation() - Goal).Size2D();
+
+		// Keep closing until the ball is genuinely within reach. Only plant (stop)
+		// once we're close enough that the hand can actually touch the ball.
+		if (DistToGoal > PlantRadius)
+			MoveToward2D(Goal, DeltaTime);
+		else
+			MovePlayer(FVector2D::ZeroVector);
+
+		// Reach only when the ball is actually within arm range — reaching from 2.5m
+		// away just flails at empty air. Face the ball so the platform meets it.
 		float BallDist = (GetActorLocation() - Ball.Position).Size();
 		if (BallDist < ReachDistance)
 		{
 			FaceBall();
 			Reach(Intend);
 		}
-
-		// Move to stand under the predicted landing spot.
-		FVector Goal = ClampToCourt(Landing);
-		float DistToGoal = (GetActorLocation() - Goal).Size2D();
-
-		// Once we're basically there, STOP and plant — don't run through the ball.
-		if (DistToGoal > PlantRadius)
-			MoveToward2D(Goal, DeltaTime);
-		else
-			MovePlayer(FVector2D::ZeroVector);
 	}
 
-	// Start extending the arms when the ball is within this distance (cm).
-	const float ReachDistance = 250.0f;
+	// Start extending the arms only when the ball is within true arm range (cm).
+	// Body-to-ball under ~120 means the hand (arm ~95cm) can plausibly reach it.
+	const float ReachDistance = 120.0f;
 
 	// How close (cm) we must be to the landing spot before we plant and reach.
 	const float PlantRadius = 60.0f;
