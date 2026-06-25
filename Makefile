@@ -20,6 +20,10 @@
 #
 #   make all         # deps -> engine -> project   (does NOT touch swap)
 #
+# Android:
+#   make package-android   # package APK into PackagedBuilds/Android
+#   make android           # alias for package-android
+#
 # Override any variable, e.g.:
 #   make engine ENGINE_BRANCH=master JOBS=8
 # =============================================================================
@@ -27,15 +31,12 @@
 # --- Configuration -----------------------------------------------------------
 ENGINE_DIR    ?= $(HOME)/UnrealEngine-Angelscript
 ENGINE_REPO   ?= git@github.com:Hazelight/UnrealEngine-Angelscript.git
-# Branch of the engine fork. `angelscript-master` is the default branch and
-# tracks the latest supported UE version.
 ENGINE_BRANCH ?= angelscript-master
 
 PROJECT_NAME  := BeachVolleyball
 PROJECT_DIR   := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 UPROJECT      := $(PROJECT_DIR)/$(PROJECT_NAME).uproject
 
-# Leave 2 cores free so the box stays usable while building.
 JOBS          ?= $(shell n=$$(nproc); echo $$((n>2 ? n-2 : 1)))
 
 UE_EDITOR     := $(ENGINE_DIR)/Engine/Binaries/Linux/UnrealEditor
@@ -48,16 +49,25 @@ OUTPUT_DIR    ?= $(PROJECT_DIR)/PackagedBuilds
 SWAPFILE      ?= /swapfile.ue
 SWAPSIZE      ?= 32G
 
+# Android overrides if needed. Defaults point at a no-sudo home install:
+#   SDK installed via cmdline-tools into ~/Android/Sdk (NDK 27.2 / android-34 /
+#   build-tools 35.0.1 / cmake 3.22.1 — the versions UE 5.7 expects), and a
+#   portable Temurin JDK 17 in ~/jdk17 (UE Android tooling requires JDK 17, not
+#   the system's newer JDK). Override on the command line if your layout differs.
+ANDROID_HOME      ?= $(HOME)/Android/Sdk
+ANDROID_NDK_HOME  ?= $(HOME)/Android/Sdk/ndk/27.2.12479018
+JAVA_HOME         ?= $(HOME)/jdk17
+
 # --- Meta --------------------------------------------------------------------
 .DEFAULT_GOAL := help
-.PHONY: help deps swap engine tools project genproject run package-linux package-android package-web clean-project distclean check
+.PHONY: help deps swap engine tools project genproject run package-linux package-android android clean-project distclean check all
 
 help: ## Show this help
 	@echo "Beach Volleyball — UE5 + AngelScript"
 	@echo
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo
 	@echo "Engine dir : $(ENGINE_DIR)"
 	@echo "Engine repo: $(ENGINE_REPO) ($(ENGINE_BRANCH))"
@@ -65,6 +75,8 @@ help: ## Show this help
 	@echo "Build jobs : $(JOBS)"
 
 all: deps engine project ## deps + engine + project (skips swap)
+
+android: package-android ## Alias for package-android
 
 # --- System dependencies -----------------------------------------------------
 deps: ## Install apt build dependencies (sudo)
@@ -78,7 +90,7 @@ deps: ## Install apt build dependencies (sudo)
 		python3 curl ca-certificates
 	@echo ">> deps OK."
 
-# --- Optional swap (you have 14G RAM; UE linking can OOM) ---------------------
+# --- Optional swap -----------------------------------------------------------
 swap: ## Create a $(SWAPSIZE) swapfile at $(SWAPFILE) (sudo, optional)
 	@if swapon --show | grep -q "$(SWAPFILE)"; then \
 		echo ">> swap already active at $(SWAPFILE)"; \
@@ -114,8 +126,7 @@ engine: ## Clone + build the AngelScript UE fork (~100GB, hours)
 	@$(MAKE) tools
 	@echo ">> Engine build complete: $(UE_EDITOR)"
 
-# --- Engine helper programs (required for rendering / lighting / imports) -----
-# Built one at a time: UBT refuses to build multiple targets concurrently.
+# --- Engine helper programs --------------------------------------------------
 tools: ## Build ShaderCompileWorker + Lightmass + InterchangeWorker
 	@echo ">> Building helper programs (ShaderCompileWorker is required to render)..."
 	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) ShaderCompileWorker
@@ -123,13 +134,23 @@ tools: ## Build ShaderCompileWorker + Lightmass + InterchangeWorker
 	cd "$(ENGINE_DIR)" && $(MAKE) -j$(JOBS) InterchangeWorker
 	@echo ">> Helper programs built."
 
-# --- Project: compile the game's C++ module ----------------------------------
+# --- Guard -------------------------------------------------------------------
+check:
+	@test -x "$(UE_EDITOR)" || { \
+		echo "ERROR: engine not built at $(UE_EDITOR)"; \
+		echo "       Run 'make engine' first."; exit 1; }
+	@test -f "$(UPROJECT)" || { \
+		echo "ERROR: project file not found: $(UPROJECT)"; \
+		exit 1; }
+
+# --- Project: compile --------------------------------------------------------
 project: check ## Compile this game's C++ module against the engine
 	@echo ">> Building $(PROJECT_NAME)Editor (Development|Linux)..."
 	"$(UE_BUILD)" $(PROJECT_NAME)Editor Linux Development \
 		-project="$(UPROJECT)" -progress
 	@echo ">> Project module built."
 
+# --- Package -----------------------------------------------------------------
 package-linux: check ## Package a Development build for Linux (output: $(OUTPUT_DIR)/Linux)
 	@mkdir -p "$(OUTPUT_DIR)/Linux"
 	"$(UE_UAT)" BuildCookRun \
@@ -142,7 +163,19 @@ package-linux: check ## Package a Development build for Linux (output: $(OUTPUT_
 	@echo ">> Linux package ready at $(OUTPUT_DIR)/Linux"
 
 package-android: check ## Package a Development APK for Android (output: $(OUTPUT_DIR)/Android)
+	@test -d "$(ANDROID_HOME)" || { \
+		echo "ERROR: ANDROID_HOME not found: $(ANDROID_HOME)"; \
+		exit 1; }
+	@test -d "$(ANDROID_NDK_HOME)" || { \
+		echo "ERROR: ANDROID_NDK_HOME not found: $(ANDROID_NDK_HOME)"; \
+		exit 1; }
 	@mkdir -p "$(OUTPUT_DIR)/Android"
+	ANDROID_HOME="$(ANDROID_HOME)" \
+	ANDROID_SDK_ROOT="$(ANDROID_HOME)" \
+	NDKROOT="$(ANDROID_NDK_HOME)" \
+	NDK_ROOT="$(ANDROID_NDK_HOME)" \
+	ANDROID_NDK_ROOT="$(ANDROID_NDK_HOME)" \
+	JAVA_HOME="$(JAVA_HOME)" \
 	"$(UE_UAT)" BuildCookRun \
 		-project="$(UPROJECT)" \
 		-noP4 \
@@ -168,10 +201,10 @@ package-web: check ## Package for HTML5/WebGL (output: $(OUTPUT_DIR)/Web) — re
 		-archivedirectory="$(OUTPUT_DIR)/Web"
 	@echo ">> Web package ready at $(OUTPUT_DIR)/Web/HTML5"
 
+# --- Run ---------------------------------------------------------------------
 genproject: check ## (Optional) generate IDE project files for this project
 	"$(UE_GENPROJ)" -project="$(UPROJECT)" -game -engine
 
-# --- Run ---------------------------------------------------------------------
 run: check ## Launch the editor on this project
 	@echo ">> Launching UnrealEditor on $(PROJECT_NAME)..."
 	"$(UE_EDITOR)" "$(UPROJECT)"
@@ -187,9 +220,3 @@ distclean: clean-project ## Also remove the entire engine checkout (DANGER)
 	@printf "   Type 'yes' to confirm: " && read ans && [ "$$ans" = "yes" ] \
 		&& rm -rf "$(ENGINE_DIR)" && echo ">> engine removed." \
 		|| echo ">> aborted."
-
-# --- Guard -------------------------------------------------------------------
-check:
-	@test -x "$(UE_EDITOR)" || { \
-		echo "ERROR: engine not built at $(UE_EDITOR)"; \
-		echo "       Run 'make engine' first."; exit 1; }
