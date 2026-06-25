@@ -4,8 +4,8 @@ class ABeachVolleyballCamera : AActor
 	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
 
-	// Fixed camera position: behind Team A's end (X = -1100), centered Y, 3m up
-	FVector CamPos = FVector(-1100, 0, 300);
+	// Fixed camera position: behind Team A's end (X = -1100), centered Y, 6m up
+	FVector CamPos = FVector(-1100, 0, 600);
 
 	// What the camera looks at — smoothly tracks ball height
 	FVector CurrentLookAt = FVector(0, 0, 150);
