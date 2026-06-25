@@ -10,9 +10,9 @@ class ABall : AActor
 	FVector Position = FVector(0, 0, 300);
 
 	const float Gravity = -980.0f;       // cm/s²
-	const float BallRadius = 10.5f;      // regulation ~21cm diameter
+	const float BallRadius = 10.66f;     // Mikasa VLS300 / FIVB: 66-68cm circumference (~67cm -> d 21.3cm)
 	const float Restitution = 0.75f;     // bounce coefficient
-	const float AirDrag = 0.0035f;       // per-frame drag
+	const float AirDrag = 0.02f;         // drag per second (see StepPhysics scaling)
 	const float FloorZ = 5.0f;           // floor collision height
 
 	// Net geometry (set by Court)
@@ -53,6 +53,25 @@ class ABall : AActor
 	void BeginPlay()
 	{
 		BuildSphereMesh();
+
+		// Glowing yellow ball: drive the material colour with an HDR (>1) yellow so
+		// it reads as self-lit and blooms, and attach a yellow point light so it
+		// actually casts a warm glow on the court.
+		UMaterialInterface BallMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (BallMat != nullptr)
+		{
+			UMaterialInstanceDynamic MID = MeshComp.CreateDynamicMaterialInstance(0, BallMat);
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Color", FLinearColor(2.5f, 2.1f, 0.3f, 1.0f)); // HDR yellow, glows
+		}
+
+		UPointLightComponent Glow = UPointLightComponent::Create(this);
+		Glow.AttachToComponent(MeshComp);
+		Glow.SetLightColor(FLinearColor(1.0f, 0.85f, 0.2f));
+		Glow.SetIntensity(1500.0f);
+		Glow.SetAttenuationRadius(350.0f);
+		Glow.SetCastShadows(false);
 	}
 
 	UFUNCTION(BlueprintOverride)
@@ -62,7 +81,32 @@ class ABall : AActor
 			return;
 		StepPhysics(DeltaTime);
 		SetActorLocation(Position);
+		UpdateSpin(DeltaTime);
 	}
+
+	// Roll the ball in its travel direction so the spin is visible. A ball moving
+	// forward spins about the horizontal axis perpendicular to its velocity, at
+	// angular speed v / radius. Purely visual (markings on the ball reveal it).
+	// Uses AddActorLocalRotation each frame so spin accumulates without quaternion
+	// math: pitch is "rolling forward" in the actor's local frame, and the actor's
+	// yaw is aligned to the travel direction so the roll axis stays correct.
+	private void UpdateSpin(float Dt)
+	{
+		FVector Flat = FVector(BallVel.X, BallVel.Y, 0);
+		float FlatSpeed = Flat.Size();
+		if (FlatSpeed < 5.0f) return;
+
+		// Point the ball's local +X along travel (flat), then roll about local Y
+		// (pitch) to make the surface move in the travel direction.
+		float Yaw = Flat.Rotation().Yaw;
+		float DegPerSec = (BallVel.Size() / (2.0f * PI * BallRadius)) * 360.0f;
+		SpinAngle += DegPerSec * Dt;
+		if (SpinAngle > 360.0f) SpinAngle -= 360.0f;
+
+		SetActorRotation(FRotator(SpinAngle, Yaw, 0.0f));
+	}
+
+	private float SpinAngle = 0.0f;
 
 	UFUNCTION()
 	void OnRestartTimer()
@@ -83,10 +127,12 @@ class ABall : AActor
 		// Apply gravity
 		BallVel.Z += Gravity * Dt;
 
-		// Air drag
+		// Air drag — AirDrag is a per-second fraction, scaled by Dt so it's
+		// frame-rate independent. (It used to be applied per frame, ~0.21/s at
+		// 60fps, which braked serves so hard they fell short of the net.)
 		float Speed = BallVel.Size();
 		if (Speed > 0.1f)
-			BallVel -= BallVel.GetSafeNormal() * Speed * AirDrag;
+			BallVel -= BallVel.GetSafeNormal() * Speed * AirDrag * Dt;
 
 		// Integrate position
 		Position += BallVel * Dt;
@@ -169,6 +215,7 @@ class ABall : AActor
 		{
 			if (Position.Z < NetTopZ + BallRadius)
 			{
+				// Hit the net.
 				BallVel.X = -BallVel.X * 0.3f;
 				Position.X = (Position.X < NetX)
 					? NetX - NetHalfThickness - BallRadius
@@ -176,6 +223,12 @@ class ABall : AActor
 
 				if (GM != nullptr)
 					GM.OnBallHitNet();
+			}
+			else
+			{
+				// Cleared the net cleanly — tell the GM (a serve is now good).
+				if (GM != nullptr)
+					GM.OnBallCrossedNet();
 			}
 		}
 	}

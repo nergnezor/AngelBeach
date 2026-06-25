@@ -44,22 +44,32 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void SetupWorld()
 	{
+		// Sun: high enough to actually light the court from above (pitch -25), warm
+		// and bright. Atmosphere Sun Light so SkyAtmosphere draws a sun disc we can
+		// flare. Yaw faces the camera side so the sun sits in view for the flare.
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-8, -55, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-25, -90, 0)));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
 				SunActor.GetComponentByClass(UDirectionalLightComponent));
 			if (LC != nullptr)
 			{
-				LC.SetIntensity(6.0f);
-				LC.SetLightColor(FLinearColor(1.0f, 0.667f, 0.41f));
+				LC.SetIntensity(8.0f);                                 // bright, lights the court
+				LC.SetLightColor(FLinearColor(1.0f, 0.7f, 0.45f));    // warm sun
 				LC.CastShadows = true;
+				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 			}
 		}
 
+		// SkyAtmosphere gives a real sun disc (for the lens flare) and a horizon
+		// glow; our gradient dome sits behind it for the colour.
 		SpawnActor(ASkyAtmosphere, FVector::ZeroVector, FRotator::ZeroRotator);
 
+		// Surrounding environment: gradient sunset sky dome + water beyond the sand.
+		SpawnActor(AEnvironment, FVector::ZeroVector, FRotator::ZeroRotator);
+
+		// SkyLight captures the sky for soft ambient fill so the court isn't black.
 		ASkyLight SkyLightActor = Cast<ASkyLight>(
 			SpawnActor(ASkyLight, FVector(0, 0, 500), FRotator::ZeroRotator));
 		if (SkyLightActor != nullptr)
@@ -69,9 +79,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 			if (SLC != nullptr)
 			{
 				SLC.SetRealTimeCapture(true);
-				SLC.SetIntensity(1.2f);
+				SLC.SetIntensity(2.0f);
 			}
 		}
+
+		// (Single directional light only — a second one triggers UE's "competing
+		// directional lights" warning. The bright SkyLight fills the shadows.)
 
 		AExponentialHeightFog FogActor = Cast<AExponentialHeightFog>(
 			SpawnActor(AExponentialHeightFog, FVector(0, 0, 100), FRotator::ZeroRotator));
@@ -81,14 +94,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 				FogActor.GetComponentByClass(UExponentialHeightFogComponent));
 			if (FC != nullptr)
 			{
-				FC.SetFogDensity(0.012f);
-				FC.SetFogHeightFalloff(0.2f);
-				FC.SetFogInscatteringColor(FLinearColor(0.85f, 0.55f, 0.35f));
-				FC.SetVolumetricFog(true);
-				FC.SetVolumetricFogScatteringDistribution(0.85f);
-				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.6f, 0.3f));
-				FC.SetDirectionalInscatteringExponent(16.0f);
-				FC.SetDirectionalInscatteringStartDistance(100.0f);
+				// Thin, distant haze only — NOT a thick coloured band over the court.
+				// The previous dense volumetric fog read as smoke, not a sunset.
+				FC.SetFogDensity(0.002f);
+				FC.SetFogHeightFalloff(0.5f);
+				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
+				FC.SetVolumetricFog(false);
+				FC.SetStartDistance(1500.0f);   // no fog up close; only far away
+				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.55f, 0.25f));
+				FC.SetDirectionalInscatteringExponent(8.0f);
 			}
 		}
 
@@ -100,11 +114,22 @@ class ABeachVolleyballGameMode : AGameModeBase
 			PPV.Priority = 1.0f;
 			FPostProcessSettings PP = PPV.Settings;
 			PP.bOverride_BloomIntensity = true;
-			PP.BloomIntensity = 0.85f;
+			PP.BloomIntensity = 0.8f;
 			PP.bOverride_BloomThreshold = true;
-			PP.BloomThreshold = 1.1f;
+			PP.BloomThreshold = 1.0f;
+			// Brighter exposure window so the COURT is lit, not crushed black to
+			// compensate for the bright sky. Bias up and raise the max.
 			PP.bOverride_AutoExposureBias = true;
 			PP.AutoExposureBias = 1.0f;
+			PP.bOverride_AutoExposureMinBrightness = true;
+			PP.AutoExposureMinBrightness = 0.5f;
+			PP.bOverride_AutoExposureMaxBrightness = true;
+			PP.AutoExposureMaxBrightness = 3.0f;
+			// Lens flare on the bright sun disc.
+			PP.bOverride_LensFlareIntensity = true;
+			PP.LensFlareIntensity = 1.0f;
+			PP.bOverride_LensFlareBokehSize = true;
+			PP.LensFlareBokehSize = 3.0f;
 			PP.bOverride_VignetteIntensity = true;
 			PP.VignetteIntensity = 0.35f;
 			PPV.Settings = PP;
@@ -189,11 +214,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 		ScheduleServe();
 	}
 
+	// Pause after a dead ball (point won / ball down) before the next serve, so
+	// players can reset and the rally has a clear beat.
+	float ServeDelay = 5.0f;
+
 	private void ScheduleServe()
 	{
 		if (Ball == nullptr) return;
 		Ball.bInPlay = false;
-		System::SetTimer(this, n"ServeBall", 0.1f, bLooping = false);
+		System::SetTimer(this, n"ServeBall", ServeDelay, bLooping = false);
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -205,19 +234,38 @@ class ABeachVolleyballGameMode : AGameModeBase
 		FVector ServeOrigin;
 		FVector ServeVel;
 
+		// Serve must clearly clear the 243cm net ~5-8m away. Launch high and with
+		// enough horizontal speed: from X=±800 the ball travels ~8m to land deep in
+		// the opponent court. Strong forward + strong upward arc.
 		if (GS.ServingTeam == ETeam::Team_A)
 		{
-			ServeOrigin = FVector(-500, 0, 250);
-			ServeVel = FVector(400, Math::RandRange(-150.0f, 150.0f), 300);
+			ServeOrigin = FVector(-800, 0, 250);
+			ServeVel = FVector(850, Math::RandRange(-120.0f, 120.0f), 600);
 		}
 		else
 		{
-			ServeOrigin = FVector(500, 0, 250);
-			ServeVel = FVector(-400, Math::RandRange(-150.0f, 150.0f), 300);
+			ServeOrigin = FVector(800, 0, 250);
+			ServeVel = FVector(-850, Math::RandRange(-120.0f, 120.0f), 600);
 		}
 
 		Ball.Launch(ServeOrigin, ServeVel);
 		GS.StartRally();
+
+		// Track the serve until it clears the net. A serve must go directly over —
+		// if it hits the net or lands without crossing, it's a service fault.
+		bServePhase = true;
+		ServingTeamThisServe = GS.ServingTeam;
+	}
+
+	// True from serve launch until the serve has crossed the net (or faulted).
+	private bool bServePhase = false;
+	private ETeam ServingTeamThisServe = ETeam::Team_None;
+
+	// Called by the ball when it crosses the net plane, so we know the serve was good.
+	UFUNCTION(BlueprintCallable)
+	void OnBallCrossedNet()
+	{
+		bServePhase = false;
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -228,7 +276,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 		if (GS.GamePhase != EGamePhase::Phase_Rally) return;
 
 		ETeam ScoringTeam;
-		if (HitPos.X < 0)
+		if (bServePhase)
+		{
+			// Ball landed while still a serve = it never cleared the net = fault.
+			// Point to the receiving team regardless of which side it landed on.
+			bServePhase = false;
+			ScoringTeam = (ServingTeamThisServe == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+		}
+		else if (HitPos.X < 0)
 			ScoringTeam = ETeam::Team_B;
 		else
 			ScoringTeam = ETeam::Team_A;
@@ -247,7 +302,18 @@ class ABeachVolleyballGameMode : AGameModeBase
 	}
 
 	UFUNCTION(BlueprintCallable)
-	void OnBallHitNet() { }
+	void OnBallHitNet()
+	{
+		// A serve that hits the net is a service fault — point to the receiving team.
+		if (!bServePhase) return;
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr || GS.GamePhase != EGamePhase::Phase_Rally) return;
+
+		bServePhase = false;
+		ETeam Receiver = (ServingTeamThisServe == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+		GS.AddPoint(Receiver);
+		ScheduleServe();
+	}
 
 	UFUNCTION(BlueprintCallable)
 	void OnTouchViolation(ETeam FaultingTeam)
