@@ -17,6 +17,7 @@ enum EHitType
 	Hit_Bump,   // bagger / dig — forearm pass, arms low together
 	Hit_Set,    // handpass — overhead two-hand set
 	Hit_Spike,  // attack — overhead one-arm swing
+	Hit_Block,  // block — both hands up at the net, reaching over toward the ball
 }
 
 // Data carrier between gameplay code and the Animation Blueprint. Holds no
@@ -62,6 +63,12 @@ class UVolleyballAnimInstance : UAnimInstance
 	// Lower body: hip height offset (negative = crouch) and dive hand plant.
 	UPROPERTY(BlueprintReadWrite) float    CrouchAmount = 0.0f;  // 0..1, drives knee bend
 	UPROPERTY(BlueprintReadWrite) bool     bDiving = false;      // play dive montage
+
+	// Head look-at: a WORLD-space point the head should turn toward (the ball), fed
+	// into a "Look At" skeletal-control node on the head bone in the Anim BP. Always
+	// active (LookAlpha) so players keep their eyes on the ball.
+	UPROPERTY(BlueprintReadWrite) FVector  LookTarget = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) float    LookAlpha = 0.0f;     // 0..1 look-at weight
 }
 
 class AVolleyballPlayer : APawn
@@ -80,6 +87,13 @@ class AVolleyballPlayer : APawn
 	bool bIsGrounded = true;
 	float FloorZ = 0.0f;
 	float PlayerHeight = 90.0f;
+
+	// Single source of truth for body facing. AI/look code sets a desired facing
+	// direction (flat); UpdatePlayer smoothly turns the actor toward it ONCE per
+	// frame. This avoids multiple SetActorRotation callers fighting each other,
+	// which caused jerky spinning (especially around jumps).
+	FVector FacingDir = FVector(1, 0, 0);
+	bool bHasFacing = false;
 
 	ETeam TeamSide = ETeam::Team_A;
 	bool bCanHit = true;
@@ -250,15 +264,23 @@ class AVolleyballPlayer : APawn
 		// motion regardless of AI role. The AI's Reach() can still override type.
 		AutoReachForBall();
 
-		// Face the direction of travel so the locomotion animation reads correctly
+		// SINGLE rotation authority. Prefer the AI's desired facing (e.g. toward the
+		// ball); otherwise face the travel direction so locomotion reads correctly.
+		// Always a smooth lerp — never a snap — so the body never jerks.
 		float HSpeed2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
-		if (HSpeed2 > 30.0f)
+		FVector Want = FVector::ZeroVector;
+		if (bHasFacing && FacingDir.SizeSquared() > 0.01f)
+			Want = FVector(FacingDir.X, FacingDir.Y, 0);
+		else if (HSpeed2 > 30.0f)
+			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+
+		if (Want.SizeSquared() > 0.01f)
 		{
-			FRotator Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Rotation();
 			FRotator Cur = GetActorRotation();
-			float Alpha = Math::Clamp(10.0f * DeltaTime, 0.0f, 1.0f);
-			SetActorRotation(Math::LerpShortestPath(Cur, Want, Alpha));
+			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
+			SetActorRotation(Math::LerpShortestPath(Cur, Want.Rotation(), Alpha));
 		}
+		bHasFacing = false;   // AI must re-assert each frame; lapses otherwise
 
 		UpdateAnimation(DeltaTime, HSpeed2);
 	}
@@ -296,6 +318,22 @@ class AVolleyballPlayer : APawn
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
+
+		// Head tracks the ball: always look at it while it's in play, so every
+		// player keeps their eyes on the ball. The Anim BP drives a Look At node on
+		// the head bone toward LookTarget with weight LookAlpha.
+		{
+			ABall LB = GetWorldBall();
+			if (LB != nullptr && LB.bInPlay)
+			{
+				Anim.LookTarget = LB.Position;
+				Anim.LookAlpha  = 1.0f;
+			}
+			else
+			{
+				Anim.LookAlpha  = 0.0f;   // no ball to watch — relax to neutral
+			}
+		}
 
 		// Two phases:
 		//  - REACHING: while waiting for the ball, hold the arms extended toward
@@ -587,6 +625,29 @@ class AVolleyballPlayer : APawn
 			PalmR = (AimFlat * 0.5f + Up * (1.0f - Blend) - Up * 0.3f * Blend).GetSafeNormal().Rotation();
 			Crouch = 0.0f;
 		}
+		else if (CurrentHit == EHitType::Hit_Block)
+		{
+			// Block: both hands reach UP and toward the ball, as high/close as the
+			// arms allow, angled so the palms face DOWN into the middle of the
+			// opponent's court (DesiredAim) — that's where we want to deflect a spike.
+			// Hands press together (penetrate the net) rather than spread wide.
+			FVector ToBall = BallContact - ChestMid;
+			float ArmUp = 95.0f;                         // near-full vertical reach
+			FVector Up95 = ToBall;
+			if (Up95.Size() > ArmUp) Up95 = Up95.GetSafeNormal() * ArmUp;
+			FVector BlockMid = ChestMid + Up95;          // both hands converge here, high
+			ContactR = BlockMid + Right * 9.0f;          // hands close together
+			ContactL = BlockMid - Right * 9.0f;
+			// Elbows high and slightly forward so the arms form a firm wall.
+			PoleR = ContactR + Fwd * 25.0f - Up * 5.0f;
+			PoleL = ContactL + Fwd * 25.0f - Up * 5.0f;
+			// Palms face down-and-toward the aim (middle of opponent court) to push
+			// the blocked ball back down into their court.
+			FVector PalmDir = (AimFlat * 0.6f - Up).GetSafeNormal();
+			PalmR = PalmDir.Rotation();
+			PalmL = PalmDir.Rotation();
+			Crouch = 0.0f;
+		}
 		else
 		{
 			ContactR = ReadyR; ContactL = ReadyL;
@@ -597,7 +658,7 @@ class AVolleyballPlayer : APawn
 		// its own Cheek->Strike motion into ContactR/L via Blend, so it should NOT be
 		// re-lerped from the ready pose (that would start the hand at the hip instead
 		// of cocked at the cheek). Other hits ease from ready as usual.
-		if (CurrentHit == EHitType::Hit_Spike)
+		if (CurrentHit == EHitType::Hit_Spike || CurrentHit == EHitType::Hit_Block)
 		{
 			Anim.HandTargetR = ContactR;
 			Anim.HandTargetL = ContactL;
@@ -764,9 +825,17 @@ class AVolleyballPlayer : APawn
 	UFUNCTION(BlueprintCallable)
 	void MovePlayer(FVector2D Input)
 	{
-		PlayerVelocity.X = Input.X * MoveSpeed;
-		PlayerVelocity.Y = Input.Y * MoveSpeed;
+		// In the air we have almost no horizontal control — a jump (block/spike) is
+		// essentially vertical. This stops players drifting/swimming around mid-jump,
+		// which looked unnatural and made blocks/spikes miss. Keep a small amount of
+		// steering so they aren't completely locked.
+		float Control = bIsGrounded ? 1.0f : AirControl;
+		PlayerVelocity.X = Input.X * MoveSpeed * Control;
+		PlayerVelocity.Y = Input.Y * MoveSpeed * Control;
 	}
+
+	// Fraction of horizontal move speed available while airborne (0 = none).
+	float AirControl = 0.15f;
 
 	UFUNCTION(BlueprintCallable)
 	void Jump()

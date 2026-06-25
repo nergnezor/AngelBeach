@@ -74,13 +74,12 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	protected void UpdateAI(float DeltaTime)
 	{
-		// Ball is on the opponent's side: hold defensive ready position and clear
-		// our touch-ownership so the next receive starts fresh.
+		// Ball is on the opponent's side: play DEFENSE and clear our touch-ownership
+		// so the next receive starts fresh.
 		if (!IsBallComingToMySide())
 		{
 			bIMadeLastTouch = false;
-			if (bDebugAI) Log(DebugTag() + " DEFEND ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
-			MoveToward2D(DefendPos(), DeltaTime);
+			PlayDefense(DeltaTime);
 			return;
 		}
 
@@ -192,16 +191,19 @@ class AAIPlayer : AVolleyballPlayer
 		// points at the ball and the IK platform meets it.
 		FaceBall();
 
-		// Reach when the ball is within arm range (body ~ within reach + a margin so
-		// the gesture is already extended as the ball arrives).
+		// Prepare the swing EARLY: start reaching/winding up well before the ball
+		// arrives so the gesture (especially the spike's cock->strike) is fully
+		// built up at contact instead of a last-frame snap. The IK eases the pose
+		// in smoothly and actual contact is governed by hand-to-ball distance, so
+		// reaching early has no downside — only a more readable, prepared motion.
 		float BallDist = (GetActorLocation() - Ball.Position).Size();
-		if (BallDist < ReachDistance)
+		if (BallDist < PrepareDistance)
 			Reach(Intend);
 	}
 
-	// Start extending the arms only when the ball is within true arm range (cm).
-	// Body-to-ball under ~120 means the hand (arm ~95cm) can plausibly reach it.
-	const float ReachDistance = 120.0f;
+	// Distance at which we START preparing the swing/arms. Generous so the wind-up
+	// has time to develop before the ball gets here.
+	const float PrepareDistance = 280.0f;
 
 	// How close (cm) we must be to the landing spot before we plant and reach.
 	const float PlantRadius = 60.0f;
@@ -243,10 +245,16 @@ class AAIPlayer : AVolleyballPlayer
 
 	private void FaceBall()
 	{
+		// Request facing via the single rotation authority (UpdatePlayer lerps to it)
+		// rather than snapping the rotation here — snapping fought the travel-facing
+		// and caused jerky spinning, especially mid-jump.
 		FVector To = Ball.Position - GetActorLocation();
 		To.Z = 0;
 		if (To.SizeSquared() > 1.0f)
-			SetActorRotation(To.Rotation());
+		{
+			FacingDir = To.GetSafeNormal();
+			bHasFacing = true;
+		}
 	}
 
 	// ---------------------------------------------------------------
@@ -264,9 +272,9 @@ class AAIPlayer : AVolleyballPlayer
 
 		if (Touches == 1)
 		{
-			// Our receive is up; I set next. Get to the setter zone (off the net,
-			// centred) where DoDig aimed the ball.
-			Target = FVector(Sign * 300.0f, 0.0f, FloorZ + PlayerHeight);
+			// Our receive is up; I set next. Go to the SAME setter zone the receive
+			// was aimed at (central, off the net) so I'm under the ball to set.
+			Target = SetterZone();
 		}
 		else if (Touches == 2)
 		{
@@ -278,7 +286,50 @@ class AAIPlayer : AVolleyballPlayer
 			Target = SupportPos(Landing);
 		}
 
-		MoveToward2D(ClampToCourt(Target), DeltaTime);
+		// Always keep at least MinSeparation from my teammate so our team holds two
+		// distinct options: whoever gets the ball can attack into open space OR pass
+		// to the well-separated partner. Push my target away from the teammate along
+		// the line between us until we're far enough apart.
+		Target = SpreadFromTeammate(Target);
+
+		// Take the spot and HOLD it (no constant shuffling), facing the play.
+		MoveToHold(ClampToCourt(Target), DeltaTime);
+		FaceAttacker();
+	}
+
+	// Turn to face whichever teammate/opponent is about to attack (or the ball), so
+	// we're oriented into the play while standing still.
+	private void FaceAttacker()
+	{
+		// Same single-authority facing request (smooth lerp in UpdatePlayer).
+		FVector Look = Ball.Position - GetActorLocation();
+		Look.Z = 0;
+		if (Look.SizeSquared() > 1.0f)
+		{
+			FacingDir = Look.GetSafeNormal();
+			bHasFacing = true;
+		}
+	}
+
+	// Minimum desired distance between teammates: about half the court width, so an
+	// attacker always has a spike option AND a clearly separated pass option.
+	const float MinSeparation = 450.0f;   // ~half of the 900cm-wide court
+
+	// Nudge a desired position away from my teammate so we end up at least
+	// MinSeparation apart. Keeps the original spot when we're already spread.
+	private FVector SpreadFromTeammate(FVector Desired) const
+	{
+		if (Teammate == nullptr) return Desired;
+		FVector Mate = Teammate.GetActorLocation();
+		FVector Away = FVector(Desired.X - Mate.X, Desired.Y - Mate.Y, 0);
+		float Dist = Away.Size2D();
+		if (Dist >= MinSeparation) return Desired;          // already far enough
+
+		// Too close: move out to MinSeparation along the away direction. If we're
+		// almost on top of each other, push along Y (down the court) by default.
+		FVector Dir = (Dist > 1.0f) ? Away.GetSafeNormal2D() : FVector(0, 1, 0);
+		FVector Spread = Mate + Dir * MinSeparation;
+		return FVector(Spread.X, Spread.Y, Desired.Z);
 	}
 
 	// ---------------------------------------------------------------
@@ -298,9 +349,10 @@ class AAIPlayer : AVolleyballPlayer
 		if (bIsGrounded && Horiz < 130.0f && BallZ > SpikeMinZ && Ball.BallVel.Z < 120.0f)
 			Jump();
 
-		// When close, aim the spike and hold the swinging arm up so the hand is
-		// in place to strike. The ball bounces off the hand/forearm on contact.
-		if (Horiz < 130.0f)
+		// Prepare the spike EARLY: as soon as we're approaching (and the ball is up),
+		// start winding up — face the ball, aim, and cock the arm — so the swing is
+		// loaded by the time we strike instead of snapping at the last moment.
+		if (Horiz < PrepareDistance && BallZ > 150.0f)
 		{
 			FaceBall();
 			DoSpike();
@@ -312,14 +364,22 @@ class AAIPlayer : AVolleyballPlayer
 	// Contacts — the ball now physically bounces off the player. These set the
 	// AIM target so OnBallContact (on the base player) knows where to send it.
 	// ---------------------------------------------------------------
+	// The shared setter target: where a receive lands and where the setter goes.
+	// Central in Y (0) so the second-ball attack can go either direction, and a bit
+	// off the net (so the set has room) — a high, central, attackable second ball.
+	private FVector SetterZone() const
+	{
+		return FVector(MySign() * SetterZoneX, 0.0f, FloorZ + PlayerHeight);
+	}
+	const float SetterZoneX = 280.0f;
+
 	private void DoDig()
 	{
-		// Receive: pop the ball UP and toward the setter zone (a bit off the net on
-		// our side, centred) with a high arc so the teammate has time to get under
-		// it for the set. High + central = a playable second ball, the whole point
-		// of a three-touch rally.
-		float Sign = MySign();
-		AimAt(FVector(Sign * 300.0f, 0.0f, 420.0f));
+		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone with a high
+		// arc, so the teammate has time to get under it and can then attack to either
+		// side. Aiming through the centre (Y=0) is what makes the 2nd-ball attack easy.
+		FVector Zone = SetterZone();
+		AimAt(FVector(Zone.X, Zone.Y, 420.0f));
 	}
 
 	private void DoSet()
@@ -383,16 +443,135 @@ class AAIPlayer : AVolleyballPlayer
 		}
 	}
 
-	// Defensive ready position while the ball is on the other side. Hold a
-	// stable spot (each player covers half the court in Y) rather than chasing
-	// the ball's Y every frame — that was causing constant side-to-side running.
-	private FVector DefendPos() const
+	// ---------------------------------------------------------------
+	// Defense: the ball is on the opponent's side. Two defenders split the court
+	// (one covers each Y half) UNLESS it's a clear jump-spike threat at the net —
+	// then the front player blocks at the net and the back player covers the line
+	// behind the block.
+	// ---------------------------------------------------------------
+	private void PlayDefense(float DeltaTime)
 	{
-		float Sign = MySign();
-		float X = (Role == EPlayerRole::Role_Front) ? Sign * 220.0f : Sign * 640.0f;
-		// Front covers one Y half, back the other, for simple court coverage.
-		float Y = (Role == EPlayerRole::Role_Front) ? -150.0f : 150.0f;
-		return FVector(X, Y, FloorZ + PlayerHeight);
+		FVector Goal;
+		AAIPlayer Attacker = FindAttackingOpponent();
+		// Default assumption: the opponent WILL spike, so we commit to the block.
+		// We only drop OFF the block once their pass/set turns out to be poor (too
+		// far off the net or too low to attack) — then there's nothing to block and
+		// we fall back into court defense.
+		bool bAttackable = IsPassAttackable();
+
+		if (Role == EPlayerRole::Role_Front && bAttackable)
+		{
+			// COMMIT TO BLOCK: get to the net in line with the ball, then jump and
+			// throw the hands up. We position to the BALL's Y (where the spike comes
+			// from), aim the block toward the middle of the opponent's court, and —
+			// crucially — once airborne we STOP repositioning so we don't drift in
+			// the air; the IK reaches the hands to the ball.
+			float NetX = MySign() * 55.0f;   // right up at the net on our side
+			float BlockY = Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f);
+			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
+
+			// Aim the block at the middle of the opponent's court so a stuffed ball
+			// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
+			AimAt(FVector(-MySign() * 300.0f, 0.0f, FloorZ));
+
+			if (bIsGrounded)
+			{
+				// On the ground: move into position, then jump when the strike is near.
+				float Horiz = (GetActorLocation() - FVector(Goal.X, Goal.Y, 0)).Size2D();
+				if (Horiz < 90.0f && Ball.Position.Z > SpikeMinZ && Ball.BallVel.Z < 150.0f)
+					Jump();
+				MoveToward2D(Goal, DeltaTime);
+			}
+			else
+			{
+				// Airborne: hold still (no drift) and throw up the block.
+				MovePlayer(FVector2D::ZeroVector);
+			}
+			Reach(EHitType::Hit_Block);
+			if (bDebugAI) Log(DebugTag() + " DEFEND BLOCK ballZ=" + int(Ball.Position.Z) + " air=" + !bIsGrounded);
+			return;
+		}
+		else if (Role == EPlayerRole::Role_Back && bAttackable)
+		{
+			// Back defender covers deep behind the block, toward the open court the
+			// blocker isn't taking away.
+			float DeepX = MySign() * 600.0f;
+			float CoverY = (Attacker != nullptr)
+				? Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f, CourtMinY + 80.0f, CourtMaxY - 80.0f)
+				: 0.0f;
+			Goal = FVector(DeepX, CoverY, FloorZ + PlayerHeight);
+		}
+		else
+		{
+			// Pass was poor / no attack coming — drop off the block and split the
+			// court so each defender owns a Y half at a FIXED defensive spot. No
+			// per-frame leaning toward the ball: that caused constant shuffling.
+			// Stand still on your half and react only when the ball comes over.
+			float Depth = (Role == EPlayerRole::Role_Front) ? MySign() * 250.0f : MySign() * 560.0f;
+			float HalfCenter = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
+			Goal = FVector(Depth, HalfCenter, FloorZ + PlayerHeight);
+		}
+
+		if (bDebugAI) Log(DebugTag() + " DEFEND " + (bAttackable ? "BLOCK/COVER" : "SPLIT")
+			+ " ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
+		// Take the defensive spot and HOLD it, facing the play.
+		MoveToHold(ClampToCourt(Goal), DeltaTime);
+		FaceAttacker();
+	}
+
+	// Find the opponent who is about to hit — the one closest to the ball on the
+	// other side of the net.
+	private AAIPlayer FindAttackingOpponent() const
+	{
+		TArray<AActor> Players;
+		GetAllActorsOfClass(AVolleyballPlayer, Players);
+		AAIPlayer Best = nullptr;
+		float BestDist = 99999.0f;
+		for (AActor A : Players)
+		{
+			AAIPlayer P = Cast<AAIPlayer>(A);
+			if (P == nullptr || P.TeamSide == TeamSide) continue;   // only opponents
+			float D = (P.GetActorLocation() - Ball.Position).Size();
+			if (D < BestDist) { BestDist = D; Best = P; }
+		}
+		return Best;
+	}
+
+	// Remembered block/drop decision, with HYSTERESIS so it doesn't flip every frame
+	// (which made players run back and forth). Once committed to the block we hold it
+	// until the pass is CLEARLY un-attackable; once dropped we don't re-commit until
+	// the ball is CLEARLY attackable again. The two thresholds don't overlap.
+	private bool bCommittedToBlock = false;
+
+	private bool IsPassAttackable()
+	{
+		float BallOffNet = Math::Abs(Ball.Position.X);
+		float BallZ = Ball.Position.Z;
+		bool bOpponentSide = (TeamSide == ETeam::Team_A) ? Ball.Position.X > -50.0f
+		                                                 : Ball.Position.X <  50.0f;
+
+		if (!bOpponentSide)
+		{
+			bCommittedToBlock = false;
+			return false;
+		}
+
+		if (bCommittedToBlock)
+		{
+			// Stay on the block until the pass is clearly bad: well off the net OR
+			// dropped low. Wide margins so small ball motion doesn't drop the block.
+			if (BallOffNet > 420.0f || BallZ < 110.0f)
+				bCommittedToBlock = false;
+		}
+		else
+		{
+			// Commit to the block only when the ball is clearly a real attack setup:
+			// near the net and high. Tighter than the drop thresholds (hysteresis gap).
+			if (BallOffNet < 300.0f && BallZ > 170.0f)
+				bCommittedToBlock = true;
+		}
+
+		return bCommittedToBlock;
 	}
 
 	// ---------------------------------------------------------------
@@ -467,6 +646,32 @@ class AAIPlayer : AVolleyballPlayer
 			MovePlayer(FVector2D(Dir.GetSafeNormal2D().X, Dir.GetSafeNormal2D().Y));
 		else
 			MovePlayer(FVector2D::ZeroVector);
+	}
+
+	// Positional "hold": move to the target, but once we arrive STAY PUT until the
+	// target drifts well away. This kills the constant micro-shuffling during
+	// defense/support — you take your spot, face up, and stand still. Hysteresis:
+	// start moving only past StartMoving, stop as soon as within Arrived.
+	private bool bHolding = false;
+	private void MoveToHold(FVector Target, float Dt)
+	{
+		const float StartMoving = 110.0f;   // must drift this far before we re-chase
+		const float Arrived     = 35.0f;    // close enough — plant and hold
+		float D = (Target - GetActorLocation()).Size2D();
+
+		if (bHolding)
+		{
+			if (D > StartMoving) bHolding = false;   // target moved a lot; reposition
+		}
+		else
+		{
+			if (D <= Arrived) bHolding = true;        // arrived; lock in place
+		}
+
+		if (bHolding)
+			MovePlayer(FVector2D::ZeroVector);        // stand still
+		else
+			MoveToward2D(Target, Dt);
 	}
 
 	// ---------------------------------------------------------------
