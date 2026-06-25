@@ -561,15 +561,30 @@ class AVolleyballPlayer : APawn
 		}
 		else if (CurrentHit == EHitType::Hit_Spike)
 		{
-			// Spike: right hand cocks high, then swings through the BALL down-forward
-			// along the aim. Left hand lifts for balance.
-			FVector HighR = Head + Up * 45.0f + Fwd * 5.0f - Right * 18.0f; // cocked overhead
-			FVector StrikeR = BallContact;                                   // strike the ball
-			ContactR = HighR + (StrikeR - HighR) * Blend;
-			ContactL = ShL + Up * 30.0f + Fwd * 10.0f;
-			PoleR = ContactR + Up * 30.0f - Fwd * 20.0f;
-			PoleL = ContactL - Up * 20.0f + Right * 20.0f;
-			PalmR = FVector(AimFlat.X, AimFlat.Y, -0.4f).GetSafeNormal().Rotation();
+			// Spike, in two phases driven by Blend (0 = cock, 1 = strike):
+			//  - LEFT arm aims at the ball throughout (points/tracks it before the hit).
+			//  - RIGHT hand starts cocked just OUTSIDE the right cheek, then swings
+			//    forward/up to strike with a near-straight arm ABOVE and slightly in
+			//    FRONT of the right shoulder.
+			// Left arm: extend toward the ball (clamped to arm reach), tracking it.
+			FVector ToBallL = (BallContact - ShL);
+			float ReachL = 95.0f;
+			if (ToBallL.Size() > ReachL) ToBallL = ToBallL.GetSafeNormal() * ReachL;
+			ContactL = ShL + ToBallL;
+			PoleL = ShL + ToBallL * 0.4f - Up * 15.0f;   // elbow softly under the aim line
+			PalmL = ToBallL.GetSafeNormal().Rotation();
+
+			// Right hand cocked outside the right cheek (head height, out to the right,
+			// slightly back), then driving to a strike point above + in front of the
+			// right shoulder, reaching toward the ball's height.
+			FVector Cheek  = Head + Right * 22.0f + Up * 2.0f - Fwd * 8.0f;   // outside right cheek
+			float StrikeUp = Math::Max(35.0f, BallContact.Z - ShR.Z);         // reach up to ball
+			FVector Strike = ShR + Up * StrikeUp + Fwd * 22.0f + Right * 6.0f; // above & front of R shoulder
+			ContactR = Cheek + (Strike - Cheek) * Blend;
+			// Elbow stays high and back early, leading the hand on the swing.
+			PoleR = ContactR + Up * 25.0f - Fwd * 30.0f + Right * 10.0f;
+			// Palm faces the aim/down as it comes over the top.
+			PalmR = (AimFlat * 0.5f + Up * (1.0f - Blend) - Up * 0.3f * Blend).GetSafeNormal().Rotation();
 			Crouch = 0.0f;
 		}
 		else
@@ -578,9 +593,20 @@ class AVolleyballPlayer : APawn
 			PoleR = ShR - Up * 40.0f; PoleL = ShL - Up * 40.0f;
 		}
 
-		// Ease from ready to the contact pose by the gesture weight.
-		Anim.HandTargetR = ReadyR + (ContactR - ReadyR) * Blend;
-		Anim.HandTargetL = ReadyL + (ContactL - ReadyL) * Blend;
+		// Ease from ready to the contact pose by the gesture weight. The spike builds
+		// its own Cheek->Strike motion into ContactR/L via Blend, so it should NOT be
+		// re-lerped from the ready pose (that would start the hand at the hip instead
+		// of cocked at the cheek). Other hits ease from ready as usual.
+		if (CurrentHit == EHitType::Hit_Spike)
+		{
+			Anim.HandTargetR = ContactR;
+			Anim.HandTargetL = ContactL;
+		}
+		else
+		{
+			Anim.HandTargetR = ReadyR + (ContactR - ReadyR) * Blend;
+			Anim.HandTargetL = ReadyL + (ContactL - ReadyL) * Blend;
+		}
 		Anim.ElbowPoleR  = PoleR;
 		Anim.ElbowPoleL  = PoleL;
 		Anim.HandRotR    = PalmR;

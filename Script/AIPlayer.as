@@ -146,10 +146,11 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// Decide our intended contact type. A fingerpass (set) is only legal if we
-		// can get UNDER the ball with our forehead in time: we must be close to its
-		// horizontal position AND the ball must be at/above forehead height. If not,
-		// we're late/low — play it with a bagger (forearm pass) instead.
+		// Decide our intended contact type. A fingerpass (set) is legal only if we
+		// can get UNDER the ball with our forehead in time. We judge this against the
+		// spot where the ball will be at forehead height (where we're heading) and
+		// whether we can plausibly reach that spot before the ball arrives — not the
+		// ball's current position, which is still mid-flight when we decide.
 		EHitType Intend;
 		if (Touches == 0)
 		{
@@ -158,10 +159,14 @@ class AAIPlayer : AVolleyballPlayer
 		else
 		{
 			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			float HorizToBall = (GetActorLocation() - FVector(Ball.Position.X, Ball.Position.Y, 0)).Size2D();
-			bool bUnderBall = HorizToBall < UnderBallRadius;
-			bool bHighEnough = Ball.Position.Z > ForeheadZ;
-			Intend = (bUnderBall && bHighEnough) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			// Where the ball will be when it drops to forehead height.
+			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
+			float DistToSetSpot = (GetActorLocation() - FVector(SetSpot.X, SetSpot.Y, 0)).Size2D();
+			// Will the ball actually descend to forehead height (i.e. is it high
+			// enough to set), and can we get under that spot in time?
+			bool bBallSettable = SetSpot.Z >= ForeheadZ - 20.0f;
+			bool bCanGetUnder = DistToSetSpot < UnderBallRadius;
+			Intend = (bBallSettable && bCanGetUnder) ? EHitType::Hit_Set : EHitType::Hit_Bump;
 		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
@@ -245,11 +250,35 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// ---------------------------------------------------------------
-	// I am NOT contacting this touch — get to the right support spot
+	// I am NOT contacting this touch — get to the right support spot.
+	// Crucially, anticipate MY upcoming touch in the three-touch rhythm:
+	//  - after our receive (1 touch), I'll be the setter -> go to the setter zone
+	//  - after our set (2 touches), I'll be the attacker -> go to the net to spike
+	// so I'm already in position when the ball comes to me.
 	// ---------------------------------------------------------------
 	private void PlaySupport(FVector Landing, float DeltaTime)
 	{
-		MoveToward2D(SupportPos(Landing), DeltaTime);
+		int Touches = TeamTouches();
+		float Sign = MySign();
+		FVector Target;
+
+		if (Touches == 1)
+		{
+			// Our receive is up; I set next. Get to the setter zone (off the net,
+			// centred) where DoDig aimed the ball.
+			Target = FVector(Sign * 300.0f, 0.0f, FloorZ + PlayerHeight);
+		}
+		else if (Touches == 2)
+		{
+			// Our set is up; I attack. Get to the net under the set so I can spike.
+			Target = FVector(Sign * 150.0f, Landing.Y, FloorZ + PlayerHeight);
+		}
+		else
+		{
+			Target = SupportPos(Landing);
+		}
+
+		MoveToward2D(ClampToCourt(Target), DeltaTime);
 	}
 
 	// ---------------------------------------------------------------
@@ -285,19 +314,23 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	private void DoDig()
 	{
-		// Aim the bump up toward where the setter wants it (near our net, center)
+		// Receive: pop the ball UP and toward the setter zone (a bit off the net on
+		// our side, centred) with a high arc so the teammate has time to get under
+		// it for the set. High + central = a playable second ball, the whole point
+		// of a three-touch rally.
 		float Sign = MySign();
-		AimAt(FVector(Sign * 180.0f, 0.0f, 260.0f));
+		AimAt(FVector(Sign * 300.0f, 0.0f, 420.0f));
 	}
 
 	private void DoSet()
 	{
-		// Aim a high arc to the attacker's position at the net
+		// Set: high arc to the attacker near the net so they can approach and spike.
+		// Aim where the attacker WILL be (their net position), high enough to hit.
 		float Sign = MySign();
 		FVector AttackSpot = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
-			? Teammate.GetActorLocation()
-			: FVector(Sign * 150.0f, Ball.Position.Y * 0.4f, FloorZ + PlayerHeight);
-		AimAt(AttackSpot + FVector(Sign * 20.0f, 0, 320.0f));
+			? FVector(Sign * 120.0f, Teammate.GetActorLocation().Y, FloorZ + PlayerHeight)
+			: FVector(Sign * 120.0f, Ball.Position.Y * 0.4f, FloorZ + PlayerHeight);
+		AimAt(AttackSpot + FVector(0, 0, 380.0f));
 	}
 
 	private void DoSpike()
