@@ -242,11 +242,15 @@ class AAIPlayer : AVolleyballPlayer
 	const float PrepareDistance = 280.0f;
 
 	// How close (cm) we must be to the landing spot before we plant and reach.
-	const float PlantRadius = 60.0f;
+	// Tight so we actually arrive UNDER the ball rather than stopping short — the
+	// main reason passes were poor was planting half a metre off the contact spot.
+	const float PlantRadius = 40.0f;
 
 	// How close (horizontally, cm) we must be under the ball to use a fingerpass
-	// (set). Beyond this we're not under it in time and must bagger instead.
-	const float UnderBallRadius = 70.0f;
+	// (set). Beyond this we're not under it in time and must bagger instead. Widened
+	// so that whenever we've actually run under a high ball we fingerpass it (better
+	// height/control) instead of defaulting to a flat bagger.
+	const float UnderBallRadius = 100.0f;
 
 	// The world Z at which we want to meet the ball — roughly chest height, where a
 	// bagger platform contacts it.
@@ -308,9 +312,19 @@ class AAIPlayer : AVolleyballPlayer
 
 		if (Touches == 1)
 		{
-			// Our receive is up; I set next. Go to the SAME setter zone the receive
-			// was aimed at (central, off the net) so I'm under the ball to set.
-			Target = SetterZone();
+			// Our receive is up; I set next. Get UNDER where the ball will actually
+			// drop to forehead height as early as possible — not just the nominal
+			// setter zone — so I'm planted under it in time to play a clean, high
+			// fingerpass instead of arriving late and scrambling a bagger. Fall back
+			// to the setter zone only before the receive has been hit (no useful
+			// prediction yet).
+			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
+			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
+			bool bUsefulPredict = SetSpot.Z >= ForeheadZ - 20.0f
+				&& (TeamSide == ETeam::Team_A ? SetSpot.X <= 0.0f : SetSpot.X >= 0.0f);
+			Target = bUsefulPredict
+				? FVector(SetSpot.X, SetSpot.Y, FloorZ + PlayerHeight)
+				: SetterZone();
 		}
 		else if (Touches == 2)
 		{
@@ -320,6 +334,17 @@ class AAIPlayer : AVolleyballPlayer
 		else
 		{
 			Target = SupportPos(Landing);
+		}
+
+		// The setter (Touches==1) is tracking a moving target — the spot the ball is
+		// dropping to — so chase it directly and arrive under it early. Holding with
+		// hysteresis there would leave us planted a half-metre off the descending ball.
+		// Support/cover roles still HOLD their spot to avoid constant shuffling.
+		if (Touches == 1)
+		{
+			MoveToward2D(ClampToCourt(Target), DeltaTime);
+			FaceBall();
+			return;
 		}
 
 		// Always keep at least MinSeparation from my teammate so our team holds two
@@ -411,22 +436,31 @@ class AAIPlayer : AVolleyballPlayer
 
 	private void DoDig()
 	{
-		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone with a high
-		// arc, so the teammate has time to get under it and can then attack to either
-		// side. Aiming through the centre (Y=0) is what makes the 2nd-ball attack easy.
+		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone with a HIGH
+		// arc — high enough that the setter has time to run under it and play a proper
+		// fingerpass instead of a scramble bagger. Aiming through the centre (Y=0) is
+		// what makes the 2nd-ball attack easy either direction.
 		FVector Zone = SetterZone();
-		AimAt(FVector(Zone.X, Zone.Y, 420.0f));
+		AimAt(FVector(Zone.X, Zone.Y, 520.0f));
 	}
 
 	private void DoSet()
 	{
-		// Set: high arc to the attacker near the net so they can approach and spike.
-		// Aim where the attacker WILL be (their net position), high enough to hit.
+		// Set: a HIGH, safe arc that the attacker can comfortably get under and swing
+		// on. Two things make a good set here:
+		//  - place it OFF the net (~250cm in from the net, not glued to it) so the
+		//    attacker has room to approach and isn't crammed against the tape, and
+		//  - send it HIGH (peak well above the net) so they have time to arrive, plant,
+		//    jump and meet it at the top — a low fast set is what made attacks fail.
 		float Sign = MySign();
-		FVector AttackSpot = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
-			? FVector(Sign * 120.0f, Teammate.GetActorLocation().Y, FloorZ + PlayerHeight)
-			: FVector(Sign * 120.0f, Ball.Position.Y * 0.4f, FloorZ + PlayerHeight);
-		AimAt(AttackSpot + FVector(0, 0, 380.0f));
+		float SetX = Sign * 250.0f;   // off the net, room to attack (was 120 = glued to net)
+		float SetY = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
+			? Teammate.GetActorLocation().Y
+			: Ball.Position.Y * 0.4f;
+		FVector AttackSpot = FVector(SetX, SetY, FloorZ + PlayerHeight);
+		// High arc: ~3m of peak above the attack spot so the ball floats up and the
+		// hitter has time. AimAt sets the target the ball is launched toward.
+		AimAt(AttackSpot + FVector(0, 0, 520.0f));
 	}
 
 	private void DoSpike()

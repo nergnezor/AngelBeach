@@ -44,29 +44,33 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void SetupWorld()
 	{
-		// Sun: high enough to actually light the court from above (pitch -25), warm
-		// and bright. Atmosphere Sun Light so SkyAtmosphere draws a sun disc we can
-		// flare. Yaw faces the camera side so the sun sits in view for the flare.
+		// Sun: low on the horizon for a sunset. A low pitch makes SkyAtmosphere paint
+		// a warm horizon glow easing to blue overhead (the natural sunset gradient),
+		// instead of a flat blue daytime sky. The camera sits at -X looking toward +X,
+		// so the sun travels toward -X (yaw 180) to put its disc on the far horizon
+		// in front of the camera — that's what the lens flare catches.
+		//   pitch -6  = just above the horizon (sunset, not midday)
+		//   yaw  180  = light travels -X, sun disc appears toward +X (far court end)
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-25, -90, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-6, 180, 0)));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
 				SunActor.GetComponentByClass(UDirectionalLightComponent));
 			if (LC != nullptr)
 			{
-				LC.SetIntensity(8.0f);                                 // bright, lights the court
-				LC.SetLightColor(FLinearColor(1.0f, 0.7f, 0.45f));    // warm sun
+				LC.SetIntensity(6.0f);                                 // bright enough; atmosphere adds glow
+				LC.SetLightColor(FLinearColor(1.0f, 0.6f, 0.35f));    // warm low sun
 				LC.CastShadows = true;
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 			}
 		}
 
-		// SkyAtmosphere gives a real sun disc (for the lens flare) and a horizon
-		// glow; our gradient dome sits behind it for the colour.
+		// SkyAtmosphere owns the sky: real sun disc (for the lens flare) plus the
+		// sunset horizon-glow-to-blue gradient driven by the low sun above.
 		SpawnActor(ASkyAtmosphere, FVector::ZeroVector, FRotator::ZeroRotator);
 
-		// Surrounding environment: gradient sunset sky dome + water beyond the sand.
+		// Surrounding environment: water plane beyond the sand (sky is the atmosphere).
 		SpawnActor(AEnvironment, FVector::ZeroVector, FRotator::ZeroRotator);
 
 		// SkyLight captures the sky for soft ambient fill so the court isn't black.
