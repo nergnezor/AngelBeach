@@ -16,7 +16,12 @@ jobs:
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
       # Android SDK/NDK paths — set these as repository variables or override below.
       ANDROID_HOME: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
+      ANDROID_SDK_ROOT: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
       ANDROID_NDK_HOME: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
+      # UBT locates the NDK via NDKROOT / NDK_ROOT (not ANDROID_NDK_HOME).
+      NDKROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
+      NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
+      ANDROID_NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
 
     steps:
