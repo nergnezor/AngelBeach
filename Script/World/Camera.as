@@ -4,11 +4,12 @@ class ABeachVolleyballCamera : AActor
 	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
 
-	// Fixed camera position: behind Team A's end (X = -1100), centered Y, 6m up
-	FVector CamPos = FVector(-1100, 0, 600);
+	// Fixed camera: behind Team A's baseline, lower so it looks more along the court
+	// (less empty sky), angled gently down.
+	FVector CamPos = FVector(-1050, 0, 420);
 
-	// What the camera looks at — smoothly tracks ball height
-	FVector CurrentLookAt = FVector(0, 0, 150);
+	// Look at the court centre, low.
+	FVector CurrentLookAt = FVector(0, 0, 80);
 
 	float FollowSpeed = 4.0f;
 
@@ -32,10 +33,11 @@ class ABeachVolleyballCamera : AActor
 	{
 		if (Ball == nullptr) FindBall();
 
-		// Target look-at: court center XY, ball height when high
-		FVector Target = FVector(0, 0, 150);
+		// Look at court centre; follow the ball's height only gently and clamp it so
+		// the camera never tilts up into empty sky on high balls.
+		FVector Target = FVector(0, 0, 120);
 		if (Ball != nullptr && Ball.bInPlay)
-			Target.Z = Math::Max(150.0f, Ball.Position.Z * 0.8f);
+			Target.Z = Math::Clamp(120.0f + Ball.Position.Z * 0.25f, 120.0f, 300.0f);
 
 		// Smooth tilt toward target
 		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);

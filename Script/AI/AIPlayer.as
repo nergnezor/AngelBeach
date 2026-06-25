@@ -59,13 +59,49 @@ class AAIPlayer : AVolleyballPlayer
 	{
 		UpdatePlayer(DeltaTime);
 		if (Ball == nullptr) FindBall();
-		if (Ball == nullptr || !Ball.bInPlay) return;
+
+		// Dead ball (between points / before serve): walk to my ready position so
+		// the next rally starts from a proper formation instead of wherever the
+		// last rally left everyone standing.
+		if (Ball == nullptr || !Ball.bInPlay)
+		{
+			MoveToHold(ReadyPosition(), DeltaTime);
+			return;
+		}
 
 		ReactionTimer += DeltaTime;
 		if (ReactionTimer < ReactionDelay) return;
 		ReactionTimer = 0.0f;
 
 		UpdateAI(DeltaTime);
+	}
+
+	// Formation spot to occupy while the ball is dead, depending on whether our
+	// team is serving or receiving:
+	//  - RECEIVING team: both players spread across mid-court, one per Y half, ready
+	//    to dig the serve.
+	//  - SERVING team: the server (back) stands behind the baseline; the non-server
+	//    (front) waits up at the net.
+	// By convention the Back-role player is the server.
+	private FVector ReadyPosition() const
+	{
+		float Sign = MySign();
+		float Z = FloorZ + PlayerHeight;
+
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		bool bWeServe = (GS != nullptr && GS.ServingTeam == TeamSide);
+
+		if (bWeServe)
+		{
+			if (Role == EPlayerRole::Role_Back)
+				return FVector(Sign * 820.0f, 0.0f, Z);     // server behind the baseline
+			else
+				return FVector(Sign * 130.0f, 0.0f, Z);     // partner up at the net
+		}
+
+		// Receiving: spread to mid-court, one on each Y half.
+		float Y = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
+		return FVector(Sign * 450.0f, Y, Z);                 // mid-depth, half each
 	}
 
 	// ---------------------------------------------------------------
@@ -421,7 +457,7 @@ class AAIPlayer : AVolleyballPlayer
 		return FVector(TargetX, AimY, FloorZ + BallRadiusGuess());
 	}
 
-	private float BallRadiusGuess() const { return (Ball != nullptr) ? Ball.BallRadius : 10.5f; }
+	private float BallRadiusGuess() const { return (Ball != nullptr) ? Ball.BallRadius : 10.66f; }
 
 	// ---------------------------------------------------------------
 	// Positioning helpers
