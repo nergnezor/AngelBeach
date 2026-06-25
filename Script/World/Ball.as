@@ -63,12 +63,12 @@ class ABall : AActor
 		{
 			UMaterialInstanceDynamic MID = MeshComp.CreateDynamicMaterialInstance(0, BallMat);
 			if (MID != nullptr)
-				MID.SetVectorParameterValue(n"Color", FLinearColor(2.5f, 2.1f, 0.3f, 1.0f)); // HDR yellow, glows
+				MID.SetVectorParameterValue(n"Color", FLinearColor(2.4f, 2.3f, 0.25f, 1.0f)); // HDR yellow (R≈G), glows
 		}
 
 		UPointLightComponent Glow = UPointLightComponent::Create(this);
 		Glow.AttachToComponent(MeshComp);
-		Glow.SetLightColor(FLinearColor(1.0f, 0.85f, 0.2f));
+		Glow.SetLightColor(FLinearColor(1.0f, 0.95f, 0.3f));
 		Glow.SetIntensity(1500.0f);
 		Glow.SetAttenuationRadius(350.0f);
 		Glow.SetCastShadows(false);

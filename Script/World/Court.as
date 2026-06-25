@@ -223,39 +223,70 @@ class ACourt : AActor
 			NoUV, NoUV, NoUV, SandColors(), SandTan);
 	}
 
-	// Net: translucent glass-like plane, 80% transparent
+	// Net: a real volleyball net reads as a dark, see-through mesh band with a
+	// white top tape — NOT a solid coloured wall. The previous version used the
+	// engine debug material M_SimpleTranslucent, which ignores vertex colour and
+	// rendered as a solid red sheet. Here the net band sits just under the top
+	// (NetMeshTopZ..NetHeight is the white tape; the band hangs below it) and uses
+	// the unlit vertex-colour material so the colour + alpha actually apply.
 	private void BuildNet()
 	{
-		TArray<FVector> V;
-		TArray<int32> T;
-		TArray<FVector> N;
-		TArray<FVector2D> UV;
-		TArray<FLinearColor> C;
-		TArray<FProcMeshTangent> Tan;
-
 		float HW = CourtHalfWidth + 30.0f;
-		FLinearColor GlassColor = FLinearColor(0.85f, 0.92f, 1.0f, 0.2f); // light blue, 20% opaque
+		const float TapeHeight = 7.0f;                 // white top tape band (cm)
+		float BandTop = NetHeight - TapeHeight;        // mesh hangs below the tape
+		const float BandBottom = 100.0f;               // net mesh stops ~1m off the sand
 
+		// --- Section 0: net mesh band, dark + mostly transparent (you see through it)
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
+			FLinearColor MeshColor = FLinearColor(0.02f, 0.02f, 0.02f, 0.45f); // near-black, ~45% opaque
+
+			AddNetQuad(V, T, N, UV, C, MeshColor, BandBottom, BandTop, HW);
+			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+
+			UMaterialInterface NetMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+				"/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"));
+			if (NetMat != nullptr)
+			{
+				UMaterialInstanceDynamic MID = NetMesh.CreateDynamicMaterialInstance(0, NetMat);
+				if (MID != nullptr)
+					MID.SetVectorParameterValue(n"Color", MeshColor);
+			}
+		}
+
+		// --- Section 1: opaque white top tape — the classic visual cue for the net line
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
+			FLinearColor White = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
+
+			AddNetQuad(V, T, N, UV, C, White, BandTop, NetHeight, HW);
+			NetMesh.CreateMeshSection_LinearColor(1, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+
+			UMaterialInterface VCMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+				"/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
+			if (VCMat != nullptr)
+				NetMesh.SetMaterial(1, VCMat);
+		}
+	}
+
+	// Double-sided vertical quad in the net plane (X=0), spanning Z0..Z1 across the
+	// full width ±HW, with the given vertex colour.
+	private void AddNetQuad(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& N,
+		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
+		float Z0, float Z1, float HW)
+	{
 		// Front face
-		V.Add(FVector(-NetHalfThick, -HW, 0));   V.Add(FVector(-NetHalfThick,  HW, 0));
-		V.Add(FVector(-NetHalfThick,  HW, NetHeight)); V.Add(FVector(-NetHalfThick, -HW, NetHeight));
+		V.Add(FVector(-NetHalfThick, -HW, Z0)); V.Add(FVector(-NetHalfThick,  HW, Z0));
+		V.Add(FVector(-NetHalfThick,  HW, Z1)); V.Add(FVector(-NetHalfThick, -HW, Z1));
 		T.Add(0); T.Add(1); T.Add(2); T.Add(0); T.Add(2); T.Add(3);
-
 		// Back face
-		V.Add(FVector( NetHalfThick,  HW, 0));   V.Add(FVector( NetHalfThick, -HW, 0));
-		V.Add(FVector( NetHalfThick, -HW, NetHeight)); V.Add(FVector( NetHalfThick,  HW, NetHeight));
+		V.Add(FVector( NetHalfThick,  HW, Z0)); V.Add(FVector( NetHalfThick, -HW, Z0));
+		V.Add(FVector( NetHalfThick, -HW, Z1)); V.Add(FVector( NetHalfThick,  HW, Z1));
 		T.Add(4); T.Add(5); T.Add(6); T.Add(4); T.Add(6); T.Add(7);
 
-		for (int i = 0; i < 8; i++) { N.Add(FVector(1,0,0)); UV.Add(FVector2D(0,0)); C.Add(GlassColor); }
-
-		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
-
-		// Apply translucent material — M_SimpleTranslucent is opaque-enough for a glass look;
-		// the light blue vertex color tints it. If it fails to load the mesh still renders.
-		UMaterialInterface GlassMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/EngineDebugMaterials/M_SimpleTranslucent"));
-		if (GlassMat != nullptr)
-			NetMesh.SetMaterial(0, GlassMat);
+		for (int i = 0; i < 8; i++) { N.Add(FVector(1,0,0)); UV.Add(FVector2D(0,0)); C.Add(Col); }
 	}
 
 	// Court boundary lines and center line
