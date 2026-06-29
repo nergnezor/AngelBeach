@@ -107,7 +107,7 @@ class ABeachVolleyballHUD : AHUD
 
 		// Ball dot
 		TArray<AActor> Balls;
-		GetAllActorsOfClass(ABall::StaticClass(), Balls);
+		GetAllActorsOfClass(Balls);
 		if (Balls.Num() > 0)
 		{
 			ABall B = Cast<ABall>(Balls[0]);
@@ -121,7 +121,7 @@ class ABeachVolleyballHUD : AHUD
 
 		// Player dots
 		TArray<AActor> Players;
-		GetAllActorsOfClass(AVolleyballPlayer::StaticClass(), Players);
+		GetAllActorsOfClass(Players);
 		for (AActor PA : Players)
 		{
 			AVolleyballPlayer P = Cast<AVolleyballPlayer>(PA);
