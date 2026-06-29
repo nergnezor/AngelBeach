@@ -14,6 +14,8 @@ jobs:
       ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Linux
+      # Persistent DDC outside workspace — survives between runs
+      UE_DERIEDDATACACHE_ROOT: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}/Engine/DerivedDataCache
 
     steps:
       - name: Checkout
@@ -44,6 +46,8 @@ jobs:
             -platform=Linux \
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
+            -iterativecooking \
+            -ddc="$UE_DERIEDDATACACHE_ROOT" \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Upload artifact

@@ -23,6 +23,8 @@ jobs:
       NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
       ANDROID_NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
+      # Persistent DDC outside workspace — survives between runs
+      UE_DERIEDDATACACHE_ROOT: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}/Engine/DerivedDataCache
 
     steps:
       - name: Checkout
@@ -60,6 +62,8 @@ jobs:
             -cookflavor=Multi \
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
+            -iterativecooking \
+            -ddc="$UE_DERIEDDATACACHE_ROOT" \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Upload artifact
