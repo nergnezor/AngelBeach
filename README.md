@@ -71,6 +71,90 @@ Then press Play — the `GameMode` builds the court, players, ball, lighting and
 camera at runtime on the near-empty `CourtLevel` map. AngelScript hot-reloads,
 so edits to `Script/*.as` apply without restarting.
 
+## CI / Self-hosted runner
+
+Builds run on a self-hosted GitHub Actions runner (`linux,ue5,self-hosted`).
+
+### First-time runner registration
+
+```bash
+# 1. Download and extract the runner
+mkdir ~/actions-runner && cd ~/actions-runner
+curl -fsSL https://github.com/actions/runner/releases/latest/download/$(
+  curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
+  | grep -oP '"tag_name":\s*"v\K[^"]+' \
+  | sed 's/.*/actions-runner-linux-x64-&.tar.gz/'
+) -o runner.tar.gz
+tar xzf runner.tar.gz && rm runner.tar.gz
+
+# 2. Get a registration token (requires repo scope PAT or gh CLI)
+TOKEN=$(gh api -X POST repos/nergnezor/AngelBeach/actions/runners/registration-token --jq '.token')
+
+# 3. Configure
+./config.sh \
+  --url https://github.com/nergnezor/AngelBeach \
+  --token "$TOKEN" \
+  --name "$(hostname)" \
+  --labels "linux,ue5,self-hosted" \
+  --work "_work" \
+  --unattended
+
+# 4. Install as a systemd service (survives reboots)
+sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+### Runner environment (`~/actions-runner/.env`)
+
+The runner must have these variables set so that subprocesses (Gradle, UBT)
+inherit them regardless of which shell profile is loaded:
+
+```
+ANDROID_HOME=/home/erik/Android/Sdk
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+```
+
+After editing `.env`, restart the runner service:
+
+```bash
+sudo systemctl restart "actions.runner.*"
+# or if running manually:  kill <pid> && cd ~/actions-runner && ./run.sh
+```
+
+### Repository variables
+
+Set these under **Settings → Secrets and variables → Actions → Variables**:
+
+| Variable | Example value |
+|---|---|
+| `ENGINE_DIR` | `/home/erik/UnrealEngine-Angelscript` |
+| `ANDROID_HOME` | `/home/erik/Android/Sdk` |
+| `ANDROID_NDK_HOME` | `/home/erik/Android/Sdk/ndk/27.3.13750724` |
+| `JAVA_HOME` | `/usr/lib/jvm/java-17-openjdk-amd64` |
+
+Update `ANDROID_NDK_HOME` if you install a different NDK version:
+
+```bash
+ls ~/Android/Sdk/ndk/   # shows installed version(s)
+gh variable set ANDROID_NDK_HOME --body "/home/erik/Android/Sdk/ndk/<version>"
+```
+
+### Engine installation
+
+The engine must be built once on the runner machine before CI can package:
+
+```bash
+git clone --depth 1 --branch angelscript-master \
+  git@github.com:Hazelight/UnrealEngine-Angelscript.git \
+  ~/UnrealEngine-Angelscript
+cd ~/UnrealEngine-Angelscript
+./Setup.sh
+./GenerateProjectFiles.sh
+make -j$(( $(nproc) - 2 )) UnrealEditor   # takes 1–3 h
+```
+
+Requires your GitHub account to be linked to the EpicGames organisation
+(free: <https://www.unrealengine.com/en-US/ue-on-github>).
+
 ## Scoring Rules
 
 - Points awarded on: ball landing in bounds, touch violations (> 3 touches per side)
