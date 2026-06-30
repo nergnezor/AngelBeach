@@ -120,7 +120,7 @@ class ABeachVolleyballGameState : AGameStateBase
 
 	FString GetScoreString() const
 	{
-		return ScoreA + " : " + ScoreB;
+		return "" + ScoreA + " : " + ScoreB;
 	}
 
 	FString GetSetsString() const
