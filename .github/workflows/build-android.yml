@@ -55,6 +55,7 @@ jobs:
             -cookflavor=Multi \
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
+            -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Upload artifact

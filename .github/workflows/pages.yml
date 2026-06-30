@@ -56,6 +56,7 @@ jobs:
             -platform=HTML5 \
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
+            -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Generate site
