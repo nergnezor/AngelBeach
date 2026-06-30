@@ -41,6 +41,9 @@ RUNNER_LABELS="${RUNNER_LABELS:-linux,ue5}"
 ENGINE_BRANCH="${ENGINE_BRANCH:-angelscript-master}"
 ENGINE_REPO="${ENGINE_REPO:-git@github.com:Hazelight/UnrealEngine-Angelscript.git}"
 ANDROID_SDK_DIR="${ANDROID_SDK_DIR:-/opt/android-sdk}"
+# NDK version the engine requires (r27c). Must match the engine's
+# AndroidPlatformSDK, otherwise UnrealBuildTool rejects Android builds.
+ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:-27.2.12479018}"
 JOBS="${JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 
 SKIP_ENGINE="${SKIP_ENGINE:-0}"
@@ -142,22 +145,26 @@ else
        "$ANDROID_SDK_DIR/cmdline-tools/latest"
     rm "$TMP_ZIP"
 
-    log "Accepting licenses and installing SDK/NDK ..."
+    log "Accepting licenses and installing SDK/NDK (NDK $ANDROID_NDK_VERSION) ..."
     yes | "$CMDLINE_TOOLS" --licenses > /dev/null 2>&1 || true
     "$CMDLINE_TOOLS" \
         "platform-tools" \
         "platforms;android-34" \
         "build-tools;34.0.0" \
-        "ndk;25.1.8937393"
+        "ndk;$ANDROID_NDK_VERSION"
 
-    # Make env vars available to future runner sessions
+    # Make env vars available to future runner sessions. UnrealBuildTool reads
+    # the NDK from NDKROOT / ANDROID_NDK_ROOT (not ANDROID_NDK_HOME), so export all.
+    NDK_DIR="$ANDROID_SDK_DIR/ndk/$ANDROID_NDK_VERSION"
     {
         echo "export ANDROID_HOME=$ANDROID_SDK_DIR"
-        echo "export ANDROID_NDK_HOME=$ANDROID_SDK_DIR/ndk/25.1.8937393"
+        echo "export ANDROID_NDK_HOME=$NDK_DIR"
+        echo "export ANDROID_NDK_ROOT=$NDK_DIR"
+        echo "export NDKROOT=$NDK_DIR"
         echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
         echo "export PATH=\$ANDROID_HOME/platform-tools:\$PATH"
     } | sudo tee /etc/profile.d/android-sdk.sh > /dev/null
-    ok "Android SDK + NDK installed at $ANDROID_SDK_DIR"
+    ok "Android SDK + NDK $ANDROID_NDK_VERSION installed at $ANDROID_SDK_DIR"
 fi
 
 # ── 5. HTML5 community plugin ─────────────────────────────────────────────────

@@ -14,10 +14,13 @@ jobs:
       ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
-      # Android SDK/NDK paths — set these as repository variables or override below.
+      # Android SDK root — set as a repository variable or override below.
       ANDROID_HOME: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
-      ANDROID_NDK_HOME: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
+      # NDK version the engine requires. UnrealBuildTool rejects any other
+      # version with "Sdk: not found. Required version rXXx". Bump this if the
+      # engine's required NDK changes (see Engine AndroidPlatformSDK).
+      NDK_VERSION: "27.2.12479018"   # r27c
 
     steps:
       - name: Checkout
@@ -31,12 +34,34 @@ jobs:
           }
           echo "Engine OK: $ENGINE_DIR"
 
-      - name: Verify Android SDK/NDK
+      - name: Ensure engine-required Android NDK (r27c)
         run: |
           test -d "$ANDROID_HOME" || { echo "ERROR: ANDROID_HOME not found: $ANDROID_HOME"; exit 1; }
-          test -d "$ANDROID_NDK_HOME" || { echo "ERROR: ANDROID_NDK_HOME not found: $ANDROID_NDK_HOME"; exit 1; }
+
+          NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ ! -d "$NDK_DIR" ]; then
+            echo ">> NDK $NDK_VERSION not installed; installing via sdkmanager..."
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+            [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+            test -n "$SDKMANAGER" || {
+              echo "ERROR: sdkmanager not found under $ANDROID_HOME/cmdline-tools/latest/bin"
+              echo "       Install the Android command-line tools on the runner."
+              exit 1
+            }
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            "$SDKMANAGER" "ndk;$NDK_VERSION"
+          fi
+          test -d "$NDK_DIR" || { echo "ERROR: NDK still missing at $NDK_DIR"; exit 1; }
+
+          # UnrealBuildTool reads the NDK location from NDKROOT / ANDROID_NDK_ROOT
+          # (NOT ANDROID_NDK_HOME). Export all three for subsequent steps.
+          {
+            echo "ANDROID_NDK_HOME=$NDK_DIR"
+            echo "ANDROID_NDK_ROOT=$NDK_DIR"
+            echo "NDKROOT=$NDK_DIR"
+          } >> "$GITHUB_ENV"
           echo "Android SDK : $ANDROID_HOME"
-          echo "Android NDK : $ANDROID_NDK_HOME"
+          echo "Android NDK : $NDK_DIR"
 
       - name: Build C++ module (Android)
         run: |
