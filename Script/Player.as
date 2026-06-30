@@ -216,7 +216,7 @@ class AVolleyballPlayer : APawn
 			bool bValid = GS.RegisterTouch(TeamSide);
 			if (!bValid)
 			{
-				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
+				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(Gameplay::GetGameMode());
 				if (GM != nullptr)
 					GM.OnTouchViolation(TeamSide);
 			}

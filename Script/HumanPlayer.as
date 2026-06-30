@@ -30,12 +30,12 @@ class AHumanPlayer : AVolleyballPlayer
 	{
 		Super::SetupPlayerInputComponent(InputComp);
 
-		InputComp.BindAxis("MoveForward", this, n"OnMoveForward");
-		InputComp.BindAxis("MoveRight", this, n"OnMoveRight");
-		InputComp.BindAction("Jump", EInputEvent::IE_Pressed, this, n"OnJump");
-		InputComp.BindAction("Pass", EInputEvent::IE_Pressed, this, n"OnPass");
-		InputComp.BindAction("Set", EInputEvent::IE_Pressed, this, n"OnSet");
-		InputComp.BindAction("Spike", EInputEvent::IE_Pressed, this, n"OnSpike");
+		InputComp.BindAxis(n"MoveForward", this, n"OnMoveForward");
+		InputComp.BindAxis(n"MoveRight", this, n"OnMoveRight");
+		InputComp.BindAction(n"Jump", EInputEvent::IE_Pressed, this, n"OnJump");
+		InputComp.BindAction(n"Pass", EInputEvent::IE_Pressed, this, n"OnPass");
+		InputComp.BindAction(n"Set", EInputEvent::IE_Pressed, this, n"OnSet");
+		InputComp.BindAction(n"Spike", EInputEvent::IE_Pressed, this, n"OnSpike");
 	}
 
 	void Tick(float DeltaTime) override

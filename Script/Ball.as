@@ -95,7 +95,7 @@ class ABall : AActor
 			}
 
 			// Notify game mode of floor hit
-			ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
+			ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(Gameplay::GetGameMode());
 			if (GM != nullptr)
 				GM.OnBallHitFloor(Position);
 		}
@@ -119,7 +119,7 @@ class ABall : AActor
 					? NetX - NetHalfThickness - BallRadius
 					: NetX + NetHalfThickness + BallRadius;
 
-				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
+				ABeachVolleyballGameMode GM = Cast<ABeachVolleyballGameMode>(Gameplay::GetGameMode());
 				if (GM != nullptr)
 					GM.OnBallHitNet();
 			}
