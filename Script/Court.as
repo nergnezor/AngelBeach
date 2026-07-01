@@ -48,7 +48,6 @@ class ACourt : AActor
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		BuildSand();
 		BuildNet();
 		BuildLines();
@@ -57,8 +56,6 @@ class ACourt : AActor
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
-
 		// Slowly heal deformations back toward flat.
 		bool bAnyHeal = false;
 		float HealFactor = 1.0f - Math::Clamp(SandHealRate * DeltaTime, 0.0f, 1.0f);
@@ -137,7 +134,8 @@ class ACourt : AActor
 		}
 
 		SandMesh.CreateMeshSection_LinearColor(0, SandV, T, SandN, SandUV,
-			SandColors(), SandTan, true);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			SandColors(), SandTan, true, false);
 	}
 
 	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
@@ -225,7 +223,8 @@ class ACourt : AActor
 		}
 
 		SandMesh.UpdateMeshSection_LinearColor(0, SandV, SandN, SandUV,
-			SandColors(), SandTan);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			SandColors(), SandTan, false);
 	}
 
 	// Net: flat quad with dark color
@@ -260,11 +259,14 @@ class ACourt : AActor
 		for (int i = 0; i < 8; i++) UV.Add(FVector2D(0,0));
 
 		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			TArray<FLinearColor>(), Tan, false, false);
 
 		TArray<FLinearColor> C;
 		for (int i = 0; i < 8; i++) C.Add(FLinearColor(0.1f, 0.1f, 0.1f, 0.85f));
-		NetMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+		NetMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false);
 	}
 
 	// Court boundary lines and center line
@@ -295,11 +297,14 @@ class ACourt : AActor
 			LineWidth);
 
 		LinesMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			TArray<FLinearColor>(), Tan, false, false);
 
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(1,1,1,1));
-		LinesMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+		LinesMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false);
 	}
 
 	private void AddLine(TArray<FVector>& Verts, TArray<int32>& Tris,
@@ -335,11 +340,14 @@ class ACourt : AActor
 		AddCylinder(V, T, N, UV, FVector(0,  CourtHalfWidth + 30.0f, 0), PostRadius, PostHeight, Segs);
 
 		PostsMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FLinearColor>(), Tan, false);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			TArray<FLinearColor>(), Tan, false, false);
 
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(0.8f, 0.8f, 0.8f, 1));
-		PostsMesh.UpdateMeshSection_LinearColor(0, V, N, UV, C, Tan);
+		PostsMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false);
 	}
 
 	private void AddCylinder(TArray<FVector>& Verts, TArray<int32>& Tris,

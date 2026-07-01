@@ -22,8 +22,6 @@ class ABeachVolleyballCamera : AActor
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
-
 		// Position camera on side
 		SetActorLocation(SideOffset);
 		SetActorRotation(FRotator(0, 90, 0)); // face the court
@@ -31,15 +29,13 @@ class ABeachVolleyballCamera : AActor
 		// Assign to player controller
 		APlayerController PC = GetWorld().GetFirstPlayerController();
 		if (PC != nullptr)
-			PC.SetViewTarget(this);
+			PC.SetViewTarget(Cast<AActor>(this));
 
 		FindBall();
 	}
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
-
 		if (Ball == nullptr) FindBall();
 
 		UpdateCameraPosition(DeltaTime);
@@ -58,7 +54,7 @@ class ABeachVolleyballCamera : AActor
 		}
 
 		// Smooth interpolation
-		CurrentLookAt = FMath::VInterpTo(CurrentLookAt, BaseLookAt, DeltaTime, FollowSpeed);
+		CurrentLookAt = Math::VInterpTo(CurrentLookAt, BaseLookAt, DeltaTime, FollowSpeed);
 
 		// Camera position: fixed Y offset, follow X and Z softly
 		FVector CamPos = FVector(CurrentLookAt.X, SideOffset.Y, SideOffset.Z + CurrentLookAt.Z * 0.5f);

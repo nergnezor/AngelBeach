@@ -4,8 +4,6 @@ class ABeachVolleyballHUD : AHUD
 {
 	void DrawHUD() override
 	{
-		Super::DrawHUD();
-
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr) return;
 

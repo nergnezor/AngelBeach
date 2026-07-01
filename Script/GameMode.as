@@ -26,15 +26,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		SpawnActors();
 		StartMatch();
 	}
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
-
 		if (bWaitingForServe)
 		{
 			ServeTimer += DeltaTime;
