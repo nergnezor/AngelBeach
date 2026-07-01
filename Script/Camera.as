@@ -28,9 +28,9 @@ class ABeachVolleyballCamera : AActor
 		SetActorRotation(FRotator(0, 90, 0)); // face the court
 
 		// Assign to player controller
-		APlayerController PC = GetWorld().GetFirstPlayerController();
+		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr)
-			PC.SetViewTarget(Cast<AActor>(this));
+			PC.SetViewTargetWithBlend(Cast<AActor>(this), 0.0f);
 
 		FindBall();
 	}

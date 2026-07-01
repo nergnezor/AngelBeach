@@ -58,17 +58,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 	private void SpawnActors()
 	{
 		// Spawn court
-		FActorSpawnParameters Params;
 		Court = Cast<ACourt>(GetWorld().SpawnActor(ACourt::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator, Params));
+			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn sand FX system (dust + upward spray)
 		SandFX = Cast<ASandFX>(GetWorld().SpawnActor(ASandFX::StaticClass(),
-			FVector::ZeroVector, FRotator::ZeroRotator, Params));
+			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn ball
 		Ball = Cast<ABall>(GetWorld().SpawnActor(ABall::StaticClass(),
-			FVector(0, 0, 300), FRotator::ZeroRotator, Params));
+			FVector(0, 0, 300), FRotator::ZeroRotator));
 		if (Ball != nullptr)
 		{
 			Ball.Sand = SandFX;
@@ -77,7 +76,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		// Spawn human player (left/negative X side)
 		HumanPawn = Cast<AHumanPlayer>(GetWorld().SpawnActor(AHumanPlayer::StaticClass(),
-			FVector(-400, 0, 100), FRotator::ZeroRotator, Params));
+			FVector(-400, 0, 100), FRotator::ZeroRotator));
 		if (HumanPawn != nullptr)
 		{
 			HumanPawn.Sand = SandFX;
@@ -86,7 +85,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		// Spawn AI player (right/positive X side)
 		AIPawn = Cast<AAIPlayer>(GetWorld().SpawnActor(AAIPlayer::StaticClass(),
-			FVector(400, 0, 100), FRotator::ZeroRotator, Params));
+			FVector(400, 0, 100), FRotator::ZeroRotator));
 
 		if (AIPawn != nullptr)
 		{
@@ -96,7 +95,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 
 		// Possess human with player controller
-		APlayerController PC = GetWorld().GetFirstPlayerController();
+		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr && HumanPawn != nullptr)
 		{
 			PC.Possess(HumanPawn);
@@ -106,7 +105,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void StartMatch()
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS != nullptr)
 		{
 			GS.ScoreA = 0;
@@ -129,14 +128,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 		bWaitingForServe = true;
 		ServeTimer = 0;
 
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS != nullptr)
 			GS.GamePhase = EGamePhase::Phase_Serving;
 	}
 
 	private void ServeBall()
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS == nullptr || Ball == nullptr) return;
 
 		FVector ServeOrigin;
@@ -161,7 +160,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 	UFUNCTION(BlueprintCallable)
 	void OnBallHitFloor(FVector HitPos)
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS == nullptr) return;
 		if (GS.GamePhase != EGamePhase::Phase_Rally) return;
 
@@ -197,7 +196,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 	UFUNCTION(BlueprintCallable)
 	void OnTouchViolation(ETeam FaultingTeam)
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS == nullptr) return;
 
 		ETeam ScoringTeam = (FaultingTeam == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;

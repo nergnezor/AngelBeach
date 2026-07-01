@@ -5,11 +5,11 @@ class ABeachVolleyballHUD : AHUD
 	UFUNCTION(BlueprintOverride)
 	void DrawHUD()
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS == nullptr) return;
 
-		float W = Canvas.SizeX;
-		float H = Canvas.SizeY;
+		float W = SizeX;
+		float H = SizeY;
 
 		DrawBackground(W, H);
 		DrawScore(GS, W, H);
