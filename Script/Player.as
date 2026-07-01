@@ -132,6 +132,11 @@ class AVolleyballPlayer : APawn
 		RebuildBody();
 	}
 
+	UFUNCTION(BlueprintOverride)
+	void SetupPlayerInputComponent(UInputComponent InputComp)
+	{
+	}
+
 	// Called by the hit actions so the arms reach toward the ball.
 	protected void TriggerReach(FVector WorldDir)
 	{
