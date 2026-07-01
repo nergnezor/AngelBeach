@@ -77,7 +77,7 @@ jobs:
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
-            -cookflavor=Multi \
+
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
             -nozenstore \
