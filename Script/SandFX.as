@@ -51,7 +51,7 @@ class ASandFX : AActor
 	UFUNCTION(BlueprintCallable)
 	void Burst(FVector Pos, FVector ImpactVel, float Strength)
 	{
-		Strength = Math::Clamp(Strength, 0.1f, 3.0f);
+		float S = Math::Clamp(Strength, 0.1f, 3.0f);
 
 		if (ImpactSystem != nullptr)
 		{
@@ -59,15 +59,15 @@ class ASandFX : AActor
 			return;
 		}
 
-		int Count = int(18.0f + Strength * 34.0f);
-		SprayFallback(Pos, ImpactVel, Strength, Count, 1.0f);
+		int Count = int(18.0f + S * 34.0f);
+		SprayFallback(Pos, ImpactVel, S, Count, 1.0f);
 	}
 
 	// Smaller puff kicked up under a footstep.
 	UFUNCTION(BlueprintCallable)
 	void Footstep(FVector Pos, float Strength)
 	{
-		Strength = Math::Clamp(Strength, 0.1f, 2.0f);
+		float S = Math::Clamp(Strength, 0.1f, 2.0f);
 
 		if (FootstepSystem != nullptr)
 		{
@@ -75,8 +75,8 @@ class ASandFX : AActor
 			return;
 		}
 
-		int Count = int(6.0f + Strength * 10.0f);
-		SprayFallback(Pos, FVector(0, 0, 0), Strength, Count, 0.5f);
+		int Count = int(6.0f + S * 10.0f);
+		SprayFallback(Pos, FVector(0, 0, 0), S, Count, 0.5f);
 	}
 
 	// Emit Count grains with a strong vertical component.

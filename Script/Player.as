@@ -210,7 +210,7 @@ class AVolleyballPlayer : APawn
 		bCanHit = false;
 		HitTimer = 0;
 
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		if (GS != nullptr)
 		{
 			bool bValid = GS.RegisterTouch(TeamSide);

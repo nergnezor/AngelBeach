@@ -116,7 +116,7 @@ class AAIPlayer : AVolleyballPlayer
 
 	private void DecideHit()
 	{
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(Gameplay::GetGameState());
 		int Touches = 0;
 		if (GS != nullptr) Touches = GS.TouchesThisRally;
 
