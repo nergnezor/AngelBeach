@@ -13,7 +13,6 @@ class ACourtLevelScript : ALevelScriptActor
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		SetupLighting();
 		SetupPostProcess();
 		SpawnCamera();

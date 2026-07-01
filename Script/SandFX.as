@@ -35,7 +35,6 @@ class ASandFX : AActor
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		for (int i = 0; i < MaxParticles; i++)
 		{
 			PPos.Add(FVector::ZeroVector);
@@ -111,8 +110,6 @@ class ASandFX : AActor
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
-
 		bool bAnyAlive = false;
 		float damp = 1.0f - Math::Clamp(PDrag * DeltaTime, 0.0f, 1.0f);
 
@@ -187,6 +184,8 @@ class ASandFX : AActor
 			return;
 		}
 
-		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, C, Tan, false);
+		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false, false);
 	}
 }
