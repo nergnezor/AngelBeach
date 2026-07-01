@@ -12,16 +12,16 @@ class ACourtLevelScript : ALevelScriptActor
 
 	private void SetupLighting()
 	{
-		GetWorld().SpawnActor(ADirectionalLight::StaticClass(),
+		SpawnActor(ADirectionalLight::StaticClass(),
 			FVector(0, 0, 10000), FRotator(-8, -55, 0));
 
-		GetWorld().SpawnActor(ASkyAtmosphere::StaticClass(),
+		SpawnActor(ASkyAtmosphere::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator);
 
-		GetWorld().SpawnActor(ASkyLight::StaticClass(),
+		SpawnActor(ASkyLight::StaticClass(),
 			FVector(0, 0, 500), FRotator::ZeroRotator);
 
-		GetWorld().SpawnActor(AExponentialHeightFog::StaticClass(),
+		SpawnActor(AExponentialHeightFog::StaticClass(),
 			FVector(0, 0, 100), FRotator::ZeroRotator);
 	}
 
@@ -31,7 +31,7 @@ class ACourtLevelScript : ALevelScriptActor
 
 	private void SpawnCamera()
 	{
-		GetWorld().SpawnActor(ABeachVolleyballCamera::StaticClass(),
+		SpawnActor(ABeachVolleyballCamera::StaticClass(),
 			FVector(0, -1400, 350), FRotator(0, 90, 0));
 	}
 }
