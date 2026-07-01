@@ -43,13 +43,15 @@ class AVolleyballPlayer : APawn
 	float CourtMinY = -450.0f;
 	float CourtMaxY = 450.0f;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		FVector Loc = GetActorLocation();
 		FloorZ = Loc.Z;
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 
 		// Gravity

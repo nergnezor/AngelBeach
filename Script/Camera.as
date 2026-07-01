@@ -20,7 +20,8 @@ class ABeachVolleyballCamera : AActor
 	UPROPERTY()
 	ABall Ball;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		// Position camera on side
 		SetActorLocation(SideOffset);
@@ -34,7 +35,8 @@ class ABeachVolleyballCamera : AActor
 		FindBall();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		if (Ball == nullptr) FindBall();
 

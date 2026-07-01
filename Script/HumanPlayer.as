@@ -9,7 +9,8 @@ class AHumanPlayer : AVolleyballPlayer
 	float AxisForward = 0.0f;
 	float AxisRight = 0.0f;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		Super::BeginPlay();
 		TeamSide = ETeam::Team_A;
@@ -26,7 +27,8 @@ class AHumanPlayer : AVolleyballPlayer
 			EnableInput(PC);
 	}
 
-	void SetupPlayerInputComponent(UInputComponent InputComp) override
+	UFUNCTION(BlueprintOverride)
+	void SetupPlayerInputComponent(UInputComponent InputComp)
 	{
 		FInputAxisHandlerDynamicSignature AxisFwd;
 		AxisFwd.BindUFunction(this, n"OnMoveForward");
@@ -53,7 +55,8 @@ class AHumanPlayer : AVolleyballPlayer
 		InputComp.BindAction(n"Spike", EInputEvent::IE_Pressed, ActSpike);
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		Super::Tick(DeltaTime);
 		MovePlayer(FVector2D(AxisForward, AxisRight));

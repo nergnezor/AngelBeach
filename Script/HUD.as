@@ -2,7 +2,8 @@
 
 class ABeachVolleyballHUD : AHUD
 {
-	void DrawHUD() override
+	UFUNCTION(BlueprintOverride)
+	void DrawHUD()
 	{
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr) return;

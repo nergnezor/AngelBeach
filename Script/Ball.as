@@ -43,12 +43,14 @@ class ABall : AActor
 		Velocity = ImpulseDir.GetSafeNormal() * Speed;
 	}
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		BuildSphereMesh();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		if (!bInPlay) return;
 

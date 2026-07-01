@@ -23,7 +23,8 @@ class AAIPlayer : AVolleyballPlayer
 	FVector TargetPosition = FVector::ZeroVector;
 	bool bHasTarget = false;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		Super::BeginPlay();
 		TeamSide = ETeam::Team_B;
@@ -39,7 +40,8 @@ class AAIPlayer : AVolleyballPlayer
 		ReactionDelay = Math::Lerp(0.8f, 0.1f, Difficulty);
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		Super::Tick(DeltaTime);
 
