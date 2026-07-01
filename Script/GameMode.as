@@ -24,13 +24,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 	float MatchRestartTimer = 0.0f;
 	bool bWaitingForRestart = false;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		SpawnActors();
 		StartMatch();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		if (bWaitingForServe)
 		{

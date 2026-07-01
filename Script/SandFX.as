@@ -33,7 +33,8 @@ class ASandFX : AActor
 	private int NextFree = 0;
 	private bool bDustDirty = false;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		for (int i = 0; i < MaxParticles; i++)
 		{
@@ -108,7 +109,8 @@ class ASandFX : AActor
 		bDustDirty = true;
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		bool bAnyAlive = false;
 		float damp = 1.0f - Math::Clamp(PDrag * DeltaTime, 0.0f, 1.0f);

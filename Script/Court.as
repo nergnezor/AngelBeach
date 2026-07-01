@@ -46,7 +46,8 @@ class ACourt : AActor
 	private float SandUpdateAccum = 0.0f;
 	const float SandUpdateInterval = 0.06f;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		BuildSand();
 		BuildNet();
@@ -54,7 +55,8 @@ class ACourt : AActor
 		BuildPosts();
 	}
 
-	void Tick(float DeltaTime) override
+	UFUNCTION(BlueprintOverride)
+	void Tick(float DeltaTime)
 	{
 		// Slowly heal deformations back toward flat.
 		bool bAnyHeal = false;

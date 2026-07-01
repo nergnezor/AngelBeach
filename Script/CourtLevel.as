@@ -11,7 +11,8 @@ class ACourtLevelScript : ALevelScriptActor
 	UPROPERTY()
 	UExponentialHeightFogComponent HeightFog;
 
-	void BeginPlay() override
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
 	{
 		SetupLighting();
 		SetupPostProcess();
