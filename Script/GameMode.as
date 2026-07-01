@@ -58,15 +58,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 	private void SpawnActors()
 	{
 		// Spawn court
-		Court = Cast<ACourt>(GetWorld().SpawnActor(ACourt::StaticClass(),
+		Court = Cast<ACourt>(SpawnActor(ACourt::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn sand FX system (dust + upward spray)
-		SandFX = Cast<ASandFX>(GetWorld().SpawnActor(ASandFX::StaticClass(),
+		SandFX = Cast<ASandFX>(SpawnActor(ASandFX::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator));
 
 		// Spawn ball
-		Ball = Cast<ABall>(GetWorld().SpawnActor(ABall::StaticClass(),
+		Ball = Cast<ABall>(SpawnActor(ABall::StaticClass(),
 			FVector(0, 0, 300), FRotator::ZeroRotator));
 		if (Ball != nullptr)
 		{
@@ -75,7 +75,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 
 		// Spawn human player (left/negative X side)
-		HumanPawn = Cast<AHumanPlayer>(GetWorld().SpawnActor(AHumanPlayer::StaticClass(),
+		HumanPawn = Cast<AHumanPlayer>(SpawnActor(AHumanPlayer::StaticClass(),
 			FVector(-400, 0, 100), FRotator::ZeroRotator));
 		if (HumanPawn != nullptr)
 		{
@@ -84,7 +84,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 
 		// Spawn AI player (right/positive X side)
-		AIPawn = Cast<AAIPlayer>(GetWorld().SpawnActor(AAIPlayer::StaticClass(),
+		AIPawn = Cast<AAIPlayer>(SpawnActor(AAIPlayer::StaticClass(),
 			FVector(400, 0, 100), FRotator::ZeroRotator));
 
 		if (AIPawn != nullptr)
