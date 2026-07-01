@@ -45,14 +45,12 @@ class AVolleyballPlayer : APawn
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		FVector Loc = GetActorLocation();
 		FloorZ = Loc.Z;
 	}
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
 
 		// Gravity
 		if (!bIsGrounded)
@@ -315,7 +313,9 @@ class AVolleyballPlayer : APawn
 		AddTube(V, T, N, UV, C, hipL, footL, 6.0f, 4.5f, 5, Team);
 		AddTube(V, T, N, UV, C, hipR, footR, 6.0f, 4.5f, 5, Team);
 
-		Body.CreateMeshSection_LinearColor(0, V, T, N, UV, C, Tan, false);
+		Body.CreateMeshSection_LinearColor(0, V, T, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false, false);
 	}
 
 	// Tapered cylinder between two local points.

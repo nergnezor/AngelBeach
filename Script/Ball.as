@@ -45,13 +45,11 @@ class ABall : AActor
 
 	void BeginPlay() override
 	{
-		Super::BeginPlay();
 		BuildSphereMesh();
 	}
 
 	void Tick(float DeltaTime) override
 	{
-		Super::Tick(DeltaTime);
 		if (!bInPlay) return;
 
 		StepPhysics(DeltaTime);
@@ -170,13 +168,16 @@ class ABall : AActor
 		}
 
 		MeshComp.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
-			TArray<FLinearColor>(), Tangents, true);
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			TArray<FLinearColor>(), Tangents, true, false);
 
 		// White volleyball material (vertex color)
 		TArray<FLinearColor> Colors;
 		for (int i = 0; i < Verts.Num(); i++)
 			Colors.Add(FLinearColor(1, 1, 1, 1));
-		MeshComp.UpdateMeshSection_LinearColor(0, Verts, Normals, UVs, Colors, Tangents);
+		MeshComp.UpdateMeshSection_LinearColor(0, Verts, Normals, UVs,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			Colors, Tangents, false);
 	}
 
 	// Return predicted landing position via forward integration

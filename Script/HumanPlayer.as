@@ -28,14 +28,29 @@ class AHumanPlayer : AVolleyballPlayer
 
 	void SetupPlayerInputComponent(UInputComponent InputComp) override
 	{
-		Super::SetupPlayerInputComponent(InputComp);
+		FInputAxisHandlerDynamicSignature AxisFwd;
+		AxisFwd.BindUFunction(this, n"OnMoveForward");
+		InputComp.BindAxis(n"MoveForward", AxisFwd);
 
-		InputComp.BindAxis(n"MoveForward", this, n"OnMoveForward");
-		InputComp.BindAxis(n"MoveRight", this, n"OnMoveRight");
-		InputComp.BindAction(n"Jump", EInputEvent::IE_Pressed, this, n"OnJump");
-		InputComp.BindAction(n"Pass", EInputEvent::IE_Pressed, this, n"OnPass");
-		InputComp.BindAction(n"Set", EInputEvent::IE_Pressed, this, n"OnSet");
-		InputComp.BindAction(n"Spike", EInputEvent::IE_Pressed, this, n"OnSpike");
+		FInputAxisHandlerDynamicSignature AxisRight;
+		AxisRight.BindUFunction(this, n"OnMoveRight");
+		InputComp.BindAxis(n"MoveRight", AxisRight);
+
+		FInputActionHandlerDynamicSignature ActJump;
+		ActJump.BindUFunction(this, n"OnJump");
+		InputComp.BindAction(n"Jump", EInputEvent::IE_Pressed, ActJump);
+
+		FInputActionHandlerDynamicSignature ActPass;
+		ActPass.BindUFunction(this, n"OnPass");
+		InputComp.BindAction(n"Pass", EInputEvent::IE_Pressed, ActPass);
+
+		FInputActionHandlerDynamicSignature ActSet;
+		ActSet.BindUFunction(this, n"OnSet");
+		InputComp.BindAction(n"Set", EInputEvent::IE_Pressed, ActSet);
+
+		FInputActionHandlerDynamicSignature ActSpike;
+		ActSpike.BindUFunction(this, n"OnSpike");
+		InputComp.BindAction(n"Spike", EInputEvent::IE_Pressed, ActSpike);
 	}
 
 	void Tick(float DeltaTime) override
