@@ -78,13 +78,13 @@ jobs:
             -noP4 \
             -platform=Android \
             -clientconfig=Development \
-            -cook -build -stage -pak -archive \
+            -cook -build -stage \
             -nozenstore \
-            -archivedirectory="$OUTPUT_DIR"
+            -skippackage
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-${{ github.sha }}
-          path: PackagedBuilds/Android/
+          path: Saved/StagedBuilds/Android/
           retention-days: 14
