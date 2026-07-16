@@ -89,12 +89,16 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
 		// THE LEGS SET THE PLATFORM HEIGHT: the lower the ball, the deeper the
-		// knees, while the arms keep their stable slope — "bend the knees, not
-		// the back" is the core of physical bagger control.
+		// knees, while the arms keep their stable slope. Range 0.5-0.7:
+		// empirically (booth4 vs booth6/7) the ABP crouch blend keeps a
+		// functional stance with the hands reaching the ball up to ~0.7; beyond
+		// that it becomes a one-knee kneel whose dropped chest puts the platform
+		// targets outside the reach envelope and the solver gives up (hands end
+		// up at the thighs).
 		float FeetZ = Self.GetActorLocation().Z - Self.PlayerHeight;
 		float PlatAboveFeet = PlatEnd.Z - FeetZ;
 		float BallLow = Math::Clamp((110.0f - PlatAboveFeet) / 80.0f, 0.0f, 1.0f);
-		Crouch = 0.45f + 0.55f * BallLow;
+		Crouch = 0.5f + 0.2f * BallLow;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{
