@@ -162,13 +162,29 @@ class AVolleyballPlayer : APawn
 
 		SetActorLocation(NewLoc);
 
-		// Sand FX
+		// Sand FX + landing absorption: knees flex on touchdown, deeper after a
+		// bigger fall — a stiff-legged landing is both unphysical and unreadable.
 		FVector Feet = FVector(NewLoc.X, NewLoc.Y, 0.0f);
 		if (bIsGrounded && !bWasGrounded && FallSpeed > 120.0f)
 		{
 			float Strength = Math::Clamp(FallSpeed / 600.0f, 0.3f, 1.6f);
 			if (Sand != nullptr) Sand.Footstep(Feet, Strength * 1.4f);
 			if (Court != nullptr) Court.DeformSand(Feet, 24.0f, 4.0f + Strength * 6.0f);
+			LandAbsorbTimer = 0.3f;
+			LandAbsorbDepth = Math::Clamp(FallSpeed / 900.0f, 0.3f, 0.7f);
+		}
+		if (LandAbsorbTimer > 0.0f)
+		{
+			LandAbsorbTimer -= DeltaTime;
+			ExtraCrouch = Math::Max(ExtraCrouch, LandAbsorbDepth * (LandAbsorbTimer / 0.3f));
+		}
+
+		// Airborne attack tuck: knees come up through the ascent of a spike or
+		// block jump (release on the way down) — legs trail dead otherwise.
+		if (!bIsGrounded && PlayerVelocity.Z > -100.0f
+			&& (CurrentHit == EHitType::Hit_Spike || CurrentHit == EHitType::Hit_Block))
+		{
+			ExtraCrouch = Math::Max(ExtraCrouch, 0.35f);
 		}
 		if (bIsGrounded)
 		{
@@ -411,6 +427,10 @@ class AVolleyballPlayer : APawn
 	// stance, split step dip, dive recovery. Added on top of the pose crouch in
 	// UpdateIKTargets, then cleared each frame (same lapse pattern as bReaching).
 	float ExtraCrouch = 0.0f;
+
+	// Landing absorption state (knees flex on touchdown, see UpdatePlayer).
+	private float LandAbsorbTimer = 0.0f;
+	private float LandAbsorbDepth = 0.5f;
 
 	// AI sets this while preparing to play the ball, with the hit type it
 	// intends, so the arms extend toward the ball before contact. Requests are

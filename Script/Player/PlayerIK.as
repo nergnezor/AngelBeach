@@ -88,8 +88,13 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		// Forearm platform faces up toward the aim arc.
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
-		// Hips back, knees bent — a platform without a squat reads as bending over.
-		Crouch = 0.7f;
+		// THE LEGS SET THE PLATFORM HEIGHT: the lower the ball, the deeper the
+		// knees, while the arms keep their stable slope — "bend the knees, not
+		// the back" is the core of physical bagger control.
+		float FeetZ = Self.GetActorLocation().Z - Self.PlayerHeight;
+		float PlatAboveFeet = PlatEnd.Z - FeetZ;
+		float BallLow = Math::Clamp((110.0f - PlatAboveFeet) / 80.0f, 0.0f, 1.0f);
+		Crouch = 0.45f + 0.55f * BallLow;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{
