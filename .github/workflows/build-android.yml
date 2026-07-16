@@ -29,6 +29,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Content/Characters/ (Manny mesh/skeleton/anims) is gitignored and provisioned
+          # once locally on this runner -- default clean=true runs `git clean -ffdx` and
+          # wipes it before every build, leaving the mesh unresolvable at cook time (silent
+          # fallback to boxes at runtime, no cook-time error). Keep it across checkouts.
+          clean: false
 
       - name: Verify engine
         run: |
@@ -79,7 +85,7 @@ jobs:
       - name: Build C++ module (Android)
         run: |
           "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
-            ${PROJECT_NAME} Android Development \
+            ${PROJECT_NAME} Android Shipping \
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -progress
 
@@ -91,7 +97,7 @@ jobs:
             -noP4 \
             -platform=Android \
             -cookflavor=Multi \
-            -clientconfig=Development \
+            -clientconfig=Shipping \
             -cook -build -stage -pak -package -archive \
             -iterativecooking \
             -ddc="$UE_DERIEDDATACACHE_ROOT" \
