@@ -170,16 +170,30 @@ fi
 # ── 5. HTML5 community plugin ─────────────────────────────────────────────────
 step "HTML5 platform plugin"
 HTML5_DIR="$ENGINE_DIR/Engine/Platforms/HTML5"
+EMSDK_DIR="${EMSDK_DIR:-$HOME/emsdk}"
 if [ "$SKIP_HTML5" = "1" ]; then
     log "SKIP_HTML5=1 — skipping HTML5 plugin"
-elif [ -d "$HTML5_DIR" ]; then
-    ok "HTML5 plugin already present at $HTML5_DIR"
 else
-    log "Cloning community HTML5 plugin ..."
-    git clone --depth 1 \
-        https://github.com/nicktindall/ue5-html5-plugin.git \
-        "$HTML5_DIR"
-    ok "HTML5 plugin installed at $HTML5_DIR"
+    if [ -d "$HTML5_DIR" ]; then
+        ok "HTML5 plugin already present at $HTML5_DIR"
+    else
+        log "Cloning community HTML5 plugin ..."
+        git clone --depth 1 \
+            https://github.com/nicktindall/ue5-html5-plugin.git \
+            "$HTML5_DIR"
+        ok "HTML5 plugin installed at $HTML5_DIR"
+    fi
+
+    # Emscripten SDK — required to compile the engine/game to WASM.
+    if [ ! -d "$EMSDK_DIR/.git" ]; then
+        log "Installing Emscripten SDK at $EMSDK_DIR ..."
+        git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+    fi
+    ( cd "$EMSDK_DIR" && ./emsdk install latest && ./emsdk activate latest )
+    grep -qF "$EMSDK_DIR/emsdk_env.sh" /etc/profile.d/emscripten.sh 2>/dev/null \
+        || echo "source $EMSDK_DIR/emsdk_env.sh >/dev/null 2>&1 || true" \
+             | sudo tee /etc/profile.d/emscripten.sh > /dev/null
+    ok "Emscripten SDK ready at $EMSDK_DIR"
 fi
 
 # ── 6. GitHub Actions runner ──────────────────────────────────────────────────
