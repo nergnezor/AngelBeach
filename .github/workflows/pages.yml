@@ -30,15 +30,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify engine & HTML5 platform
+      - name: Ensure HTML5 platform + Emscripten
         run: |
           test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
             echo "ERROR: engine not found at $ENGINE_DIR"; exit 1
           }
-          test -d "$ENGINE_DIR/Engine/Platforms/HTML5" || {
-            echo "ERROR: HTML5 platform not found — install the community plugin."
-            exit 1
-          }
+
+          # 1. Community HTML5 platform plugin (UE5 has no official HTML5 support)
+          HTML5_DIR="$ENGINE_DIR/Engine/Platforms/HTML5"
+          if [ ! -d "$HTML5_DIR" ]; then
+            echo ">> Installing community HTML5 platform plugin..."
+            git clone --depth 1 \
+              https://github.com/nicktindall/ue5-html5-plugin.git "$HTML5_DIR"
+          fi
+
+          # 2. Emscripten SDK — required to compile the engine/game to WASM
+          EMSDK_DIR="${EMSDK_DIR:-$HOME/emsdk}"
+          if [ ! -d "$EMSDK_DIR/.git" ]; then
+            echo ">> Installing Emscripten SDK..."
+            git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+          fi
+          ( cd "$EMSDK_DIR" && ./emsdk install latest && ./emsdk activate latest )
+
+          # shellcheck disable=SC1091
+          source "$EMSDK_DIR/emsdk_env.sh"
+          {
+            echo "EMSDK=$EMSDK"
+            echo "EM_CONFIG=$EM_CONFIG"
+            echo "PATH=$PATH"
+          } >> "$GITHUB_ENV"
+
+          # 3. Regenerate project files so UBT discovers the new platform
+          ( cd "$ENGINE_DIR" && ./GenerateProjectFiles.sh ) || true
+          echo "HTML5 platform + Emscripten ready"
 
       - name: Build C++ module (HTML5)
         run: |
