@@ -134,6 +134,11 @@ class AVolleyballPlayer : APawn
 
 	void UpdatePlayer(float DeltaTime)
 	{
+		// Dive overrides input; otherwise ease velocity toward the stored input.
+		UpdateDive(DeltaTime);
+		if (!IsDiving())
+			ApplyMoveInput(DeltaTime);
+
 		// Gravity
 		if (!bIsGrounded)
 			PlayerVelocity.Z += Gravity * DeltaTime;
@@ -247,6 +252,7 @@ class AVolleyballPlayer : APawn
 		Anim.bIsMoving     = HSpeed > 40.0f;
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
+		Anim.bDiving       = IsDiving();
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
@@ -319,8 +325,9 @@ class AVolleyballPlayer : APawn
 		// Per-attempt summary tracking: while gesturing, remember how close the hand
 		// actually got to the ball. Emit ONE line when the attempt ends — far less
 		// noise than per-frame, and it answers the real question: did the hand reach
-		// the ball, and did it score a contact?
-		if (CurrentPose > 0.05f)
+		// the ball, and did it score a contact? The serve gesture is excluded: the
+		// server "chasing" his own departing serve polluted the miss statistics.
+		if (CurrentPose > 0.05f && CurrentHit != EHitType::Hit_Serve)
 		{
 			ABall TB = GetWorldBall();
 			if (TB != nullptr && TB.bInPlay && Mesh != nullptr)
@@ -339,6 +346,7 @@ class AVolleyballPlayer : APawn
 					AttemptHoriz = (Loc - FVector(TB.Position.X, TB.Position.Y, 0)).Size2D();
 					AttemptVert  = TB.Position.Z - (Loc.Z + PlayerHeight);  // + above head
 					AttemptPose  = CurrentPose;
+					AttemptIK    = IKWeight;
 					// Facing error: angle between where we look and where the ball is.
 					FVector ToBallFlat = FVector(TB.Position.X - Loc.X, TB.Position.Y - Loc.Y, 0).GetSafeNormal();
 					AttemptFacing = GetActorForwardVector().DotProduct(ToBallFlat);  // 1=facing, -1=away
@@ -365,6 +373,7 @@ class AVolleyballPlayer : APawn
 					+ " | bodyHoriz=" + int(AttemptHoriz)
 					+ " ballVsHead=" + int(AttemptVert)
 					+ " pose=" + int(AttemptPose * 100)
+					+ " ik=" + int(AttemptIK * 100)
 					+ " facing=" + int(AttemptFacing * 100)
 					+ " | handVsTarget=" + int(AttemptHandVsTarget)
 					+ " targetVsBall=" + int(AttemptTargetVsBall)
@@ -374,9 +383,15 @@ class AVolleyballPlayer : APawn
 			AttemptClosest = 99999.0f;
 		}
 
-		// Reaching is re-asserted each frame by the AI; clear it so it lapses
-		// when the AI stops asking.
-		bReaching = false;
+		// Reach/crouch requests lapse on a short timer (see Reach/RequestCrouch)
+		// so they survive the gap between AI reaction ticks but still fade when
+		// the AI stops asking.
+		ReachHoldTimer -= DeltaTime;
+		if (ReachHoldTimer <= 0.0f)
+			bReaching = false;
+		CrouchHoldTimer -= DeltaTime;
+		if (CrouchHoldTimer <= 0.0f)
+			ExtraCrouch = 0.0f;
 	}
 
 	private bool bAttemptActive = false;
@@ -384,6 +399,7 @@ class AVolleyballPlayer : APawn
 	private float AttemptHoriz = 0.0f;
 	private float AttemptVert = 0.0f;
 	private float AttemptPose = 0.0f;
+	private float AttemptIK = 0.0f;
 	private float AttemptFacing = 0.0f;
 	private float AttemptHandVsTarget = 0.0f;
 	private float AttemptTargetVsBall = 0.0f;
@@ -391,20 +407,52 @@ class AVolleyballPlayer : APawn
 	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
 	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
 
-	// AI sets this each frame while preparing to play the ball, with the hit type
-	// it intends, so the arms extend toward the ball before contact.
+	// Extra crouch (0..1) requested for THIS frame by AI/dive: athletic ready
+	// stance, split step dip, dive recovery. Added on top of the pose crouch in
+	// UpdateIKTargets, then cleared each frame (same lapse pattern as bReaching).
+	float ExtraCrouch = 0.0f;
+
+	// AI sets this while preparing to play the ball, with the hit type it
+	// intends, so the arms extend toward the ball before contact. Requests are
+	// held for a beat (not cleared per-frame) because the AI only re-asserts
+	// every ReactionDelay — clearing each frame made poses sawtooth between ticks.
 	bool bReaching = false;
+	private float ReachHoldTimer = 0.0f;
+	private float CrouchHoldTimer = 0.0f;
+
 	void Reach(EHitType Type)
 	{
 		bReaching = true;
+		ReachHoldTimer = 0.25f;
 		if (HitAnimTimer <= 0.0f)   // don't override an active swing
 			CurrentHit = Type;
 	}
 
+	// Crouch request that survives between AI reaction ticks (ready stance etc.).
+	// Per-frame writers (split step, dive) can set ExtraCrouch directly instead.
+	void RequestCrouch(float Amount)
+	{
+		ExtraCrouch = Math::Max(ExtraCrouch, Amount);
+		CrouchHoldTimer = 0.25f;
+	}
+
+	// 0 outside a strike, ramping 0->1 over the contact swing that TriggerHit
+	// starts. The IK uses this to swing the arms THROUGH the ball along the aim
+	// at contact — a static contact pose reads as catching, not hitting.
+	float SwingProgress() const
+	{
+		if (HitAnimTimer <= 0.0f || HitAnimDuration <= 0.0f) return 0.0f;
+		return 1.0f - Math::Clamp(HitAnimTimer / HitAnimDuration, 0.0f, 1.0f);
+	}
+
+	// Serve choreography phase (0 = idle, ramps 0->1 through toss + strike).
+	// Driven by the AI serve sequence; read by the Hit_Serve branch in PlayerIK.
+	float ServePhase = 0.0f;
+
 	// Distance (cm) at which any player auto-reaches toward the ball. Kept tight so
 	// players don't flail at a ball that's still metres away — the AI drives the
 	// deliberate reach as it closes in; this is just a safety net at true arm range.
-	float AutoReachDistance = 130.0f;
+	float AutoReachDistance = 115.0f;
 
 	// Reach for the ball automatically when it's near and I may legally play it.
 	// Hit type is picked from the ball's height relative to my body.
@@ -416,6 +464,15 @@ class AVolleyballPlayer : APawn
 
 		float Dist = (GetActorLocation() - B.Position).Size();
 		if (Dist > AutoReachDistance) return;
+
+		// Only if the ball is actually COMING at me (approaching, or dropping
+		// right on top of me). A ball merely passing nearby made every bystander
+		// throw their arms up, which read as random flailing.
+		FVector ToMe = GetActorLocation() - B.Position;
+		bool bComing = B.BallVel.DotProduct(ToMe) > 0.0f
+			|| (B.BallVel.Z < 0.0f
+				&& (GetActorLocation() - FVector(B.Position.X, B.Position.Y, 0)).Size2D() < 80.0f);
+		if (!bComing) return;
 
 		// Same rule as the AI: a fingerpass (set) is only legal if we're actually
 		// UNDER the ball with the forehead — close horizontally AND ball at/above
@@ -488,12 +545,27 @@ class AVolleyballPlayer : APawn
 	// different player (teammate or opponent) touches it — no double contacts.
 	bool CanContactBall() const { return true; }
 
+	// Solve the launch velocity that carries the ball from P to T on a parabola
+	// peaking Apex cm above the higher endpoint. This is what a controlled
+	// volleyball contact IS: pros don't reflect the ball, they place it — the
+	// dig pops to the setter zone, the set floats to the attack spot, both with
+	// deliberate arc. (Air drag ~2%/s shortens it slightly; acceptable.)
+	FVector BallisticVelocity(FVector P, FVector T, float Apex) const
+	{
+		const float G = 980.0f;
+		float PeakZ = Math::Max(P.Z, T.Z) + Math::Max(Apex, 40.0f);
+		float Vz = Math::Sqrt(2.0f * G * (PeakZ - P.Z));
+		float TUp = Vz / G;
+		float TDown = Math::Sqrt(2.0f * Math::Max(PeakZ - T.Z, 1.0f) / G);
+		float TTotal = Math::Max(TUp + TDown, 0.15f);
+		return FVector((T.X - P.X) / TTotal, (T.Y - P.Y) / TTotal, Vz);
+	}
+
 	// Called by the ball when it physically touches this player. The ball gives
-	// its current velocity; we return the post-contact velocity using REAL
-	// collision physics: reflect the incoming velocity about the contact normal
-	// (with restitution) and add the velocity imparted by the arm swing. The arm
-	// is angled toward the player's aim, so a real reflection sends it there —
-	// no teleporting to a fixed speed/direction.
+	// its current velocity; we return the post-contact velocity. Controlled
+	// contacts (dig/set with an aim) use the ballistic solve above, plus a bit of
+	// the physical reflection so hard incoming balls still feel physical. The
+	// spike stays a true strike: reflection + a hard swing impulse.
 	FVector OnBallContact(FVector BallPos, FVector BallVelIn, FVector Center)
 	{
 		// Choose hit type from where the ball meets the body, relative to the
@@ -528,21 +600,28 @@ class AVolleyballPlayer : APawn
 		FVector Reflected = BallVelIn - Normal * (2.0f * VDotN);
 		Reflected *= ContactRestitution;
 
-		// Arm swing impulse along the aim direction — this is the "hit power".
-		// Different contacts impart different energy, like real technique.
-		float SwingPower;
-		if      (Type == EHitType::Hit_Spike) SwingPower = 1150.0f;
-		else if (Type == EHitType::Hit_Set)   SwingPower = 520.0f;
-		else                                  SwingPower = 600.0f;  // bump
+		FVector OutVel;
+		if (Type != EHitType::Hit_Spike && bHasAim)
+		{
+			// CONTROLLED contact (dig/set): place the ball on a deliberate arc to
+			// the aim spot. The set floats high so the attacker can time a full
+			// jump attack on it; the dig pops high enough for the setter to run
+			// under it. A dash of the reflection keeps hard serves feeling hot.
+			float Apex = (Type == EHitType::Hit_Set) ? 310.0f : 260.0f;
+			OutVel = BallisticVelocity(BallPos, DesiredAim, Apex) + Reflected * 0.15f;
+		}
+		else
+		{
+			// STRIKE (spike) or aimless flail: real reflection + swing impulse.
+			float SwingPower = (Type == EHitType::Hit_Spike) ? 1150.0f : 600.0f;
+			FVector SwingDir = AimDir;
+			if (Type == EHitType::Hit_Spike) SwingDir.Z = Math::Min(SwingDir.Z, -0.2f);
+			else                             SwingDir.Z = Math::Max(SwingDir.Z, 0.45f);
+			SwingDir = SwingDir.GetSafeNormal();
+			OutVel = Reflected + SwingDir * SwingPower;
+		}
 
-		FVector SwingDir = AimDir;
-		if (Type == EHitType::Hit_Spike) SwingDir.Z = Math::Min(SwingDir.Z, -0.2f);
-		else                             SwingDir.Z = Math::Max(SwingDir.Z, 0.45f);
-		SwingDir = SwingDir.GetSafeNormal();
-
-		FVector OutVel = Reflected + SwingDir * SwingPower;
-
-		TriggerHit(Type, SwingDir);
+		TriggerHit(Type, OutVel.GetSafeNormal());
 		RegisterHit(GetWorldBall());
 		bHasAim = false;
 		return OutVel;
@@ -588,17 +667,92 @@ class AVolleyballPlayer : APawn
 	UFUNCTION(BlueprintCallable)
 	void MovePlayer(FVector2D Input)
 	{
-		// In the air we have almost no horizontal control — a jump (block/spike) is
-		// essentially vertical. This stops players drifting/swimming around mid-jump,
-		// which looked unnatural and made blocks/spikes miss. Keep a small amount of
-		// steering so they aren't completely locked.
-		float Control = bIsGrounded ? 1.0f : AirControl;
-		PlayerVelocity.X = Input.X * MoveSpeed * Control;
-		PlayerVelocity.Y = Input.Y * MoveSpeed * Control;
+		// Store the desired move; UpdatePlayer eases the real velocity toward it.
+		// Players no longer teleport between speeds — explosive first step, hard
+		// plant when stopping, and momentum carries through jumps (with only weak
+		// steering in the air, so no mid-jump swimming).
+		MoveInput = Input;
 	}
 
-	// Fraction of horizontal move speed available while airborne (0 = none).
-	float AirControl = 0.15f;
+	// Desired input this frame (unit length or less). Consumed by UpdatePlayer.
+	private FVector2D MoveInput = FVector2D::ZeroVector;
+
+	// Horizontal acceleration rates (cm/s²). Ground values give a sprinter-like
+	// first step (0→full in ~0.2s) and a decisive plant (full→0 in ~0.13s, sliding
+	// ~30cm — matches the AI's 40cm plant radius). Air rate is weak on purpose.
+	float GroundAccel = 2400.0f;
+	float GroundDecel = 3400.0f;
+	float AirAccel = 350.0f;
+
+	// Ease PlayerVelocity.XY toward the requested input velocity.
+	private void ApplyMoveInput(float DeltaTime)
+	{
+		FVector Cur = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+		FVector Target = FVector(MoveInput.X, MoveInput.Y, 0) * MoveSpeed;
+
+		float Rate;
+		if (!bIsGrounded)
+			Rate = AirAccel;
+		else if (Target.SizeSquared() > Cur.SizeSquared() + 1.0f)
+			Rate = GroundAccel;
+		else
+			Rate = GroundDecel;
+
+		FVector Delta = Target - Cur;
+		float MaxStep = Rate * DeltaTime;
+		if (Delta.Size() > MaxStep)
+			Delta = Delta.GetSafeNormal() * MaxStep;
+
+		PlayerVelocity.X = Cur.X + Delta.X;
+		PlayerVelocity.Y = Cur.Y + Delta.Y;
+	}
+
+	// --- Dive: explosive low lunge at a ball that can't be reached on foot -----
+	// Physics-only (no dive montage dependency): a burst of speed with a small hop,
+	// body forced low via ExtraCrouch, arms reaching via the normal bump IK. The
+	// recovery phase keeps the player slow and low while "getting up".
+	float DiveTimer = 0.0f;
+	float DiveRecoverTimer = 0.0f;
+	private FVector DiveDir = FVector(1, 0, 0);
+	const float DiveDuration = 0.42f;
+	const float DiveRecovery = 0.75f;
+	const float DiveSpeedMul = 1.75f;
+
+	bool IsDiving() const { return DiveTimer > 0.0f; }
+	bool CanDive() const { return bIsGrounded && DiveTimer <= 0.0f && DiveRecoverTimer <= 0.0f; }
+
+	void StartDive(FVector WorldDir)
+	{
+		FVector Flat = FVector(WorldDir.X, WorldDir.Y, 0);
+		if (Flat.SizeSquared() < 0.01f) return;
+		DiveDir = Flat.GetSafeNormal();
+		DiveTimer = DiveDuration;
+		// Small hop so the lunge leaves the ground for a beat.
+		PlayerVelocity.Z = 130.0f;
+		bIsGrounded = false;
+	}
+
+	private void UpdateDive(float DeltaTime)
+	{
+		if (DiveTimer > 0.0f)
+		{
+			DiveTimer -= DeltaTime;
+			// The dive owns the velocity and the facing while active.
+			PlayerVelocity.X = DiveDir.X * MoveSpeed * DiveSpeedMul;
+			PlayerVelocity.Y = DiveDir.Y * MoveSpeed * DiveSpeedMul;
+			FacingDir = DiveDir;
+			bHasFacing = true;
+			ExtraCrouch = 1.0f;
+			if (DiveTimer <= 0.0f)
+				DiveRecoverTimer = DiveRecovery;
+		}
+		else if (DiveRecoverTimer > 0.0f)
+		{
+			DiveRecoverTimer -= DeltaTime;
+			// Getting up: still low, easing back to standing.
+			ExtraCrouch = Math::Max(ExtraCrouch, 0.85f * (DiveRecoverTimer / DiveRecovery));
+		}
+	}
 
 	UFUNCTION(BlueprintCallable)
 	void Jump()

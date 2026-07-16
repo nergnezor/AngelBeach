@@ -60,12 +60,29 @@ class AAIPlayer : AVolleyballPlayer
 		UpdatePlayer(DeltaTime);
 		if (Ball == nullptr) FindBall();
 
-		// Dead ball (between points / before serve): walk to my ready position so
-		// the next rally starts from a proper formation instead of wherever the
-		// last rally left everyone standing.
+		// Split step runs at full frame rate (not gated by ReactionDelay) so the
+		// dip lands exactly on the opponent's contact.
+		UpdateSplitStep(DeltaTime);
+
+		// Dead ball (between points / before serve): WALK to my ready position so
+		// the next rally starts from a proper formation — nobody sprints between
+		// points. Also clear touch ownership: it must NOT leak into the next
+		// rally, or last rally's final toucher refuses the serve receive and the
+		// wrong (far) player has to scramble for it.
+		// A serve in progress owns the player until the follow-through completes —
+		// note this is checked BEFORE the dead-ball branch because the ball goes
+		// live at the strike (phase 0.78) while the gesture runs to 1.0.
+		if (bServing)
+		{
+			RunServeSequence(DeltaTime);
+			return;
+		}
+
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
-			MoveToHold(ReadyPosition(), DeltaTime);
+			bIMadeLastTouch = false;
+			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
+			PreFaceForServe();
 			return;
 		}
 
@@ -83,7 +100,7 @@ class AAIPlayer : AVolleyballPlayer
 	//  - SERVING team: the server (back) stands behind the baseline; the non-server
 	//    (front) waits up at the net.
 	// By convention the Back-role player is the server.
-	private FVector ReadyPosition() const
+	protected FVector ReadyPosition() const
 	{
 		float Sign = MySign();
 		float Z = FloorZ + PlayerHeight;
@@ -102,6 +119,88 @@ class AAIPlayer : AVolleyballPlayer
 		// Receiving: spread to mid-court, one on each Y half.
 		float Y = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
 		return FVector(Sign * 450.0f, Y, Z);                 // mid-depth, half each
+	}
+
+	// ---------------------------------------------------------------
+	// Serve — a real motion, not a ball teleport: the server walks to the
+	// baseline, tosses with the LEFT hand (the ball rides the hand up), draws the
+	// right arm back, strikes overhead and follows through. The ball launches at
+	// the strike moment, from the strike point. GameMode starts this via
+	// BeginServe(); RunServeSequence ticks it while the ball is dead.
+	// ---------------------------------------------------------------
+	protected bool bServing = false;
+	private float ServeSeqTimer = 0.0f;
+	private bool bServeLaunched = false;
+	private FVector PendingServeVel;
+	// Unhurried, like a real serve ritual (~2s toss->strike). Also required: the
+	// Anim BP's FBIK effectors interpolate toward their targets with limited
+	// speed, so a faster choreography outruns the arms (the toss never rose when
+	// this was 1.15s — the hand lagged half a metre behind its target).
+	const float ServeSeqDuration = 1.9f;
+
+	void BeginServe(FVector ServeVel)
+	{
+		bServing = true;
+		bServeLaunched = false;
+		ServeSeqTimer = 0.0f;
+		PendingServeVel = ServeVel;
+	}
+
+	// While waiting at the baseline as the upcoming server, face the court — the
+	// serve ritual must not start with a 180° pirouette (the toss hand swings
+	// around with the turning body and the carry starts at the hip).
+	protected void PreFaceForServe()
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr || GS.ServingTeam != TeamSide || Role != EPlayerRole::Role_Back)
+			return;
+		FacingDir = FVector(-MySign(), 0, 0);
+		bHasFacing = true;
+	}
+
+	protected void RunServeSequence(float Dt)
+	{
+		if (Ball == nullptr) { bServing = false; ServePhase = 0.0f; return; }
+
+		ServeSeqTimer += Dt;
+		ServePhase = Math::Clamp(ServeSeqTimer / ServeSeqDuration, 0.0f, 1.0f);
+
+		// Face the opponent court; the IK choreography runs off ServePhase.
+		FacingDir = FVector(-MySign(), 0, 0);
+		bHasFacing = true;
+		Reach(EHitType::Hit_Serve);
+		MovePlayer(FVector2D::ZeroVector);
+
+		// The ball rides the toss hand up to the APEX (phase 0.6) and then hangs
+		// there until the strike — the hand starts tucking away at 0.6, and
+		// gluing past that dragged the ball back down with it.
+		if (!bServeLaunched && Mesh != nullptr)
+		{
+			if (ServePhase < 0.6f)
+			{
+				FVector Carry = Mesh.GetBoneTransform(n"hand_l").Location + FVector(0, 0, 16);
+				Ball.Position = Carry;
+				Ball.BallVel = FVector::ZeroVector;
+				Ball.SetActorLocation(Carry);
+			}
+			else
+			{
+				// Strike: launch from the toss apex with the serve velocity. The
+				// contact cooldown stops the ball bouncing off the server's own
+				// raised hands on its first in-play frame (it starts 16cm away).
+				bServeLaunched = true;
+				Ball.Launch(Ball.Position, PendingServeVel);
+				Ball.PlayerHitCooldown = 0.35f;
+				if (GM != nullptr)
+					GM.OnServeLaunched();
+			}
+		}
+
+		if (ServePhase >= 1.0f)
+		{
+			bServing = false;
+			ServePhase = 0.0f;
+		}
 	}
 
 	// ---------------------------------------------------------------
@@ -208,32 +307,71 @@ class AAIPlayer : AVolleyballPlayer
 		if (Intend == EHitType::Hit_Bump) DoDig();
 		else                              DoSet();
 
+		// Desperate ball: it will drop to play height before we can run there —
+		// launch a dive at it instead of jogging hopelessly and watching it land.
+		if (CanDive())
+		{
+			FVector DiveSpot;
+			float TauC = PredictBallTimeToHeight(ContactHeight(), DiveSpot);
+			if (TauC > 0.0f)
+			{
+				float DDist = (GetActorLocation() - FVector(DiveSpot.X, DiveSpot.Y, GetActorLocation().Z)).Size2D();
+				float TMe = DDist / MoveSpeed + 0.12f;   // includes first-step lag
+				if (TMe > TauC + 0.05f && TauC < 0.8f && DDist > 130.0f && DDist < 400.0f)
+				{
+					StartDive(DiveSpot - GetActorLocation());
+					if (bDebugAI) Log(DebugTag() + " DIVE dist=" + int(DDist) + " tau=" + int(TauC * 100));
+				}
+			}
+		}
+		if (IsDiving())
+		{
+			// The dive owns movement and facing; just keep the platform out.
+			Reach(EHitType::Hit_Bump);
+			return;
+		}
+
 		// Stand where the ball will be when it drops to PLAY height (waist/chest),
 		// not at its ground landing spot. A bagger meets the ball ~1m up while it's
 		// still travelling, so aiming at the Z=0 landing point leaves us a metre
 		// short horizontally — exactly the gap the debug meter showed (~105cm).
-		FVector PlaySpot = PredictBallAtHeight(ContactHeight());
+		FVector PlaySpot;
+		float TauC = PredictBallTimeToHeight(ContactHeight(), PlaySpot);
 		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0));
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		// Close all the way in — a small plant radius so we actually arrive under
-		// the ball rather than stopping a half-metre short.
+		// Move with URGENCY MATCHED TO TIME: hustle only as fast as the ball
+		// demands. A pro with three seconds of hang time walks under the ball; one
+		// with under a second SPRINTS, no arithmetic. The reserve accounts for
+		// reaction lag + acceleration, which the naive dist/time math ignored —
+		// that starved serve receives and they dove hopelessly at landing balls.
+		float SpeedCap = 1.0f;
+		if (TauC > 0.9f)
+		{
+			float NeedSpeed = DistToGoal / (TauC - 0.35f);    // reserve: react + accelerate
+			SpeedCap = Math::Clamp((NeedSpeed / MoveSpeed) * 1.25f, 0.5f, 1.0f);
+		}
+
 		if (DistToGoal > PlantRadius)
-			MoveToward2D(Goal, DeltaTime);
+			MoveToward2D(Goal, DeltaTime, false, SpeedCap);
 		else
+		{
 			MovePlayer(FVector2D::ZeroVector);
+			RequestCrouch(0.25f);   // planted under the ball, loaded to play it
+		}
 
 		// Always face the ball while playing it, so "in front of the chest" actually
 		// points at the ball and the IK platform meets it.
 		FaceBall();
 
-		// Prepare the swing EARLY: start reaching/winding up well before the ball
-		// arrives so the gesture (especially the spike's cock->strike) is fully
-		// built up at contact instead of a last-frame snap. The IK eases the pose
-		// in smoothly and actual contact is governed by hand-to-ball distance, so
-		// reaching early has no downside — only a more readable, prepared motion.
-		float BallDist = (GetActorLocation() - Ball.Position).Size();
-		if (BallDist < PrepareDistance)
+		// Wind up when MY contact is imminent in TIME — no distance condition. I'm
+		// the designated hitter: if I'm still moving when the ball is close in
+		// time, the arms must extend WHILE closing (that reach is what saves a
+		// late receive — the platform intercepts even when the body is a step
+		// short). 1.15s lead because the ABP's FBIK effectors chase their targets
+		// with limited speed: arms started at 0.9s were still converging at
+		// contact (handVsTarget 50-110cm in the miss autopsies).
+		if (TauC >= 0.0f && TauC < 1.15f)
 			Reach(Intend);
 	}
 
@@ -264,6 +402,17 @@ class AAIPlayer : AVolleyballPlayer
 	// fall back to the ground landing prediction.
 	private FVector PredictBallAtHeight(float TargetZ) const
 	{
+		FVector Pos;
+		PredictBallTimeToHeight(TargetZ, Pos);
+		return Pos;
+	}
+
+	// Same simulation, but also returns WHEN (seconds from now) the ball next
+	// descends through TargetZ — the number that lets us TIME a jump or a dive
+	// instead of just aiming at a spot. Returns -1 if the ball never crosses that
+	// height before landing (OutPos then holds the ground landing prediction).
+	protected float PredictBallTimeToHeight(float TargetZ, FVector& OutPos) const
+	{
 		FVector P = Ball.Position;
 		FVector V = Ball.BallVel;
 		const float G = -980.0f;
@@ -275,12 +424,16 @@ class AAIPlayer : AVolleyballPlayer
 			FVector Next = P + V * Dt;
 			// Detect a downward crossing of TargetZ between P and Next.
 			if (P.Z >= TargetZ && Next.Z <= TargetZ && V.Z < 0.0f)
-				return Next;
+			{
+				OutPos = Next;
+				return T + Dt;
+			}
 			P = Next;
 			T += Dt;
 			if (P.Z <= 0.0f) break;
 		}
-		return Ball.PredictLanding();
+		OutPos = Ball.PredictLanding();
+		return -1.0f;
 	}
 
 	private void FaceBall()
@@ -328,8 +481,11 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else if (Touches == 2)
 		{
-			// Our set is up; I attack. Get to the net under the set so I can spike.
-			Target = FVector(Sign * 150.0f, Landing.Y, FloorZ + PlayerHeight);
+			// Our set is up and my TEAMMATE attacks (I just set it — AmIHitter
+			// never gives me two touches in a row). COVER the attack: drop to
+			// mid-court behind the hitter for the block rebound. Running to the
+			// net with them just crowded the attack lane with two bodies.
+			Target = FVector(Sign * 480.0f, Landing.Y * 0.5f, FloorZ + PlayerHeight);
 		}
 		else
 		{
@@ -353,8 +509,11 @@ class AAIPlayer : AVolleyballPlayer
 		// the line between us until we're far enough apart.
 		Target = SpreadFromTeammate(Target);
 
-		// Take the spot and HOLD it (no constant shuffling), facing the play.
-		MoveToHold(ClampToCourt(Target), DeltaTime);
+		// Take the spot and HOLD it (no constant shuffling), facing the play in a
+		// ready stance. Repositioning is a jog, not a sprint — there's no ball to
+		// chase, just ground to cover.
+		MoveToHold(ClampToCourt(Target), DeltaTime, 0.75f);
+		RequestCrouch(0.18f);
 		FaceAttacker();
 	}
 
@@ -394,28 +553,102 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// ---------------------------------------------------------------
-	// Spike approach: time the jump so contact happens at the top
+	// Spike approach — world-class shape: wait loaded at an approach start point
+	// BEHIND the predicted strike spot, then a committed sprint through the
+	// plant, jumping so the apex coincides with the ball arriving at strike
+	// height. Momentum now carries through the jump (no air steering), which is
+	// exactly how a real approach converts run speed into attack reach.
 	// ---------------------------------------------------------------
+	// Hand height at the top of the jump: standing overhead reach (~245cm) plus
+	// jump rise (JumpVelocity²/2g ≈ 184cm) — where the ball should be struck.
+	const float SpikeStrikeZ = 380.0f;
+	const float ApproachBack = 200.0f;  // run-up starts this far behind the plant
+
 	private void ApproachForSpike(float DeltaTime)
 	{
-		// Stand just behind the net under the ball's current X, ready to swing
-		FVector UnderBall = FVector(Ball.Position.X, Ball.Position.Y, FloorZ + PlayerHeight);
-		UnderBall = ClampToCourt(UnderBall);
-		MoveToward2D(UnderBall, DeltaTime);
+		float TimeToApex = JumpVelocity / 980.0f;   // ≈ 0.61s
 
-		float Horiz = (GetActorLocation() - FVector(Ball.Position.X, Ball.Position.Y, 0)).Size2D();
-		float BallZ = Ball.Position.Z;
+		FVector Strike;
+		float Tau = PredictBallTimeToHeight(SpikeStrikeZ, Strike);
 
-		// Jump when the ball is high, descending into strike range, and we're under it
-		if (bIsGrounded && Horiz < 130.0f && BallZ > SpikeMinZ && Ball.BallVel.Z < 120.0f)
-			Jump();
-
-		// Prepare the spike EARLY: as soon as we're approaching (and the ball is up),
-		// start winding up — face the ball, aim, and cock the arm — so the swing is
-		// loaded by the time we strike instead of snapping at the last moment.
-		if (Horiz < PrepareDistance && BallZ > 150.0f)
+		if (Tau < 0.0f)
 		{
+			// The set never gets to strike height — no jump attack available. Get
+			// under where it drops to play height and hit it over instead.
+			FVector PlaySpot = PredictBallAtHeight(ContactHeight());
+			MoveToward2D(ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0)), DeltaTime);
 			FaceBall();
+			DoSpike();   // still aim into the opponent court
+			if ((GetActorLocation() - Ball.Position).Size() < PrepareDistance)
+				Reach(EHitType::Hit_Bump);
+			return;
+		}
+
+		// Plant just our-side of the strike point so contact happens in front of
+		// the hitting shoulder, not on top of the head.
+		FVector Plant = ClampToCourt(FVector(Strike.X + MySign() * 35.0f, Strike.Y, 0));
+		float DistToPlant = (GetActorLocation() - Plant).Size2D();
+		float SprintTime = DistToPlant / MoveSpeed + 0.15f;   // + first-step lag
+
+		bool bGo = false;
+		if (bIsGrounded)
+		{
+			if (Tau > SprintTime + TimeToApex + 0.25f)
+			{
+				// Early: wait loaded at the approach start point behind the plant —
+				// coiled stance, eyes on the ball, arms QUIET until the run starts.
+				FVector Start = ClampToCourt(Plant + FVector(MySign() * ApproachBack, 0, 0));
+				MoveToHold(Start, DeltaTime, 0.8f);
+				RequestCrouch(0.25f);
+				FaceBall();
+			}
+			else
+			{
+				bGo = true;
+				// GO: committed sprint through the plant point, shoulders OPEN —
+				// a right-handed hitter runs in with the left shoulder leading and
+				// the chest turned ~22° off the ball line, loading the torso. The
+				// body squares up through the jump (FaceBall in the air + the slow
+				// rotation lerp gives exactly that uncoiling).
+				MoveToward2D(Plant, DeltaTime, true);
+				FVector To = Ball.Position - GetActorLocation();
+				To.Z = 0;
+				if (To.SizeSquared() > 1.0f)
+				{
+					const float OpenRad = -22.0f * PI / 180.0f;
+					float C = Math::Cos(OpenRad);
+					float Sn = Math::Sin(OpenRad);
+					FVector N = To.GetSafeNormal();
+					FacingDir = FVector(N.X * C - N.Y * Sn, N.X * Sn + N.Y * C, 0);
+					bHasFacing = true;
+				}
+				// Leave the ground one apex-time before the ball reaches the strike
+				// height; stop driving so the jump converts momentum, not input.
+				// The margin covers the AI's reaction gap (~0.11s): jumping a beat
+				// EARLY meets the ball just before apex (still high); late means
+				// striking a dropped ball at shoulder height.
+				if (DistToPlant < 90.0f && Tau <= TimeToApex + 0.18f)
+				{
+					MovePlayer(FVector2D::ZeroVector);
+					Jump();
+					if (bDebugAI) Log(DebugTag() + " SPIKE JUMP tau=" + int(Tau * 100) + " dist=" + int(DistToPlant));
+				}
+			}
+		}
+		else
+		{
+			// Airborne: no swimming; momentum carries us to the strike. Square the
+			// shoulders to the ball — uncoiling from the open approach stance.
+			MovePlayer(FVector2D::ZeroVector);
+			FaceBall();
+		}
+
+		// Wind up ONLY during the committed run and the jump itself — an attacker
+		// standing at the approach start with arms already loaded read as random
+		// arm-raising. The IK develops backswing -> cocked -> strike as the ball
+		// drops toward the strike point.
+		if ((bGo || !bIsGrounded) && Ball.Position.Z > 150.0f)
+		{
 			DoSpike();
 			Reach(EHitType::Hit_Spike);
 		}
@@ -436,31 +669,27 @@ class AAIPlayer : AVolleyballPlayer
 
 	private void DoDig()
 	{
-		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone with a HIGH
-		// arc — high enough that the setter has time to run under it and play a proper
-		// fingerpass instead of a scramble bagger. Aiming through the centre (Y=0) is
-		// what makes the 2nd-ball attack easy either direction.
+		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone. The
+		// contact is ballistic (BallisticVelocity in OnBallContact): the aim point
+		// is where the arc comes DOWN — chest height in the setter zone, centre
+		// court (Y=0) so the 2nd-ball attack can go either direction.
 		FVector Zone = SetterZone();
-		AimAt(FVector(Zone.X, Zone.Y, 520.0f));
+		AimAt(FVector(Zone.X, Zone.Y, 150.0f));
 	}
 
 	private void DoSet()
 	{
-		// Set: a HIGH, safe arc that the attacker can comfortably get under and swing
-		// on. Two things make a good set here:
-		//  - place it OFF the net (~250cm in from the net, not glued to it) so the
-		//    attacker has room to approach and isn't crammed against the tape, and
-		//  - send it HIGH (peak well above the net) so they have time to arrive, plant,
-		//    jump and meet it at the top — a low fast set is what made attacks fail.
+		// Set: a HIGH float the attacker can take a full jump attack on. Ballistic
+		// contact: aim at the attack spot, arc apex ~3m above — the ball crosses
+		// strike height (~SpikeStrikeZ) descending right over the plant point.
+		//  - placed OFF the net (~250cm in) so the hitter has room to approach,
+		//  - aimed at the front player's Y so the approach is short.
 		float Sign = MySign();
-		float SetX = Sign * 250.0f;   // off the net, room to attack (was 120 = glued to net)
+		float SetX = Sign * 250.0f;
 		float SetY = (Teammate != nullptr && Teammate.Role == EPlayerRole::Role_Front)
 			? Teammate.GetActorLocation().Y
 			: Ball.Position.Y * 0.4f;
-		FVector AttackSpot = FVector(SetX, SetY, FloorZ + PlayerHeight);
-		// High arc: ~3m of peak above the attack spot so the ball floats up and the
-		// hitter has time. AimAt sets the target the ball is launched toward.
-		AimAt(AttackSpot + FVector(0, 0, 520.0f));
+		AimAt(FVector(SetX, SetY, 170.0f));
 	}
 
 	private void DoSpike()
@@ -531,11 +760,11 @@ class AAIPlayer : AVolleyballPlayer
 
 		if (Role == EPlayerRole::Role_Front && bAttackable)
 		{
-			// COMMIT TO BLOCK: get to the net in line with the ball, then jump and
-			// throw the hands up. We position to the BALL's Y (where the spike comes
-			// from), aim the block toward the middle of the opponent's court, and —
-			// crucially — once airborne we STOP repositioning so we don't drift in
-			// the air; the IK reaches the hands to the ball.
+			// BLOCK, with discipline. Grounded at the net = LOW ready stance,
+			// hands loaded — never arms-up statue. The block jump keys off the
+			// real cue elite blockers use: the ATTACKER LEAVING THE GROUND (with a
+			// fast-descending ball at the net as fallback). Arms go up only once
+			// we're airborne; the IK reaches the hands to the ball.
 			float NetX = MySign() * 55.0f;   // right up at the net on our side
 			float BlockY = Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f);
 			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
@@ -544,21 +773,39 @@ class AAIPlayer : AVolleyballPlayer
 			// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
 			AimAt(FVector(-MySign() * 300.0f, 0.0f, FloorZ));
 
+			AAIPlayer Att = FindAttackingOpponent();
+			bool bAttackerAirborne = (Att != nullptr && !Att.bIsGrounded);
+			bool bBallNearNet = Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f;
+			bool bSpikeIncoming = (bAttackerAirborne && bBallNearNet)
+				|| (bBallNearNet && Ball.BallVel.Z < -250.0f);   // already smashed/dropping fast
+
 			if (bIsGrounded)
 			{
-				// On the ground: move into position, then jump when the strike is near.
 				float Horiz = (GetActorLocation() - FVector(Goal.X, Goal.Y, 0)).Size2D();
-				if (Horiz < 90.0f && Ball.Position.Z > SpikeMinZ && Ball.BallVel.Z < 150.0f)
-					Jump();
-				MoveToward2D(Goal, DeltaTime);
+				if (bSpikeIncoming && Horiz < 90.0f)
+				{
+					// Kill the drive FIRST so the block jump is vertical — momentum
+					// carries in the air, and drifting into the net is a fault.
+					MovePlayer(FVector2D::ZeroVector);
+					float HSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+					if (HSpd < 90.0f)
+						Jump();
+				}
+				else
+				{
+					// Track the ball along the net in a loaded stance, hands low.
+					MoveToward2D(Goal, DeltaTime, false, 0.85f);
+					RequestCrouch(0.3f);
+				}
 			}
 			else
 			{
-				// Airborne: hold still (no drift) and throw up the block.
+				// Airborne: hold still (no drift) and throw up the block NOW.
 				MovePlayer(FVector2D::ZeroVector);
+				Reach(EHitType::Hit_Block);
 			}
-			Reach(EHitType::Hit_Block);
-			if (bDebugAI) Log(DebugTag() + " DEFEND BLOCK ballZ=" + int(Ball.Position.Z) + " air=" + !bIsGrounded);
+			if (bDebugAI) Log(DebugTag() + " DEFEND BLOCK ballZ=" + int(Ball.Position.Z)
+				+ " air=" + !bIsGrounded + " incoming=" + bSpikeIncoming);
 			return;
 		}
 		else if (Role == EPlayerRole::Role_Back && bAttackable)
@@ -584,8 +831,11 @@ class AAIPlayer : AVolleyballPlayer
 
 		if (bDebugAI) Log(DebugTag() + " DEFEND " + (bAttackable ? "BLOCK/COVER" : "SPLIT")
 			+ " ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
-		// Take the defensive spot and HOLD it, facing the play.
-		MoveToHold(ClampToCourt(Goal), DeltaTime);
+		// Take the defensive spot and HOLD it, facing the play — in a LOW athletic
+		// base, never flat-footed upright: a defender waiting tall reads amateur.
+		// Jog into position; the explosive moves are saved for reads.
+		MoveToHold(ClampToCourt(Goal), DeltaTime, 0.75f);
+		RequestCrouch(0.22f);
 		FaceAttacker();
 	}
 
@@ -615,6 +865,19 @@ class AAIPlayer : AVolleyballPlayer
 
 	private bool IsPassAttackable()
 	{
+		// A block is only ever an answer to the opponent BUILDING an attack — they
+		// must have touched the ball this possession. Serves and balls we just
+		// sent over are met in receive formation, never at the net (nobody blocks
+		// a serve; committing the front player to the net against serves forced a
+		// hopeless 3m backpedal whenever the serve turned out to be his).
+		ABeachVolleyballGameState GSB = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		ETeam Opp = (TeamSide == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+		if (GSB == nullptr || GSB.LastTouchTeam != Opp || GSB.TouchesThisRally < 1)
+		{
+			bCommittedToBlock = false;
+			return false;
+		}
+
 		float BallOffNet = Math::Abs(Ball.Position.X);
 		float BallZ = Ball.Position.Z;
 		bool bOpponentSide = (TeamSide == ETeam::Team_A) ? Ball.Position.X > -50.0f
@@ -708,14 +971,65 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	// Movement (no auto-jump here — jumping is decided by spike logic)
 	// ---------------------------------------------------------------
-	private void MoveToward2D(FVector Target, float Dt)
+	private void MoveToward2D(FVector Target, float Dt, bool bSprint = false, float SpeedCap = 1.0f)
 	{
 		FVector Dir = Target - GetActorLocation();
 		Dir.Z = 0;
-		if (Dir.Size2D() > 8.0f)
-			MovePlayer(FVector2D(Dir.GetSafeNormal2D().X, Dir.GetSafeNormal2D().Y));
-		else
+		float D = Dir.Size2D();
+		if (D <= 8.0f)
+		{
 			MovePlayer(FVector2D::ZeroVector);
+			return;
+		}
+
+		// Pros decelerate INTO position (gather step) instead of running full tilt
+		// and stopping dead — except on a committed spike approach (bSprint).
+		// SpeedCap lets callers hustle only as fast as the situation demands.
+		float Scale = bSprint ? 1.0f : Math::Min(Math::Clamp(D / 150.0f, 0.4f, 1.0f), SpeedCap);
+
+		// During the split step the feet are planted; only a tiny shuffle allowed.
+		if (SplitStepTimer > 0.0f)
+			Scale *= 0.12f;
+
+		FVector N = Dir.GetSafeNormal2D();
+		MovePlayer(FVector2D(N.X * Scale, N.Y * Scale));
+	}
+
+	// --- Split step: the signature read-and-react habit of elite defenders — a
+	// quick loading dip with planted feet the instant the OPPONENT strikes the
+	// ball (or the serve launches), THEN explode toward the read.
+	protected float SplitStepTimer = 0.0f;
+	const float SplitStepDuration = 0.26f;
+	private int PrevTouchStamp = -1;
+	private bool bPrevBallInPlay = false;
+
+	protected void UpdateSplitStep(float Dt)
+	{
+		if (SplitStepTimer > 0.0f)
+		{
+			SplitStepTimer -= Dt;
+			// Dip envelope: sink and rise over the duration.
+			float Prog = 1.0f - SplitStepTimer / SplitStepDuration;
+			ExtraCrouch = Math::Max(ExtraCrouch, 0.5f * Math::Sin(Prog * PI));
+		}
+		if (Ball == nullptr) return;
+
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr) return;
+
+		// Serve launch: the ball just went live against us.
+		if (Ball.bInPlay && !bPrevBallInPlay && GS.ServingTeam != TeamSide)
+			SplitStepTimer = SplitStepDuration;
+		bPrevBallInPlay = Ball.bInPlay;
+
+		// Opponent contact: their touch team/count just changed.
+		int Stamp = int(GS.LastTouchTeam) * 100 + GS.TouchesThisRally;
+		if (Stamp != PrevTouchStamp)
+		{
+			if (GS.LastTouchTeam != TeamSide && GS.LastTouchTeam != ETeam::Team_None && Ball.bInPlay)
+				SplitStepTimer = SplitStepDuration;
+			PrevTouchStamp = Stamp;
+		}
 	}
 
 	// Positional "hold": move to the target, but once we arrive STAY PUT until the
@@ -723,7 +1037,7 @@ class AAIPlayer : AVolleyballPlayer
 	// defense/support — you take your spot, face up, and stand still. Hysteresis:
 	// start moving only past StartMoving, stop as soon as within Arrived.
 	private bool bHolding = false;
-	private void MoveToHold(FVector Target, float Dt)
+	protected void MoveToHold(FVector Target, float Dt, float SpeedCap = 1.0f)
 	{
 		const float StartMoving = 110.0f;   // must drift this far before we re-chase
 		const float Arrived     = 35.0f;    // close enough — plant and hold
@@ -741,7 +1055,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (bHolding)
 			MovePlayer(FVector2D::ZeroVector);        // stand still
 		else
-			MoveToward2D(Target, Dt);
+			MoveToward2D(Target, Dt, false, SpeedCap);
 	}
 
 	// ---------------------------------------------------------------

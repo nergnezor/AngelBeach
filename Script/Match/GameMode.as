@@ -235,24 +235,42 @@ class ABeachVolleyballGameMode : AGameModeBase
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr || Ball == nullptr) return;
 
-		FVector ServeOrigin;
+		// Serve must clearly clear the 243cm net ~5-8m away: strong forward +
+		// strong upward arc. The velocity is handed to the SERVING PLAYER, who
+		// performs a real toss + overhead strike and launches the ball from the
+		// strike point (see AAIPlayer.RunServeSequence). Rally bookkeeping happens
+		// in OnServeLaunched at the strike moment.
 		FVector ServeVel;
-
-		// Serve must clearly clear the 243cm net ~5-8m away. Launch high and with
-		// enough horizontal speed: from X=±800 the ball travels ~8m to land deep in
-		// the opponent court. Strong forward + strong upward arc.
+		AAIPlayer Server;
 		if (GS.ServingTeam == ETeam::Team_A)
 		{
-			ServeOrigin = FVector(-800, 0, 250);
 			ServeVel = FVector(850, Math::RandRange(-120.0f, 120.0f), 600);
+			Server = HumanPawn;
 		}
 		else
 		{
-			ServeOrigin = FVector(800, 0, 250);
 			ServeVel = FVector(-850, Math::RandRange(-120.0f, 120.0f), 600);
+			Server = PlayerB1;
 		}
 
-		Ball.Launch(ServeOrigin, ServeVel);
+		if (Server != nullptr)
+		{
+			Server.BeginServe(ServeVel);
+		}
+		else
+		{
+			// Fallback (server missing): old direct launch so the match never stalls.
+			float Sign = (GS.ServingTeam == ETeam::Team_A) ? -1.0f : 1.0f;
+			Ball.Launch(FVector(Sign * 800.0f, 0, 250), ServeVel);
+			OnServeLaunched();
+		}
+	}
+
+	// Called by the serving player at the strike moment (ball just went live).
+	void OnServeLaunched()
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr) return;
 		GS.StartRally();
 
 		// Track the serve until it clears the net. A serve must go directly over —

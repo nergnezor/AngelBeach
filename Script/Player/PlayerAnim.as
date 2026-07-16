@@ -18,6 +18,7 @@ enum EHitType
 	Hit_Set,    // handpass — overhead two-hand set
 	Hit_Spike,  // attack — overhead one-arm swing
 	Hit_Block,  // block — both hands up at the net, reaching over toward the ball
+	Hit_Serve,  // serve — left-hand toss, overhead right-arm strike (ServePhase drives it)
 }
 
 // Data carrier between gameplay code and the Animation Blueprint. Holds no

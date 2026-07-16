@@ -59,31 +59,48 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 	FVector PoleL;
 	float Crouch = 0.0f;
 
+	// 0 -> 1 over the contact swing (TriggerHit envelope): lets poses swing
+	// THROUGH the ball along the aim at contact instead of freezing on it.
+	float Swing = Self.SwingProgress();
+
 	if (Self.CurrentHit == EHitType::Hit_Bump)
 	{
-		// Bagger/dig: arms STRAIGHT and flat, hands JOINED under the ball so the
-		// forearm platform meets it. Both hands converge on the ball contact,
-		// pulled a little low so the platform is beneath the ball.
+		// Bagger/dig: arms STRAIGHT, hands JOINED, contact on the FOREARMS. The
+		// hand targets are pushed to near-full extension along the shoulder->ball
+		// line — even past the ball if it's close — because a bent-elbow "hands on
+		// the ball" pose reads as poking, not a platform. With the hands beyond the
+		// ball line, the forearm segment is what meets the ball (which is also
+		// where GetArmContact tests lowerarm bones).
 		FVector Platform = BallContact - Up * 12.0f;
-		ContactR = Platform - Right * 6.0f;
-		ContactL = Platform + Right * 6.0f;
-		// Elbows pulled DOWN and back so the arms lock out straight.
-		PoleR = ContactR - Up * 45.0f - Fwd * 25.0f;
-		PoleL = ContactL - Up * 45.0f - Fwd * 25.0f;
+		FVector PlatDir = (Platform - ChestMid).GetSafeNormal();
+		if (PlatDir.SizeSquared() < 0.01f) PlatDir = Fwd - Up;
+		float Ext = Math::Max((Platform - ChestMid).Size(), 96.0f);  // lock the elbows out
+		FVector PlatEnd = ChestMid + PlatDir * Ext;
+		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
+		// a bagger is a controlled swing from the shoulders, not a held tray.
+		PlatEnd += (AimFlat * 26.0f + Up * 18.0f) * Swing;
+		ContactR = PlatEnd - Right * 5.0f;
+		ContactL = PlatEnd + Right * 5.0f;
+		// Elbow hints sit ON the shoulder->hand line, nudged down/in, so the IK
+		// keeps the arms straight instead of chicken-winging them outward.
+		PoleR = ShR + PlatDir * 45.0f - Up * 22.0f - Right * 6.0f;
+		PoleL = ShL + PlatDir * 45.0f - Up * 22.0f + Right * 6.0f;
 		// Forearm platform faces up toward the aim arc.
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
-		Crouch = 0.6f;
+		// Hips back, knees bent — a platform without a squat reads as bending over.
+		Crouch = 0.7f;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{
 		// Fingerpass/set: hands form a CUP under/around the ball above the brow,
-		// elbows forward. On contact (Blend->1) the palms push up-forward toward
-		// the aim, as if shoving the ball away.
+		// elbows forward. At contact the arms EXTEND fully through the ball toward
+		// the aim (the wrist/elbow extension is what a set's power comes from).
 		FVector Cup = BallContact - Up * 6.0f;               // hands just under the ball
-		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal() * 14.0f;
-		ContactR = Cup - Right * 11.0f + Push * Blend;
-		ContactL = Cup + Right * 11.0f + Push * Blend;
+		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();
+		FVector Extend = Push * (6.0f * Blend + 26.0f * Swing);
+		ContactR = Cup - Right * 11.0f + Extend;
+		ContactL = Cup + Right * 11.0f + Extend;
 		// Elbows point FORWARD (and slightly out) — the set's signature shape.
 		PoleR = ShR + Fwd * 40.0f - Right * 10.0f;
 		PoleL = ShL + Fwd * 40.0f + Right * 10.0f;
@@ -93,30 +110,58 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Spike)
 	{
-		// Spike, in two phases driven by Blend (0 = cock, 1 = strike):
-		//  - LEFT arm aims at the ball throughout (points/tracks it before the hit).
-		//  - RIGHT hand starts cocked just OUTSIDE the right cheek, then swings
-		//    forward/up to strike with a near-straight arm ABOVE and slightly in
-		//    FRONT of the right shoulder.
-		// Left arm: extend toward the ball (clamped to arm reach), tracking it.
-		FVector ToBallL = (BallContact - ShL);
-		float ReachL = 95.0f;
-		if (ToBallL.Size() > ReachL) ToBallL = ToBallL.GetSafeNormal() * ReachL;
-		ContactL = ShL + ToBallL;
-		PoleL = ShL + ToBallL * 0.4f - Up * 15.0f;   // elbow softly under the aim line
-		PalmL = ToBallL.GetSafeNormal().Rotation();
-
-		// Right hand cocked outside the right cheek (head height, out to the right,
-		// slightly back), then driving to a strike point above + in front of the
-		// right shoulder, reaching toward the ball's height.
+		// Spike — the real arm choreography, driven by how far the ball has
+		// DESCENDED toward the strike point (SwingPhase 0 = loading, 1 = contact):
+		//  - RIGHT arm: backswing (hand low behind the hip) -> cocked (outside the
+		//    right cheek) -> strike (above/in front of the shoulder).
+		//  - LEFT arm: the timing arm. POINTS at the ball through the windup, then
+		//    PULLS DOWN to the ribs as the right whips through — the counter-
+		//    rotation every real hitter uses for power. A left arm that keeps
+		//    pointing through contact is the tell of a video-game spike.
+		FVector BackSw = ShR - Fwd * 30.0f - Up * 30.0f + Right * 20.0f;  // behind the hip
 		FVector Cheek  = Head + Right * 22.0f + Up * 2.0f - Fwd * 8.0f;   // outside right cheek
 		float StrikeUp = Math::Max(35.0f, BallContact.Z - ShR.Z);         // reach up to ball
 		FVector Strike = ShR + Up * StrikeUp + Fwd * 22.0f + Right * 6.0f; // above & front of R shoulder
-		ContactR = Cheek + (Strike - Cheek) * Blend;
+
+		float SwingPhase = Blend;
+		{
+			ABall SB = Self.GetWorldBall();
+			if (SB != nullptr && SB.bInPlay)
+			{
+				// 0 when the ball is >=260cm above the strike height, 1 at contact.
+				float Drop = SB.Position.Z - Strike.Z;
+				SwingPhase = Math::Clamp(1.0f - Drop / 260.0f, 0.0f, 1.0f) * Blend;
+			}
+		}
+
+		// Left arm: point at the ball, then tuck hard as the swing comes through.
+		FVector ToBallL = (BallContact - ShL);
+		float ReachL = 95.0f;
+		if (ToBallL.Size() > ReachL) ToBallL = ToBallL.GetSafeNormal() * ReachL;
+		FVector PointL = ShL + ToBallL;
+		FVector TuckL  = ShL - Up * 28.0f + Fwd * 12.0f;   // elbow-down tuck at the ribs
+		if (SwingPhase < 0.55f)
+		{
+			ContactL = PointL;
+			PoleL = ShL + ToBallL * 0.4f - Up * 15.0f;     // elbow softly under the aim line
+			PalmL = ToBallL.GetSafeNormal().Rotation();
+		}
+		else
+		{
+			float Pull = (SwingPhase - 0.55f) / 0.45f;
+			ContactL = PointL + (TuckL - PointL) * Pull;
+			PoleL = ShL - Up * 20.0f - Fwd * 10.0f;        // elbow folds down/back
+			PalmL = (-Up).Rotation();
+		}
+
+		if (SwingPhase < 0.45f)
+			ContactR = BackSw + (Cheek - BackSw) * (SwingPhase / 0.45f);
+		else
+			ContactR = Cheek + (Strike - Cheek) * ((SwingPhase - 0.45f) / 0.55f);
 		// Elbow stays high and back early, leading the hand on the swing.
 		PoleR = ContactR + Up * 25.0f - Fwd * 30.0f + Right * 10.0f;
 		// Palm faces the aim/down as it comes over the top.
-		PalmR = (AimFlat * 0.5f + Up * (1.0f - Blend) - Up * 0.3f * Blend).GetSafeNormal().Rotation();
+		PalmR = (AimFlat * 0.5f + Up * (1.0f - SwingPhase) - Up * 0.3f * SwingPhase).GetSafeNormal().Rotation();
 		Crouch = 0.0f;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Block)
@@ -142,17 +187,74 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		PalmL = PalmDir.Rotation();
 		Crouch = 0.0f;
 	}
+	else if (Self.CurrentHit == EHitType::Hit_Serve)
+	{
+		// Serve, choreographed by ServePhase (0..1, driven by the AI's serve
+		// sequence — NOT by the ball):
+		//  - LEFT arm carries the ball up from the chest to a toss apex in front
+		//    of the RIGHT shoulder (textbook toss placement), then tucks away.
+		//  - RIGHT arm draws back behind the ear like a bow, whips overhead to
+		//    strike at the apex, and follows through down the aim line.
+		float P = Math::Clamp(Self.ServePhase, 0.0f, 1.0f);
+		FVector TossApex = ChestMid + Fwd * 24.0f + Up * 62.0f + Right * 10.0f;
+
+		FVector TossStart = ChestMid + Fwd * 30.0f - Up * 6.0f + Right * 6.0f;
+		FVector TossHand  = TossApex - Up * 16.0f;   // ball rides 16cm above this hand
+		FVector TuckL     = ShL - Up * 26.0f + Fwd * 10.0f;
+		if (P < 0.6f)
+		{
+			float T = P / 0.6f;
+			ContactL = TossStart + (TossHand - TossStart) * (T * T * (3.0f - 2.0f * T)); // smoothstep lift
+			PoleL = ShL + Fwd * 35.0f - Up * 4.0f;
+			PalmL = Up.Rotation();                    // palm up, carrying the ball
+		}
+		else
+		{
+			float T = (P - 0.6f) / 0.4f;
+			ContactL = TossHand + (TuckL - TossHand) * T;
+			PoleL = ShL - Up * 18.0f - Fwd * 8.0f;
+			PalmL = (-Up).Rotation();
+		}
+
+		FVector RestR   = ShR + Fwd * 15.0f - Up * 22.0f;
+		FVector DrawR   = Head + Right * 24.0f - Fwd * 14.0f + Up * 4.0f;  // drawn behind the ear
+		FVector StrikeR = TossApex + Up * 6.0f;                            // meet the ball at the apex
+		FVector FollowR = ShR + Fwd * 55.0f + Up * 8.0f;
+		if (P < 0.55f)
+		{
+			float T = P / 0.55f;
+			ContactR = RestR + (DrawR - RestR) * (T * T);
+			PoleR = ContactR + Up * 20.0f - Fwd * 25.0f + Right * 12.0f;
+		}
+		else if (P < 0.85f)
+		{
+			float T = (P - 0.55f) / 0.30f;
+			ContactR = DrawR + (StrikeR - DrawR) * T;
+			PoleR = ContactR + Up * 18.0f - Fwd * 20.0f + Right * 10.0f;
+		}
+		else
+		{
+			float T = (P - 0.85f) / 0.15f;
+			ContactR = StrikeR + (FollowR - StrikeR) * T;
+			PoleR = ContactR + Up * 10.0f + Right * 12.0f;
+		}
+		PalmR = (AimFlat * 0.7f - Up * 0.3f).GetSafeNormal().Rotation();
+
+		// Small gather-dip as the toss goes up, legs extending through the strike.
+		Crouch = 0.22f * Math::Sin(Math::Clamp(P / 0.7f, 0.0f, 1.0f) * PI);
+	}
 	else
 	{
 		ContactR = ReadyR; ContactL = ReadyL;
 		PoleR = ShR - Up * 40.0f; PoleL = ShL - Up * 40.0f;
 	}
 
-	// Ease from ready to the contact pose by the gesture weight. The spike/block
-	// build their own motion into ContactR/L via Blend, so they should NOT be
-	// re-lerped from the ready pose (that would start the hand at the hip instead
-	// of cocked/up). Other hits ease from ready as usual.
-	if (Self.CurrentHit == EHitType::Hit_Spike || Self.CurrentHit == EHitType::Hit_Block)
+	// Ease from ready to the contact pose by the gesture weight. The spike/block/
+	// serve build their own motion into ContactR/L (via SwingPhase/ServePhase), so
+	// they should NOT be re-lerped from the ready pose (that would start the hand
+	// at the hip instead of cocked/up). Other hits ease from ready as usual.
+	if (Self.CurrentHit == EHitType::Hit_Spike || Self.CurrentHit == EHitType::Hit_Block
+		|| Self.CurrentHit == EHitType::Hit_Serve)
 	{
 		Self.Anim.HandTargetR = ContactR;
 		Self.Anim.HandTargetL = ContactL;
@@ -166,5 +268,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 	Self.Anim.ElbowPoleL  = PoleL;
 	Self.Anim.HandRotR    = PalmR;
 	Self.Anim.HandRotL    = PalmL;
-	Self.Anim.CrouchAmount = Crouch * Blend;
+	// Pose crouch plus whatever extra the AI asked for this frame (ready stance,
+	// split step, dive) — the deepest request wins, capped at full crouch.
+	Self.Anim.CrouchAmount = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
 }
