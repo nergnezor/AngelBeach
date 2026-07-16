@@ -45,6 +45,37 @@ jobs:
           echo "Android SDK : $ANDROID_HOME"
           echo "Android NDK : $ANDROID_NDK_HOME"
 
+      - name: Ensure Zen storage server is running
+        run: |
+          # Zen normally auto-launches scoped to the Cook subprocess's PID and dies the
+          # instant Cook exits, which breaks the following Stage step (Connection refused).
+          # Run it as a detached, session-independent daemon so it survives across steps
+          # and jobs. No-op if a healthy instance is already up.
+          if curl -sf http://localhost:8558/health/ready > /dev/null 2>&1; then
+            echo "Zen already running and healthy."
+          else
+            echo "Starting standalone Zen server..."
+            setsid nohup "$ENGINE_DIR/Engine/Binaries/Linux/zenserver" \
+              --port 8558 \
+              --data-dir "$HOME/.config/Epic/UnrealEngine/Common/Zen/Data" \
+              --http asio \
+              --gc-cache-duration-seconds 1209600 \
+              --gc-interval-seconds 21600 \
+              --gc-low-diskspace-threshold 2147483648 \
+              --cache-bucket-limit-overwrites \
+              --quiet \
+              > /tmp/zenserver-standalone.log 2>&1 < /dev/null &
+            disown
+            for i in $(seq 1 30); do
+              curl -sf http://localhost:8558/health/ready > /dev/null 2>&1 && break
+              sleep 1
+            done
+            curl -sf http://localhost:8558/health/ready > /dev/null 2>&1 || {
+              echo "ERROR: Zen server failed to start"; cat /tmp/zenserver-standalone.log; exit 1
+            }
+            echo "Zen server started."
+          fi
+
       - name: Build C++ module (Android)
         run: |
           "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
