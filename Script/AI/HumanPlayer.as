@@ -46,8 +46,26 @@ class AHumanPlayer : AAIPlayer
 		UpdatePlayer(DeltaTime);
 
 		if (Ball == nullptr) FindBall();
-		if (Ball == nullptr || !Ball.bInPlay)
+
+		// Split step reacts to opponent contacts at full frame rate (same as the
+		// pure AI player — see AAIPlayer.Tick).
+		UpdateSplitStep(DeltaTime);
+
+		// Serve sequence owns the pawn (AI serves even for the human side until
+		// gamepad serving exists). Runs through the follow-through past launch.
+		if (bServing)
+		{
+			RunServeSequence(DeltaTime);
 			return;
+		}
+
+		if (Ball == nullptr || !Ball.bInPlay)
+		{
+			bIMadeLastTouch = false;
+			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
+			PreFaceForServe();
+			return;
+		}
 
 		if (bPlayerControlled)
 		{
