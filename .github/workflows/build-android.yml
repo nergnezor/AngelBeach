@@ -49,7 +49,9 @@ jobs:
               exit 1
             }
             yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-            "$SDKMANAGER" "ndk;$NDK_VERSION"
+            # NDK plus the SDK bits gradle needs to assemble the APK.
+            "$SDKMANAGER" "ndk;$NDK_VERSION" \
+              "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           fi
           test -d "$NDK_DIR" || { echo "ERROR: NDK still missing at $NDK_DIR"; exit 1; }
 
@@ -78,13 +80,42 @@ jobs:
             -noP4 \
             -platform=Android \
             -clientconfig=Development \
-            -cook -build -stage \
+            -cook -build -stage -package -archive \
             -nozenstore \
-            -skippackage
+            -archivedirectory="$OUTPUT_DIR"
 
-      - name: Upload artifact
+      - name: Collect APK
+        run: |
+          APK_DIR="$GITHUB_WORKSPACE/Artifacts/apk"
+          mkdir -p "$APK_DIR"
+          found=0
+          # The APK lands in the archive dir and/or the staged build tree.
+          while IFS= read -r apk; do
+            echo "Found APK: $apk"
+            cp -f "$apk" "$APK_DIR/"
+            found=1
+          done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
+                     -name '*.apk' 2>/dev/null)
+          if [ "$found" = "0" ]; then
+            echo "ERROR: packaging produced no .apk"
+            exit 1
+          fi
+          ls -lh "$APK_DIR"
+
+      # The APK as its own dedicated artifact.
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-${{ github.sha }}
+          name: android-apk-${{ github.sha }}
+          path: Artifacts/apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Full staged build (loose files) kept as a separate artifact.
+      - name: Upload staged build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-staged-${{ github.sha }}
           path: Saved/StagedBuilds/Android/
+          if-no-files-found: warn
           retention-days: 14
