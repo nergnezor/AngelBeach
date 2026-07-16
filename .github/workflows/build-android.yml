@@ -92,7 +92,7 @@ jobs:
             -platform=Android \
             -cookflavor=Multi \
             -clientconfig=Development \
-            -cook -build -stage -pak -archive \
+            -cook -build -stage -pak -package -archive \
             -iterativecooking \
             -ddc="$UE_DERIEDDATACACHE_ROOT" \
             -archivedirectory="$OUTPUT_DIR"
