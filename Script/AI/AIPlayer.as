@@ -331,13 +331,23 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// Stand where the ball will be when it drops to PLAY height (waist/chest),
-		// not at its ground landing spot. A bagger meets the ball ~1m up while it's
-		// still travelling, so aiming at the Z=0 landing point leaves us a metre
-		// short horizontally — exactly the gap the debug meter showed (~105cm).
+		// Stand where the ball will be when it drops to PLAY height — MINUS a
+		// standoff along the ball's flight, so the contact happens IN FRONT of
+		// the chest where the platform/cup is, never on top of the head. This is
+		// the core of physical ball control: body behind the ball, facing it,
+		// meeting it in front.
 		FVector PlaySpot;
-		float TauC = PredictBallTimeToHeight(ContactHeight(), PlaySpot);
-		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0));
+		float TauC = PredictBallTimeToHeight(ContactHeightFor(Intend), PlaySpot);
+		// Standoff along the flight CHORD (ball -> predicted spot): stable, unlike
+		// the live velocity which swings during the rally and made the goal churn.
+		// Only applied while the ball is actually inbound toward the spot.
+		FVector Chord = FVector(PlaySpot.X - Ball.Position.X, PlaySpot.Y - Ball.Position.Y, 0);
+		FVector Vel2D = FVector(Ball.BallVel.X, Ball.BallVel.Y, 0);
+		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 35.0f;
+		FVector Back = (Chord.SizeSquared() > 400.0f && Vel2D.DotProduct(Chord) > 0.0f)
+			? Chord.GetSafeNormal()
+			: FVector::ZeroVector;                     // vertical drop/outbound: no standoff
+		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0) + Back * Standoff);
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
 		// Move with URGENCY MATCHED TO TIME: hustle only as fast as the ball
@@ -357,11 +367,16 @@ class AAIPlayer : AVolleyballPlayer
 		else
 		{
 			MovePlayer(FVector2D::ZeroVector);
-			RequestCrouch(0.25f);   // planted under the ball, loaded to play it
+			// Planted and waiting: LOW base. A bagger wants the centre of mass
+			// down (legs set the height; the arms just hold their slope).
+			RequestCrouch(Intend == EHitType::Hit_Bump ? 0.45f : 0.25f);
 		}
 
-		// Always face the ball while playing it, so "in front of the chest" actually
-		// points at the ball and the IK platform meets it.
+		// The HITTER always faces the ball. Conditional facing (travel vs ball)
+		// oscillated at the gate boundary every AI tick, whipping the chest-
+		// anchored IK targets around so the arms never converged — hands ended up
+		// 80-115cm from their targets at contact. Travel-facing is only for
+		// players who are NOT about to play the ball (support/defense).
 		FaceBall();
 
 		// Wind up when MY contact is imminent in TIME — no distance condition. I'm
@@ -390,11 +405,22 @@ class AAIPlayer : AVolleyballPlayer
 	// height/control) instead of defaulting to a flat bagger.
 	const float UnderBallRadius = 100.0f;
 
-	// The world Z at which we want to meet the ball — roughly chest height, where a
-	// bagger platform contacts it.
+	// The world Z at which we want to meet the ball — stroke-aware, at the point
+	// THIS body controls best. True hip-height (85cm) contact was tried and the
+	// FBIK could not converge to knee-low targets in the ~0.2s the ball spends
+	// there — waist height (~112cm) is where the hands arrive fastest from ready,
+	// which IS the physical optimum for this rig. Sets are taken above the brow.
+	private float ContactHeightFor(EHitType Intend) const
+	{
+		if (Intend == EHitType::Hit_Set)
+			return GetActorLocation().Z + PlayerHeight * 0.9f;
+		return FloorZ + 112.0f;
+	}
+
+	// Back-compat for callers that don't know the stroke yet (dig by default).
 	private float ContactHeight() const
 	{
-		return GetActorLocation().Z + PlayerHeight * 0.4f;
+		return ContactHeightFor(EHitType::Hit_Bump);
 	}
 
 	// Simulate the ball forward and return its (X,Y,Z) when it next descends to the
@@ -498,6 +524,8 @@ class AAIPlayer : AVolleyballPlayer
 		// Support/cover roles still HOLD their spot to avoid constant shuffling.
 		if (Touches == 1)
 		{
+			// The upcoming setter is the NEXT hitter — same rule: always face the
+			// ball so the cup/platform targets stay stable while closing in.
 			MoveToward2D(ClampToCourt(Target), DeltaTime);
 			FaceBall();
 			return;
@@ -510,11 +538,13 @@ class AAIPlayer : AVolleyballPlayer
 		Target = SpreadFromTeammate(Target);
 
 		// Take the spot and HOLD it (no constant shuffling), facing the play in a
-		// ready stance. Repositioning is a jog, not a sprint — there's no ball to
-		// chase, just ground to cover.
-		MoveToHold(ClampToCourt(Target), DeltaTime, 0.75f);
+		// ready stance once there. Repositioning is a jog FACING THE TRAVEL —
+		// there's no ball to chase, just ground to cover.
+		Target = ClampToCourt(Target);
+		MoveToHold(Target, DeltaTime, 0.75f);
 		RequestCrouch(0.18f);
-		FaceAttacker();
+		if ((Target - GetActorLocation()).Size2D() < 150.0f)
+			FaceAttacker();
 	}
 
 	// Turn to face whichever teammate/opponent is about to attack (or the ball), so
@@ -833,10 +863,12 @@ class AAIPlayer : AVolleyballPlayer
 			+ " ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
 		// Take the defensive spot and HOLD it, facing the play — in a LOW athletic
 		// base, never flat-footed upright: a defender waiting tall reads amateur.
-		// Jog into position; the explosive moves are saved for reads.
-		MoveToHold(ClampToCourt(Goal), DeltaTime, 0.75f);
+		// Jog into position facing the travel; face up once settled.
+		Goal = ClampToCourt(Goal);
+		MoveToHold(Goal, DeltaTime, 0.75f);
 		RequestCrouch(0.22f);
-		FaceAttacker();
+		if ((Goal - GetActorLocation()).Size2D() < 150.0f)
+			FaceAttacker();
 	}
 
 	// Find the opponent who is about to hit — the one closest to the ball on the
