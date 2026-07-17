@@ -71,7 +71,26 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		// the ball" pose reads as poking, not a platform. With the hands beyond the
 		// ball line, the forearm segment is what meets the ball (which is also
 		// where GetArmContact tests lowerarm bones).
-		FVector Platform = BallContact - Up * 12.0f;
+		//
+		// While the ball is still descending toward us, PARK the platform at the
+		// PREDICTED meet point (where the ball crosses waist height) instead of
+		// tracking the live ball: a static target is the one thing the ABP's
+		// speed-limited FBIK reliably converges on. "Set your platform early and
+		// let the ball come to you" — literally. Once the ball is at/below meet
+		// height the live position takes over (they coincide by then).
+		FVector PlatformBall = BallContact;
+		{
+			ABall PB = Self.GetWorldBall();
+			if (PB != nullptr && PB.bInPlay && Self.bHasPredictedMeetLow
+				&& PB.Position.Z > Self.PredictedMeetLow.Z + 30.0f)
+			{
+				FVector ToMeet = Self.PredictedMeetLow - ChestMid;
+				PlatformBall = (ToMeet.Size() > 110.0f)
+					? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+					: Self.PredictedMeetLow;
+			}
+		}
+		FVector Platform = PlatformBall - Up * 12.0f;
 		FVector PlatDir = (Platform - ChestMid).GetSafeNormal();
 		if (PlatDir.SizeSquared() < 0.01f) PlatDir = Fwd - Up;
 		float Ext = Math::Max((Platform - ChestMid).Size(), 96.0f);  // lock the elbows out
@@ -105,7 +124,21 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		// Fingerpass/set: hands form a CUP under/around the ball above the brow,
 		// elbows forward. At contact the arms EXTEND fully through the ball toward
 		// the aim (the wrist/elbow extension is what a set's power comes from).
-		FVector Cup = BallContact - Up * 6.0f;               // hands just under the ball
+		// Same park-at-the-meet-point trick as the bump: the cup waits where the
+		// ball will cross brow height instead of chasing it down.
+		FVector CupBall = BallContact;
+		{
+			ABall SB2 = Self.GetWorldBall();
+			if (SB2 != nullptr && SB2.bInPlay && Self.bHasPredictedMeetHigh
+				&& SB2.Position.Z > Self.PredictedMeetHigh.Z + 30.0f)
+			{
+				FVector ToMeet = Self.PredictedMeetHigh - ChestMid;
+				CupBall = (ToMeet.Size() > 110.0f)
+					? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+					: Self.PredictedMeetHigh;
+			}
+		}
+		FVector Cup = CupBall - Up * 6.0f;                   // hands just under the ball
 		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();
 		FVector Extend = Push * (6.0f * Blend + 26.0f * Swing);
 		ContactR = Cup - Right * 11.0f + Extend;
@@ -129,7 +162,16 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		//    pointing through contact is the tell of a video-game spike.
 		FVector BackSw = ShR - Fwd * 30.0f - Up * 30.0f + Right * 20.0f;  // behind the hip
 		FVector Cheek  = Head + Right * 22.0f + Up * 2.0f - Fwd * 8.0f;   // outside right cheek
-		float StrikeUp = Math::Max(35.0f, BallContact.Z - ShR.Z);         // reach up to ball
+		// Reach for the REAL ball height, not the 110cm-clamped contact point:
+		// the FBIK saturates at full extension so over-asking costs nothing,
+		// while under-asking left the strike hand ~40cm below the ball at the
+		// jump apex (the stats2 whiffs).
+		float BallZRaw = BallContact.Z;
+		{
+			ABall RB = Self.GetWorldBall();
+			if (RB != nullptr && RB.bInPlay) BallZRaw = RB.Position.Z;
+		}
+		float StrikeUp = Math::Clamp(BallZRaw - ShR.Z, 35.0f, 125.0f);
 		FVector Strike = ShR + Up * StrikeUp + Fwd * 22.0f + Right * 6.0f; // above & front of R shoulder
 
 		float SwingPhase = Blend;
@@ -229,21 +271,24 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 		FVector DrawR   = Head + Right * 24.0f - Fwd * 14.0f + Up * 4.0f;  // drawn behind the ear
 		FVector StrikeR = TossApex + Up * 6.0f;                            // meet the ball at the apex
 		FVector FollowR = ShR + Fwd * 55.0f + Up * 8.0f;
+		// Segment boundaries match the SERVE PHYSICS: the ball launches at phase
+		// 0.78 (ServeStrikePhase), so the hand must be AT StrikeR exactly then —
+		// the old 0.85 breakpoint had the ball leaving mid-whip.
 		if (P < 0.55f)
 		{
 			float T = P / 0.55f;
 			ContactR = RestR + (DrawR - RestR) * (T * T);
 			PoleR = ContactR + Up * 20.0f - Fwd * 25.0f + Right * 12.0f;
 		}
-		else if (P < 0.85f)
+		else if (P < 0.78f)
 		{
-			float T = (P - 0.55f) / 0.30f;
+			float T = (P - 0.55f) / 0.23f;
 			ContactR = DrawR + (StrikeR - DrawR) * T;
 			PoleR = ContactR + Up * 18.0f - Fwd * 20.0f + Right * 10.0f;
 		}
 		else
 		{
-			float T = (P - 0.85f) / 0.15f;
+			float T = (P - 0.78f) / 0.22f;
 			ContactR = StrikeR + (FollowR - StrikeR) * T;
 			PoleR = ContactR + Up * 10.0f + Right * 12.0f;
 		}

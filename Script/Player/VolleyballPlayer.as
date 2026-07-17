@@ -235,6 +235,7 @@ class AVolleyballPlayer : APawn
 		}
 		bHasFacing = false;   // AI must re-assert each frame; lapses otherwise
 
+		UpdatePredictedMeet();
 		UpdateAnimation(DeltaTime, HSpeed2);
 	}
 
@@ -469,6 +470,45 @@ class AVolleyballPlayer : APawn
 	// Driven by the AI serve sequence; read by the Hit_Serve branch in PlayerIK.
 	float ServePhase = 0.0f;
 
+	// --- Predicted meet points, cached once per frame -----------------------
+	// Where the incoming ball will next descend through bump-platform height
+	// (waist, FloorZ+112) and through set height (above the brow). The IK PARKS
+	// the platform/cup at these STATIC points instead of chasing the live ball:
+	// the ABP's FBIK effectors converge on static targets (booth-verified) but
+	// lag behind moving ones — chasing is why fast serves went through the arms.
+	FVector PredictedMeetLow;
+	bool bHasPredictedMeetLow = false;
+	FVector PredictedMeetHigh;
+	bool bHasPredictedMeetHigh = false;
+
+	private bool PredictBallCrossZ(ABall B, float TargetZ, FVector& Out) const
+	{
+		FVector P = B.Position;
+		FVector V = B.BallVel;
+		if (P.Z <= TargetZ && V.Z <= 0.0f) { Out = P; return true; }   // already at/below, dropping
+		const float SimDt = 0.025f;
+		float T = 0.0f;
+		while (T < 2.5f)
+		{
+			V.Z += -980.0f * SimDt;
+			P += V * SimDt;
+			if (P.Z <= TargetZ && V.Z < 0.0f) { Out = P; return true; }
+			if (P.Z <= 0.0f) break;
+			T += SimDt;
+		}
+		return false;
+	}
+
+	private void UpdatePredictedMeet()
+	{
+		bHasPredictedMeetLow = false;
+		bHasPredictedMeetHigh = false;
+		ABall B = GetWorldBall();
+		if (B == nullptr || !B.bInPlay) return;
+		bHasPredictedMeetLow  = PredictBallCrossZ(B, FloorZ + 112.0f, PredictedMeetLow);
+		bHasPredictedMeetHigh = PredictBallCrossZ(B, GetActorLocation().Z + PlayerHeight * 0.9f, PredictedMeetHigh);
+	}
+
 	// Distance (cm) at which any player auto-reaches toward the ball. Kept tight so
 	// players don't flail at a ball that's still metres away — the AI drives the
 	// deliberate reach as it closes in; this is just a safety net at true arm range.
@@ -479,6 +519,12 @@ class AVolleyballPlayer : APawn
 	private void AutoReachForBall()
 	{
 		if (!CanContactBall()) return;
+		// An active deliberate reach (AI/dive) owns the pose. AutoReach re-picking
+		// the hit type from geometry at frame rate fought the AI's 9Hz choice —
+		// alternating IK branches every frame read as violent hand flicker. This
+		// is only the safety net for UNDESIGNATED players; it takes over 0.25s
+		// after the AI stops asking (which also covers the post-whiff rescue).
+		if (bReaching) return;
 		ABall B = GetWorldBall();
 		if (B == nullptr || !B.bInPlay) return;
 
@@ -581,64 +627,177 @@ class AVolleyballPlayer : APawn
 		return FVector((T.X - P.X) / TTotal, (T.Y - P.Y) / TTotal, Vz);
 	}
 
+	// --- Net-plane flight tests (net at X=0). Used to GUARANTEE the three-touch
+	// protocol physically: touches 1-2 must stay on our side, touch 3 must clear
+	// the tape. Ballistic, drag ignored (2%/s — the margins absorb it).
+	private bool CrossesNetPlane(FVector P, FVector V) const
+	{
+		if (Math::Abs(V.X) < 1.0f) return false;
+		float TCross = -P.X / V.X;
+		if (TCross <= 0.0f) return false;
+		float ZAtCross = P.Z + V.Z * TCross - 490.0f * TCross * TCross;
+		return ZAtCross > 0.0f;   // still airborne when it reaches the plane
+	}
+
+	private float HeightAtNetPlane(FVector P, FVector V) const
+	{
+		float TCross = -P.X / V.X;
+		return P.Z + V.Z * TCross - 490.0f * TCross * TCross;
+	}
+
+	// Minimum height the flight must have over the net plane: tape + ball + margin.
+	private float NetClearZ()
+	{
+		ABall B = GetWorldBall();
+		float Tape = (B != nullptr) ? B.NetTopZ + B.BallRadius : 254.0f;
+		return Tape + 28.0f;
+	}
+
+	// Any opponent parked in the block lane at the net where this flight crosses?
+	// A shot that clears the tape by centimetres lands exactly in the standing
+	// blocker's catch envelope (hands ~240 + 42cm radius ≈ the 282 tape margin)
+	// — a real hitter sees the block and shoots OVER it.
+	private bool BlockerInLane(float YAtNet)
+	{
+		TArray<AActor> Players;
+		GetAllActorsOfClass(AVolleyballPlayer, Players);
+		for (AActor A : Players)
+		{
+			AVolleyballPlayer P = Cast<AVolleyballPlayer>(A);
+			if (P == nullptr || P.TeamSide == TeamSide) continue;
+			FVector L = P.GetActorLocation();
+			if (Math::Abs(L.X) < 200.0f && Math::Abs(L.Y - YAtNet) < 160.0f)
+				return true;
+		}
+		return false;
+	}
+
+	// A placed attack over the net: ballistic to T, arc raised until it clears
+	// the tape — and the BLOCK, when someone is standing in the crossing lane.
+	// Raising the apex raises the whole interior of the parabola, so the loop is
+	// monotone and terminates. Starts flat/fast (a driven shot) and only lofts
+	// as much as the contact height / block force it to.
+	FVector AttackBallistic(FVector P, FVector T)
+	{
+		float Apex = 90.0f;
+		FVector V = BallisticVelocity(P, T, Apex);
+		int Guard = 0;
+		while (Guard < 10 && CrossesNetPlane(P, V))
+		{
+			float TCross = -P.X / V.X;
+			float ZC = P.Z + V.Z * TCross - 490.0f * TCross * TCross;
+			float YC = P.Y + V.Y * TCross;
+			float Need = NetClearZ() + (BlockerInLane(YC) ? 75.0f : 0.0f);
+			if (ZC >= Need) break;
+			Apex += 70.0f;
+			V = BallisticVelocity(P, T, Apex);
+			Guard++;
+		}
+		return V;
+	}
+
 	// Called by the ball when it physically touches this player. The ball gives
-	// its current velocity; we return the post-contact velocity. Controlled
-	// contacts (dig/set with an aim) use the ballistic solve above, plus a bit of
-	// the physical reflection so hard incoming balls still feel physical. The
-	// spike stays a true strike: reflection + a hard swing impulse.
+	// its current velocity; we return the post-contact velocity.
+	//
+	// THE THREE-TOUCH PROTOCOL LIVES HERE, not in raw contact geometry: the
+	// reception (team touch 1) is ALWAYS a bagger (overhand serve receive is a
+	// fault in beach anyway), the second touch is a bagger or a hand set, and
+	// the third touch attacks over the net — jump spike if we're airborne at a
+	// high ball, otherwise a placed shot. Every controlled contact is ballistic
+	// placement now; the old "aimless flail" reflection branch was a rally
+	// killer (random direction at 600cm/s) and is gone.
 	FVector OnBallContact(FVector BallPos, FVector BallVelIn, FVector Center)
 	{
-		// Choose hit type from where the ball meets the body, relative to the
-		// player's own height (head ~ feet + 2*PlayerHeight).
-		float HeadZ = GetActorLocation().Z + PlayerHeight;
-		EHitType Type;
-		if (BallPos.Z > HeadZ)
-			Type = bIsGrounded ? EHitType::Hit_Set : EHitType::Hit_Spike;
-		else
-			Type = EHitType::Hit_Bump;
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		int MyTouches = (GS != nullptr && GS.LastTouchTeam == TeamSide) ? GS.TouchesThisRally : 0;
 
-		// Contact normal: the surface the ball bounces off. Base it on the real
-		// geometric normal (ball relative to body) but tilt it toward the aim so
-		// the player "angles" their arms like a real player would.
+		float HeadZ = GetActorLocation().Z + PlayerHeight;
+		bool bHigh = BallPos.Z > HeadZ;
+		// An active block gesture at the net keeps its identity — the protocol
+		// would otherwise re-type a stuff block as a "reception" and float a
+		// point-blank spike gently to the setter zone.
+		bool bBlockContact = (CurrentHit == EHitType::Hit_Block && !bIsGrounded);
+
+		EHitType Type;
+		if (bBlockContact)
+			Type = EHitType::Hit_Block;
+		else if (MyTouches == 0)
+			Type = EHitType::Hit_Bump;                                   // reception: always bagger
+		else if (MyTouches == 1)
+			Type = (bHigh && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+		else
+			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
+			     : (bHigh ? EHitType::Hit_Set : EHitType::Hit_Bump);     // grounded attack = shot
+		bool bAttackTouch = !bBlockContact && MyTouches >= 2;
+
+		// Where we're sending it. The AI aims continuously; if no aim is active
+		// (scramble), fall back to the protocol's natural target: pop receptions
+		// to the setter zone, second balls to the attack spot, third balls deep
+		// into the opponent court.
+		float Own = (TeamSide == ETeam::Team_A) ? -1.0f : 1.0f;
+		FVector Target;
+		if (bHasAim)
+			Target = DesiredAim;
+		else if (bBlockContact)
+			Target = FVector(-Own * 300.0f, 0.0f, FloorZ);
+		else if (MyTouches == 0)
+			Target = FVector(Own * 280.0f, BallPos.Y * 0.5f, 150.0f);
+		else if (MyTouches == 1)
+			Target = FVector(Own * 250.0f, BallPos.Y * 0.4f, 170.0f);
+		else
+			Target = FVector(-Own * 500.0f, (BallPos.Y > 0.0f) ? -180.0f : 180.0f, 15.0f);
+
+		// Physical reflection (arms as a surface) — the flavor component.
 		FVector GeoNormal = (BallPos - Center).GetSafeNormal();
 		if (GeoNormal.SizeSquared() < 0.01f) GeoNormal = FVector(0, 0, 1);
-
-		FVector AimDir;
-		float Sign = (TeamSide == ETeam::Team_A) ? 1.0f : -1.0f;
-		if (bHasAim)
-			AimDir = (DesiredAim - BallPos).GetSafeNormal();
-		else
-			AimDir = FVector(Sign * 0.4f, 0, 1.0f).GetSafeNormal();
-
-		// Blend geometric normal with aim (how much the player controls the angle)
+		FVector AimDir = (Target - BallPos).GetSafeNormal();
 		FVector Normal = (GeoNormal * 0.35f + AimDir * 0.65f).GetSafeNormal();
-
-		// Reflect incoming velocity about the contact normal with restitution.
-		// (A controlled contact kills most incoming speed; the swing adds power.)
-		float ContactRestitution = 0.35f;
 		float VDotN = BallVelIn.DotProduct(Normal);
-		FVector Reflected = BallVelIn - Normal * (2.0f * VDotN);
-		Reflected *= ContactRestitution;
+		FVector Reflected = (BallVelIn - Normal * (2.0f * VDotN)) * 0.35f;
 
 		FVector OutVel;
-		if (Type != EHitType::Hit_Spike && bHasAim)
+		if (bBlockContact)
 		{
-			// CONTROLLED contact (dig/set): place the ball on a deliberate arc to
-			// the aim spot. The set floats high so the attacker can time a full
-			// jump attack on it; the dig pops high enough for the setter to run
-			// under it. A dash of the reflection keeps hard serves feeling hot.
-			float Apex = (Type == EHitType::Hit_Set) ? 310.0f : 260.0f;
-			OutVel = BallisticVelocity(BallPos, DesiredAim, Apex) + Reflected * 0.15f;
+			// A block is a wall, not a placement: real reflection plus a firm
+			// downward push toward the middle of their court.
+			FVector BlockDir = AimDir;
+			BlockDir.Z = Math::Min(BlockDir.Z, -0.15f);
+			OutVel = Reflected + BlockDir.GetSafeNormal() * 420.0f;
+		}
+		else if (bAttackTouch)
+		{
+			if (Type == EHitType::Hit_Spike)
+			{
+				// True strike: reflection + hard swing. But never into the tape —
+				// if this contact physically can't power over, convert to a driven
+				// shot (that's what a hitter does with a low/tight ball).
+				FVector SwingDir = AimDir;
+				SwingDir.Z = Math::Min(SwingDir.Z, -0.2f);
+				OutVel = Reflected + SwingDir.GetSafeNormal() * 1050.0f;
+				if (!CrossesNetPlane(BallPos, OutVel) || HeightAtNetPlane(BallPos, OutVel) < NetClearZ())
+					OutVel = AttackBallistic(BallPos, Target);
+			}
+			else
+			{
+				// Shot: pure placed arc, guaranteed over.
+				OutVel = AttackBallistic(BallPos, Target);
+			}
 		}
 		else
 		{
-			// STRIKE (spike) or aimless flail: real reflection + swing impulse.
-			float SwingPower = (Type == EHitType::Hit_Spike) ? 1150.0f : 600.0f;
-			FVector SwingDir = AimDir;
-			if (Type == EHitType::Hit_Spike) SwingDir.Z = Math::Min(SwingDir.Z, -0.2f);
-			else                             SwingDir.Z = Math::Max(SwingDir.Z, 0.45f);
-			SwingDir = SwingDir.GetSafeNormal();
-			OutVel = Reflected + SwingDir * SwingPower;
+			// Touch 1-2: placed arc to our own side. The dash of reflection keeps
+			// hot serves feeling physical — but if it would carry the ball over
+			// the net (protocol break: only touch 3 crosses), drop it and keep
+			// the pure ballistic, which by construction stays on our side.
+			// Set apex 340: high enough that the attacker (usually the deep
+			// receiver) can run in, low enough that the ball crosses the strike
+			// zone SLOWLY — apex 400 sent it through at -577cm/s and the jump
+			// window shrank below the AI's timing jitter (13 jumps, 0 contacts).
+			float Apex = (Type == EHitType::Hit_Set) ? 340.0f : 260.0f;
+			FVector Pure = BallisticVelocity(BallPos, Target, Apex);
+			OutVel = Pure + Reflected * 0.15f;
+			if (CrossesNetPlane(BallPos, OutVel))
+				OutVel = Pure;
 		}
 
 		TriggerHit(Type, OutVel.GetSafeNormal());
@@ -839,6 +998,9 @@ class AVolleyballPlayer : APawn
 		{
 			bool bValid = GS.RegisterTouch(TeamSide);
 			if (!bValid && GM != nullptr) GM.OnTouchViolation(TeamSide);
+			// Rally telemetry: which team, which touch number, which stroke.
+			if (bValid && GM != nullptr)
+				GM.OnTouchForRally(TeamSide, GS.TouchesThisRally, CurrentHit);
 		}
 		OnTouchRegistered();
 	}

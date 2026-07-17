@@ -79,7 +79,16 @@ class ABall : AActor
 	{
 		if (!bInPlay)
 			return;
-		StepPhysics(DeltaTime);
+		// Substep: a hitchy frame (HighResShot writes, shader compiles) can be
+		// 0.3-0.5s — one Euler step that long tunnels the ball through floors,
+		// nets and contact windows. Cap each physics step at 20ms.
+		float Remaining = DeltaTime;
+		while (Remaining > 0.0f)
+		{
+			float Step = Math::Min(Remaining, 0.02f);
+			StepPhysics(Step);
+			Remaining -= Step;
+		}
 		SetActorLocation(Position);
 		UpdateSpin(DeltaTime);
 	}
@@ -134,7 +143,11 @@ class ABall : AActor
 		if (Speed > 0.1f)
 			BallVel -= BallVel.GetSafeNormal() * Speed * AirDrag * Dt;
 
-		// Integrate position
+		// Integrate position (remember where we were for the net-plane test —
+		// reconstructing it from velocity with a fixed 0.016 step missed real
+		// crossings whenever the frame time differed, leaving bServePhase stuck
+		// and misattributing rally endings as serve faults).
+		float PrevX = Position.X;
 		Position += BallVel * Dt;
 
 		// Player body/arm collision — ball physically bounces off players
@@ -165,7 +178,7 @@ class ABall : AActor
 				GM.OnBallHitFloor(Position);
 		}
 
-		CheckNetCollision();
+		CheckNetCollision(PrevX);
 	}
 
 	// Bounce the ball off any player whose arm region it overlaps. The player
@@ -208,9 +221,8 @@ class ABall : AActor
 		}
 	}
 
-	private void CheckNetCollision()
+	private void CheckNetCollision(float PrevX)
 	{
-		float PrevX = Position.X - BallVel.X * 0.016f;
 		if ((PrevX < NetX) != (Position.X < NetX))
 		{
 			if (Position.Z < NetTopZ + BallRadius)
