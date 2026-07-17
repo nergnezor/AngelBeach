@@ -187,7 +187,7 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 		-platform=Android \
 		-cookflavor=Multi \
 		-clientconfig=Development \
-		-cook -build -stage -pak -archive \
+		-cook -build -stage -pak -package -archive \
 		-nozenstore \
 		-archivedirectory="$(OUTPUT_DIR)/Android"
 	@echo ">> Android package ready at $(OUTPUT_DIR)/Android"
