@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 180
 
     env:
-      ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
       # Android SDK root — set as a repository variable or override below.
@@ -32,13 +32,18 @@ jobs:
           # fallback to boxes at runtime, no cook-time error). Keep it across checkouts.
           clean: false
 
-      - name: Verify engine
+      - name: Resolve Unreal Engine
+        shell: bash
         run: |
-          test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
-            echo "ERROR: engine not found at $ENGINE_DIR"
-            exit 1
-          }
-          echo "Engine OK: $ENGINE_DIR"
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
 
       - name: Ensure engine-required Android NDK (r27c)
         run: |
