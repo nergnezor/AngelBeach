@@ -46,8 +46,7 @@ jobs:
             -platform=Linux \
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
-            -iterativecooking \
-            -ddc="$UE_DERIEDDATACACHE_ROOT" \
+            -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Upload artifact

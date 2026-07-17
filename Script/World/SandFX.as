@@ -63,6 +63,13 @@ class ASandFX : AActor
 	void Footstep(FVector Pos, float Strength)
 	{
 		float S = Math::Clamp(Strength, 0.1f, 2.0f);
+
+		if (FootstepSystem != nullptr)
+		{
+			Niagara::SpawnSystemAtLocation(FootstepSystem, Pos, FRotator::ZeroRotator);
+			return;
+		}
+
 		int Count = int(6.0f + S * 10.0f);
 		SprayFallback(Pos, FVector(0, 0, 0), S, Count, 0.5f);
 	}
@@ -171,6 +178,8 @@ class ASandFX : AActor
 			return;
 		}
 
-		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		DustMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			C, Tan, false, false);
 	}
 }
