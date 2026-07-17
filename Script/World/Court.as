@@ -279,6 +279,9 @@ class ACourt : AActor
 		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
 		float Z0, float Z1, float HW)
 	{
+		TArray<FProcMeshTangent> Tan;
+		TArray<FVector2D> EmptyUV;
+
 		// Front face
 		V.Add(FVector(-NetHalfThick, -HW, Z0)); V.Add(FVector(-NetHalfThick,  HW, Z0));
 		V.Add(FVector(-NetHalfThick,  HW, Z1)); V.Add(FVector(-NetHalfThick, -HW, Z1));
@@ -288,18 +291,15 @@ class ACourt : AActor
 		V.Add(FVector( NetHalfThick, -HW, Z1)); V.Add(FVector( NetHalfThick,  HW, Z1));
 		T.Add(4); T.Add(5); T.Add(6); T.Add(4); T.Add(6); T.Add(7);
 
-		for (int i = 0; i < 8; i++) N.Add(FVector(0,0,1));
-		for (int i = 0; i < 8; i++) UV.Add(FVector2D(0,0));
+		for (int i = 0; i < 8; i++)
+		{
+			N.Add(FVector(0, 0, 1));
+			UV.Add(FVector2D(0, 0));
+			C.Add(Col);
+		}
 
 		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
-			TArray<FLinearColor>(), Tan, false, false);
-
-		TArray<FLinearColor> C;
-		for (int i = 0; i < 8; i++) C.Add(FLinearColor(0.1f, 0.1f, 0.1f, 0.85f));
-		NetMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
-			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
-			C, Tan, false);
+			EmptyUV, EmptyUV, EmptyUV, C, Tan, false, false);
 	}
 
 	// Court boundary lines and center line

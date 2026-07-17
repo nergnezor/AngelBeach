@@ -12,16 +12,16 @@ class ACourtLevelScript : ALevelScriptActor
 
 	private void SetupLighting()
 	{
-		SpawnActor(ADirectionalLight::StaticClass(),
+		SpawnActor(ADirectionalLight,
 			FVector(0, 0, 10000), FRotator(-8, -55, 0));
 
-		SpawnActor(ASkyAtmosphere::StaticClass(),
+		SpawnActor(ASkyAtmosphere,
 			FVector::ZeroVector, FRotator::ZeroRotator);
 
-		SpawnActor(ASkyLight::StaticClass(),
+		SpawnActor(ASkyLight,
 			FVector(0, 0, 500), FRotator::ZeroRotator);
 
-		SpawnActor(AExponentialHeightFog::StaticClass(),
+		SpawnActor(AExponentialHeightFog,
 			FVector(0, 0, 100), FRotator::ZeroRotator);
 	}
 
@@ -31,7 +31,7 @@ class ACourtLevelScript : ALevelScriptActor
 
 	private void SpawnCamera()
 	{
-		SpawnActor(ABeachVolleyballCamera::StaticClass(),
+		SpawnActor(ABeachVolleyballCamera,
 			FVector(0, -1400, 350), FRotator(0, 90, 0));
 	}
 }
