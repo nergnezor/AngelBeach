@@ -116,6 +116,12 @@ jobs:
 
       - name: Package for Android (APK)
         run: |
+          # Scripts are staged separately from cooked content. Without this targeted
+          # cleanup UAT can combine current scripts with an hours-old IoStore container,
+          # making runtime-loaded assets appear missing despite valid force-cook rules.
+          rm -rf "$GITHUB_WORKSPACE"/Saved/Cooked/Android* \
+                 "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
+                 "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
           "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
