@@ -240,16 +240,19 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// performs a real toss + overhead strike and launches the ball from the
 		// strike point (see AAIPlayer.RunServeSequence). Rally bookkeeping happens
 		// in OnServeLaunched at the strike moment.
+		// Slightly floaty (780/640 rather than a flat rocket): the extra hang time
+		// is what gives the receiver's FBIK arms time to converge on the platform —
+		// rallies need the SERVE to be returnable, not an ace machine.
 		FVector ServeVel;
 		AAIPlayer Server;
 		if (GS.ServingTeam == ETeam::Team_A)
 		{
-			ServeVel = FVector(850, Math::RandRange(-120.0f, 120.0f), 600);
+			ServeVel = FVector(780, Math::RandRange(-140.0f, 140.0f), 640);
 			Server = HumanPawn;
 		}
 		else
 		{
-			ServeVel = FVector(-850, Math::RandRange(-120.0f, 120.0f), 600);
+			ServeVel = FVector(-780, Math::RandRange(-140.0f, 140.0f), 640);
 			Server = PlayerB1;
 		}
 
@@ -277,17 +280,54 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// if it hits the net or lands without crossing, it's a service fault.
 		bServePhase = true;
 		ServingTeamThisServe = GS.ServingTeam;
+
+		// Fresh rally telemetry (see OnTouchForRally).
+		RallyCrossings = 0;
+		RallySeq = "";
 	}
 
 	// True from serve launch until the serve has crossed the net (or faulted).
 	private bool bServePhase = false;
 	private ETeam ServingTeamThisServe = ETeam::Team_None;
 
+	// --- Rally telemetry -------------------------------------------------
+	// The measurable definition of "they play volleyball": how many times the
+	// ball crossed the net this rally, and the exact touch sequence (which team,
+	// which touch number, which stroke). One RALLY line per rally at its end.
+	private int RallyCrossings = 0;
+	private FString RallySeq = "";
+
+	private FString HitName(EHitType T) const
+	{
+		if (T == EHitType::Hit_Bump)  return "Bump";
+		if (T == EHitType::Hit_Set)   return "Set";
+		if (T == EHitType::Hit_Spike) return "Spike";
+		if (T == EHitType::Hit_Block) return "Block";
+		if (T == EHitType::Hit_Serve) return "Serve";
+		return "?";
+	}
+
+	// Called by the player on every legal touch (RegisterHit).
+	void OnTouchForRally(ETeam Team, int TouchNum, EHitType Type)
+	{
+		FString T = (Team == ETeam::Team_A) ? "A" : "B";
+		RallySeq += " " + T + TouchNum + ":" + HitName(Type);
+	}
+
+	private void LogRallyEnd(FString Reason)
+	{
+		Log("RALLY end reason=" + Reason + " crossings=" + RallyCrossings
+			+ " seq=[" + RallySeq + " ]");
+		RallyCrossings = 0;
+		RallySeq = "";
+	}
+
 	// Called by the ball when it crosses the net plane, so we know the serve was good.
 	UFUNCTION(BlueprintCallable)
 	void OnBallCrossedNet()
 	{
 		bServePhase = false;
+		RallyCrossings++;
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -304,11 +344,18 @@ class ABeachVolleyballGameMode : AGameModeBase
 			// Point to the receiving team regardless of which side it landed on.
 			bServePhase = false;
 			ScoringTeam = (ServingTeamThisServe == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+			LogRallyEnd("serve_fault_floor");
 		}
 		else if (HitPos.X < 0)
+		{
 			ScoringTeam = ETeam::Team_B;
+			LogRallyEnd("floor_A x=" + int(HitPos.X) + " y=" + int(HitPos.Y));
+		}
 		else
+		{
 			ScoringTeam = ETeam::Team_A;
+			LogRallyEnd("floor_B x=" + int(HitPos.X) + " y=" + int(HitPos.Y));
+		}
 
 		GS.AddPoint(ScoringTeam);
 
@@ -333,6 +380,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		bServePhase = false;
 		ETeam Receiver = (ServingTeamThisServe == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+		LogRallyEnd("serve_net");
 		GS.AddPoint(Receiver);
 		ScheduleServe();
 	}
@@ -343,6 +391,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr) return;
 
+		LogRallyEnd((FaultingTeam == ETeam::Team_A) ? "touches_A" : "touches_B");
 		ETeam ScoringTeam = (FaultingTeam == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
 		GS.AddPoint(ScoringTeam);
 		ScheduleServe();
