@@ -74,7 +74,18 @@ class AVolleyballPlayer : APawn
 			"/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
 		if (SkMesh == nullptr)
 		{
+			// The local template copy originated in UE 5.6. On a strict mobile
+			// loader it can fail before its packages have been re-saved in UE 5.7.
+			// MoverExamples is enabled for this project and supplies the matching,
+			// current-engine Manny mesh as a safe runtime fallback.
+			Log("VolleyballPlayer: project Manny mesh unavailable; trying MoverExamples copy");
+			SkMesh = Cast<USkeletalMesh>(LoadObject(nullptr,
+				"/MoverExamples/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
+		}
+		if (SkMesh == nullptr)
+		{
 			// Content not found — keep player visible with a fallback box
+			Log("VolleyballPlayer: both Manny mesh load paths failed; using fallback box");
 			Print("VolleyballPlayer: Manny mesh failed to load, using fallback box", Duration = 8.0f);
 			SpawnFallbackBox();
 			return;
