@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 180
 
     env:
-      ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Web
 
@@ -19,12 +19,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in \
+            "${ENGINE_DIR:-}" \
+            "$HOME/UnrealEngine-Angelscript" \
+            "/home/erik/UnrealEngine-Angelscript" \
+            "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found. Checked:"
+          printf '  %s\n' "${ENGINE_DIR:-<unset>}" "$HOME/UnrealEngine-Angelscript" \
+            "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"
+          echo "Set the repository ENGINE_DIR variable to the engine's absolute path."
+          exit 1
+
       - name: Ensure HTML5 platform + Emscripten
         run: |
-          test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
-            echo "ERROR: engine not found at $ENGINE_DIR"; exit 1
-          }
-
           # 1. Community HTML5 platform plugin (UE5 has no official HTML5 support)
           HTML5_DIR="$ENGINE_DIR/Engine/Platforms/HTML5"
           if [ ! -d "$HTML5_DIR" ]; then
