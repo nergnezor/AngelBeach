@@ -81,6 +81,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
 			bIMadeLastTouch = false;
+			bHasPossessionPin = false;
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
 			return;
@@ -255,10 +256,11 @@ class AAIPlayer : AVolleyballPlayer
 	protected void UpdateAI(float DeltaTime)
 	{
 		// Ball is on the opponent's side: play DEFENSE and clear our touch-ownership
-		// so the next receive starts fresh.
+		// and possession pin so the next receive starts fresh.
 		if (!IsBallComingToMySide())
 		{
 			bIMadeLastTouch = false;
+			bHasPossessionPin = false;
 			PlayDefense(DeltaTime);
 			return;
 		}
@@ -346,15 +348,14 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else
 		{
+			// A fingerpass demands being comfortably UNDER the ball at forehead
+			// height — in budget terms: that contact is playable with slack to
+			// spare. The old check was a fixed radius; the budget knows better
+			// (a slow floaty ball 3m away IS settable, a fast one 1m away isn't).
 			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			// Where the ball will be when it drops to forehead height.
-			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
-			float DistToSetSpot = (GetActorLocation() - FVector(SetSpot.X, SetSpot.Y, 0)).Size2D();
-			// Will the ball actually descend to forehead height (i.e. is it high
-			// enough to set), and can we get under that spot in time?
-			bool bBallSettable = SetSpot.Z >= ForeheadZ - 20.0f;
-			bool bCanGetUnder = DistToSetSpot < UnderBallRadius;
-			Intend = (bBallSettable && bCanGetUnder) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			FInterceptPlan SetPlan = this.PlanIntercept(ForeheadZ, ForeheadZ);
+			Intend = (SetPlan.bReachable && SetPlan.Slack >= 0.0f)
+				? EHitType::Hit_Set : EHitType::Hit_Bump;
 		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
@@ -363,22 +364,18 @@ class AAIPlayer : AVolleyballPlayer
 		if (Touches == 0) DoDig();
 		else              DoSet();
 
-		// Desperate ball: it will drop to play height before we can run there —
-		// launch a dive at it instead of jogging hopelessly and watching it land.
-		if (CanDive())
+		// ONE budget decides everything below (MotionPlan.as): the highest
+		// playable contact given ball time vs body time vs hand time, the
+		// exact run speed the budget demands, when the reach must start, and
+		// whether the ball is only reachable by diving.
+		FInterceptPlan Plan = this.PlanIntercept(ContactHeightFor(Intend), FloorZ + 112.0f);
+
+		// Desperate ball: nothing playable on foot but the dive window is open.
+		if (Plan.bDive && CanDive())
 		{
-			FVector DiveSpot;
-			float TauC = PredictBallTimeToHeight(ContactHeight(), DiveSpot);
-			if (TauC > 0.0f)
-			{
-				float DDist = (GetActorLocation() - FVector(DiveSpot.X, DiveSpot.Y, GetActorLocation().Z)).Size2D();
-				float TMe = DDist / MoveSpeed + 0.12f;   // includes first-step lag
-				if (TMe > TauC + 0.05f && TauC < 0.8f && DDist > 130.0f && DDist < 400.0f)
-				{
-					StartDive(DiveSpot - GetActorLocation());
-					if (bDebugAI) Log(DebugTag() + " DIVE dist=" + int(DDist) + " tau=" + int(TauC * 100));
-				}
-			}
+			StartDive(Plan.Contact - GetActorLocation());
+			if (bDebugAI) Log(DebugTag() + " DIVE tau=" + int(Plan.BallTime * 100)
+				+ " bodyT=" + int(Plan.BodyTime * 100));
 		}
 		if (IsDiving())
 		{
@@ -387,16 +384,11 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// Stand where the ball will be when it drops to PLAY height — MINUS a
-		// standoff along the ball's flight, so the contact happens IN FRONT of
-		// the chest where the platform/cup is, never on top of the head. This is
-		// the core of physical ball control: body behind the ball, facing it,
-		// meeting it in front.
-		FVector PlaySpot;
-		float TauC = PredictBallTimeToHeight(ContactHeightFor(Intend), PlaySpot);
-		// Standoff along the flight CHORD (ball -> predicted spot): stable, unlike
-		// the live velocity which swings during the rally and made the goal churn.
-		// Only applied while the ball is actually inbound toward the spot.
+		// Stand where the plan meets the ball — MINUS a standoff along the
+		// flight chord, so the contact happens IN FRONT of the chest where the
+		// platform/cup is, never on top of the head. (Chord, not live velocity:
+		// the live velocity swings during the rally and churned the goal.)
+		FVector PlaySpot = Plan.Contact;
 		FVector Chord = FVector(PlaySpot.X - Ball.Position.X, PlaySpot.Y - Ball.Position.Y, 0);
 		FVector Vel2D = FVector(Ball.BallVel.X, Ball.BallVel.Y, 0);
 		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 35.0f;
@@ -406,20 +398,8 @@ class AAIPlayer : AVolleyballPlayer
 		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0) + Back * Standoff);
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		// Move with URGENCY MATCHED TO TIME: hustle only as fast as the ball
-		// demands. A pro with three seconds of hang time walks under the ball; one
-		// with under a second SPRINTS, no arithmetic. The reserve accounts for
-		// reaction lag + acceleration, which the naive dist/time math ignored —
-		// that starved serve receives and they dove hopelessly at landing balls.
-		float SpeedCap = 1.0f;
-		if (TauC > 0.9f)
-		{
-			float NeedSpeed = DistToGoal / (TauC - 0.35f);    // reserve: react + accelerate
-			SpeedCap = Math::Clamp((NeedSpeed / MoveSpeed) * 1.25f, 0.5f, 1.0f);
-		}
-
 		if (DistToGoal > PlantRadius)
-			MoveToward2D(Goal, DeltaTime, false, SpeedCap);
+			MoveToward2D(Goal, DeltaTime, false, Plan.SpeedFraction);
 		else
 		{
 			MovePlayer(FVector2D::ZeroVector);
@@ -435,14 +415,9 @@ class AAIPlayer : AVolleyballPlayer
 		// players who are NOT about to play the ball (support/defense).
 		FaceBall();
 
-		// Wind up when MY contact is imminent in TIME — no distance condition. I'm
-		// the designated hitter: if I'm still moving when the ball is close in
-		// time, the arms must extend WHILE closing (that reach is what saves a
-		// late receive — the platform intercepts even when the body is a step
-		// short). 1.15s lead because the ABP's FBIK effectors chase their targets
-		// with limited speed: arms started at 0.9s were still converging at
-		// contact (handVsTarget 50-110cm in the miss autopsies).
-		if (TauC >= 0.0f && TauC < 1.15f)
+		// Wind up when the budget says the hand clock has started — no distance
+		// condition: a late receive is saved by arms extending WHILE closing.
+		if (Plan.bStartGesture)
 			Reach(Intend);
 	}
 
@@ -552,13 +527,8 @@ class AAIPlayer : AVolleyballPlayer
 			// fingerpass instead of arriving late and scrambling a bagger. Fall back
 			// to the setter zone only before the receive has been hit (no useful
 			// prediction yet).
-			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
-			bool bUsefulPredict = SetSpot.Z >= ForeheadZ - 20.0f
-				&& (TeamSide == ETeam::Team_A ? SetSpot.X <= 0.0f : SetSpot.X >= 0.0f);
-			Target = bUsefulPredict
-				? FVector(SetSpot.X, SetSpot.Y, FloorZ + PlayerHeight)
-				: SetterZone();
+			// (Handled fully in the branch below — see Touches == 1 early-out.)
+			Target = HomePosition();
 		}
 		else if (Touches == 2)
 		{
@@ -576,15 +546,19 @@ class AAIPlayer : AVolleyballPlayer
 			Target = HomePosition();
 		}
 
-		// The setter (Touches==1) is tracking a moving target — the spot the ball is
-		// dropping to — so chase it directly and arrive under it early. Holding with
-		// hysteresis there would leave us planted a half-metre off the descending ball.
-		// Support/cover roles still HOLD their spot to avoid constant shuffling.
+		// At Touches==1 the supporter is the RECEIVER — and therefore the next
+		// ATTACKER (the setter is the current hitter; roles alternate). The
+		// possession pin was locked at the reception, so the attack point is
+		// known NOW: get to the approach start behind it immediately. The old
+		// behavior chased the setter's spot, which left the attacker starting
+		// a 7m cross-court sprint only when the set was already up — the third
+		// touch never happened.
 		if (Touches == 1)
 		{
-			// The upcoming setter is the NEXT hitter — same rule: always face the
-			// ball so the cup/platform targets stay stable while closing in.
-			MoveToward2D(ClampToCourt(Target), DeltaTime);
+			FVector Pin = FarPinTarget();
+			FVector Start = ClampToCourt(FVector(
+				MySign() * (50.0f + ApproachBack), Pin.Y, FloorZ + PlayerHeight));
+			MoveToward2D(Start, DeltaTime, false, 1.0f);
 			FaceBall();
 			return;
 		}
@@ -678,7 +652,8 @@ class AAIPlayer : AVolleyballPlayer
 		// the hitting shoulder, not on top of the head.
 		FVector Plant = ClampToCourt(FVector(Strike.X + MySign() * 35.0f, Strike.Y, 0));
 		float DistToPlant = (GetActorLocation() - Plant).Size2D();
-		float SprintTime = DistToPlant / MoveSpeed + 0.15f;   // + first-step lag
+		// Same body-time model as the intercept budget (accel-limited + lag).
+		float SprintTime = this.BodyTravelTime(DistToPlant);
 
 		bool bGo = false;
 		if (bIsGrounded)
@@ -770,22 +745,50 @@ class AAIPlayer : AVolleyballPlayer
 	const float SetterZoneX = 280.0f;
 
 	// PLACEMENT RULE (Erik): EVERY pass — reception and second ball alike —
-	// goes to one metre from the FAR antenna top. The antennas stand on the
-	// net plane at the sidelines (Y ±450), tops ~80cm above the tape; "far" =
-	// the pin on the opposite Y half from me, so the play runs the long
-	// diagonal. The aim point hangs at antenna-top height, 1m inside the pin,
-	// just our side of the net.
+	// goes to one metre from the FAR antenna. "Far" is decided ONCE per
+	// possession (at the reception, away from where the ball came in) and
+	// SHARED with the teammate: when each passer picked the pin far from
+	// themselves, the target ping-ponged across the court mid-possession and
+	// the attacker had a 7m sprint against a 1.5s pass — the third touch
+	// never happened. A locked pin means the attacker knows the attack point
+	// from the moment the reception is struck.
+	float PossessionPinY = 0.0f;
+	bool bHasPossessionPin = false;
+
+	private void LockPossessionPin()
+	{
+		// Far half relative to where the ball is entering our court.
+		float PinY = (Ball.Position.Y > 0.0f) ? CourtMinY : CourtMaxY;
+		PossessionPinY = (PinY < 0.0f) ? PinY + 100.0f : PinY - 100.0f;
+		bHasPossessionPin = true;
+		if (Teammate != nullptr)
+		{
+			Teammate.PossessionPinY = PossessionPinY;
+			Teammate.bHasPossessionPin = true;
+		}
+	}
+
 	private FVector FarPinTarget() const
 	{
+		// Aim point = the FLOOR at the pin, not a point in the air: the
+		// ballistic target is where the arc comes DOWN, so an air target let
+		// an unattacked pass sail on and land ~2m out of court. Grounding the
+		// target keeps the ball in play if nobody touches it, and the attacker
+		// intercepts the same arc at strike height on its way down.
 		float Sign = MySign();
-		float AntennaTopZ = (Ball != nullptr) ? Ball.NetTopZ + 80.0f : 323.0f;
+		if (bHasPossessionPin)
+			return FVector(Sign * 50.0f, PossessionPinY, 20.0f);
 		float PinY = (GetActorLocation().Y > 0.0f) ? CourtMinY : CourtMaxY;
 		float AimY = (PinY < 0.0f) ? PinY + 100.0f : PinY - 100.0f;
-		return FVector(Sign * 50.0f, AimY, AntennaTopZ);
+		return FVector(Sign * 50.0f, AimY, 20.0f);
 	}
 
 	private void DoDig()
 	{
+		// The reception LOCKS the possession pin — everything this possession
+		// aims there, and the teammate learns the attack point immediately.
+		if (!bHasPossessionPin)
+			LockPossessionPin();
 		AimAt(FarPinTarget());
 	}
 

@@ -810,8 +810,9 @@ class AVolleyballPlayer : APawn
 		else if (bBlockContact)
 			Target = FVector(-Own * 300.0f, 0.0f, FloorZ);
 		else if (MyTouches == 0 || MyTouches == 1)
-			// Placement rule: every pass goes to 1m from the far antenna top.
-			Target = FVector(Own * 50.0f, (BallPos.Y > 0.0f) ? -350.0f : 350.0f, 323.0f);
+			// Placement rule: every pass arcs down to the far pin (floor target
+			// so an unattacked pass stays IN — see FarPinTarget).
+			Target = FVector(Own * 50.0f, (BallPos.Y > 0.0f) ? -350.0f : 350.0f, 20.0f);
 		else
 			Target = FVector(-Own * 500.0f, (BallPos.Y > 0.0f) ? -180.0f : 180.0f, 15.0f);
 
@@ -857,11 +858,13 @@ class AVolleyballPlayer : APawn
 			// hot serves feeling physical — but if it would carry the ball over
 			// the net (protocol break: only touch 3 crosses), drop it and keep
 			// the pure ballistic, which by construction stays on our side.
-			// Set apex 160 (scaled to the realistic jump heights): high enough
-			// that the attacker can run in, low enough that the ball crosses
-			// the strike zone SLOWLY — a too-high set falls through the jump
-			// window faster than the AI's timing jitter and every spike whiffs.
-			float Apex = (Type == EHitType::Hit_Set) ? 160.0f : 260.0f;
+			// Arc by TOUCH NUMBER, not stroke: the SECOND ball is the pass the
+			// attacker jumps on — with the floor target at the pin its arc must
+			// peak ~490 to hang through the 350 strike zone (apex counts above
+			// the higher endpoint, so grounding the target lowered every peak
+			// by ~3m and the jump attack vanished). The reception keeps a
+			// flatter arc for control.
+			float Apex = (MyTouches == 1) ? 340.0f : 260.0f;
 			FVector Pure = BallisticVelocity(BallPos, Target, Apex);
 			OutVel = Pure + Reflected * 0.15f;
 			if (CrossesNetPlane(BallPos, OutVel))
