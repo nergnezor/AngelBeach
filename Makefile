@@ -180,6 +180,7 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 	"$(UE_UAT)" BuildCookRun \
 		-project="$(UPROJECT)" \
 		-noP4 \
+		-clean \
 		-platform=Android \
 		-cookflavor=Multi \
 		-clientconfig=Development \
