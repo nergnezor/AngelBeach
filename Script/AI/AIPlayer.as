@@ -81,7 +81,6 @@ class AAIPlayer : AVolleyballPlayer
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
 			bIMadeLastTouch = false;
-			bHasPossessionPin = false;
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
 			return;
@@ -256,11 +255,10 @@ class AAIPlayer : AVolleyballPlayer
 	protected void UpdateAI(float DeltaTime)
 	{
 		// Ball is on the opponent's side: play DEFENSE and clear our touch-ownership
-		// and possession pin so the next receive starts fresh.
+		// so the next receive starts fresh.
 		if (!IsBallComingToMySide())
 		{
 			bIMadeLastTouch = false;
-			bHasPossessionPin = false;
 			PlayDefense(DeltaTime);
 			return;
 		}
@@ -546,19 +544,14 @@ class AAIPlayer : AVolleyballPlayer
 			Target = HomePosition();
 		}
 
-		// At Touches==1 the supporter is the RECEIVER — and therefore the next
-		// ATTACKER (the setter is the current hitter; roles alternate). The
-		// possession pin was locked at the reception, so the attack point is
-		// known NOW: get to the approach start behind it immediately. The old
-		// behavior chased the setter's spot, which left the attacker starting
-		// a 7m cross-court sprint only when the set was already up — the third
-		// touch never happened.
-		if (Touches == 1)
+		// During OUR possession the supporter never ball-chases: they wait at
+		// the approach start behind their OWN-half pin, because that is where
+		// the next pass is coming (every pass targets the partner's pin). At
+		// Touches==0 I'm the upcoming setter; at Touches==1 I'm the attacker
+		// loading the approach — same spot either way.
+		if (Touches == 0 || Touches == 1)
 		{
-			FVector Pin = FarPinTarget();
-			FVector Start = ClampToCourt(FVector(
-				MySign() * (50.0f + ApproachBack), Pin.Y, FloorZ + PlayerHeight));
-			MoveToward2D(Start, DeltaTime, false, 1.0f);
+			MoveToward2D(MyPinApproachStart(), DeltaTime, false, 1.0f);
 			FaceBall();
 			return;
 		}
@@ -744,57 +737,48 @@ class AAIPlayer : AVolleyballPlayer
 	}
 	const float SetterZoneX = 280.0f;
 
-	// PLACEMENT RULE (Erik): EVERY pass — reception and second ball alike —
-	// goes to one metre from the FAR antenna. "Far" is decided ONCE per
-	// possession (at the reception, away from where the ball came in) and
-	// SHARED with the teammate: when each passer picked the pin far from
-	// themselves, the target ping-ponged across the court mid-possession and
-	// the attacker had a 7m sprint against a 1.5s pass — the third touch
-	// never happened. A locked pin means the attacker knows the attack point
-	// from the moment the reception is struck.
-	float PossessionPinY = 0.0f;
-	bool bHasPossessionPin = false;
-
-	private void LockPossessionPin()
+	// PLACEMENT RULE (Erik): every pass goes to one metre inside the antenna
+	// on the PARTNER's half, and every player EXPECTS passes at the pin on
+	// their OWN half. The halves are static per role (Front owns -Y, Back
+	// owns +Y — matching HomePosition), which closes the system: the left
+	// player receives toward the right pin where the partner already waits,
+	// that partner plays the second ball there and passes back to the left
+	// pin where the receiver-turned-attacker is loading their approach.
+	// Nobody ball-chases; everyone anticipates.
+	private float MyHalfPinY() const
 	{
-		// Far half relative to where the ball is entering our court.
-		float PinY = (Ball.Position.Y > 0.0f) ? CourtMinY : CourtMaxY;
-		PossessionPinY = (PinY < 0.0f) ? PinY + 100.0f : PinY - 100.0f;
-		bHasPossessionPin = true;
-		if (Teammate != nullptr)
-		{
-			Teammate.PossessionPinY = PossessionPinY;
-			Teammate.bHasPossessionPin = true;
-		}
+		float HalfMax = (Role == EPlayerRole::Role_Front) ? CourtMinY : CourtMaxY;
+		return (HalfMax < 0.0f) ? HalfMax + 100.0f : HalfMax - 100.0f;
 	}
 
-	private FVector FarPinTarget() const
+	private FVector PartnerPinTarget() const
 	{
-		// Aim point = the FLOOR at the pin, not a point in the air: the
-		// ballistic target is where the arc comes DOWN, so an air target let
-		// an unattacked pass sail on and land ~2m out of court. Grounding the
-		// target keeps the ball in play if nobody touches it, and the attacker
-		// intercepts the same arc at strike height on its way down.
-		float Sign = MySign();
-		if (bHasPossessionPin)
-			return FVector(Sign * 50.0f, PossessionPinY, 20.0f);
-		float PinY = (GetActorLocation().Y > 0.0f) ? CourtMinY : CourtMaxY;
-		float AimY = (PinY < 0.0f) ? PinY + 100.0f : PinY - 100.0f;
-		return FVector(Sign * 50.0f, AimY, 20.0f);
+		// Aim point = the FLOOR at the partner's pin: the ballistic target is
+		// where the arc comes DOWN, so an air target let an unattacked pass
+		// sail on and land ~2m out of court. Grounding it keeps the ball in
+		// play if nobody touches it; the partner intercepts the same arc at
+		// their contact height on its way down.
+		float PartnerHalfMax = (Role == EPlayerRole::Role_Front) ? CourtMaxY : CourtMinY;
+		float AimY = (PartnerHalfMax < 0.0f) ? PartnerHalfMax + 100.0f : PartnerHalfMax - 100.0f;
+		return FVector(MySign() * 50.0f, AimY, 20.0f);
+	}
+
+	// Where I WAIT for the pass I'm expecting: the approach start behind my
+	// own-half pin, ready to run in and attack or set whatever arrives.
+	protected FVector MyPinApproachStart() const
+	{
+		return ClampToCourt(FVector(
+			MySign() * (50.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
 	}
 
 	private void DoDig()
 	{
-		// The reception LOCKS the possession pin — everything this possession
-		// aims there, and the teammate learns the attack point immediately.
-		if (!bHasPossessionPin)
-			LockPossessionPin();
-		AimAt(FarPinTarget());
+		AimAt(PartnerPinTarget());
 	}
 
 	private void DoSet()
 	{
-		AimAt(FarPinTarget());
+		AimAt(PartnerPinTarget());
 	}
 
 	private void DoSpike()

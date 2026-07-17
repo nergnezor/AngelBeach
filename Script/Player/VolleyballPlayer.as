@@ -263,6 +263,7 @@ class AVolleyballPlayer : APawn
 
 		UpdatePredictedMeet();
 		UpdateAnimation(DeltaTime, HSpeed2);
+		UpdateMotionMonitor(DeltaTime);
 	}
 
 	// Feed movement + hit state into the AnimInstance. The Anim Blueprint reads
@@ -468,6 +469,100 @@ class AVolleyballPlayer : APawn
 	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
 	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
 	private bool bMovingState = false;  // hysteresis state for Anim.bIsMoving
+
+	// --- Motion naturalness monitor ----------------------------------------
+	// DETECTS unnatural motion signatures directly instead of waiting for a
+	// human to spot them: velocity direction reversals, yaw oscillation,
+	// crouch flapping, and IK-sink violations, each over a sliding window.
+	// Emits JITTER log lines that headless runs grep — the permanent motion-
+	// quality regression check.
+	bool bMonitorMotion = true;
+	private float MonWindow = 0.0f;
+	private int MonMoveFlips = 0;
+	private int MonYawFlips = 0;
+	private int MonCrouchFlips = 0;
+	private int MonIKTeleports = 0;
+	private FVector MonPrevVel;
+	private float MonPrevYaw = 0.0f;
+	private float MonPrevYawDelta = 0.0f;
+	private float MonPrevCrouch = 0.0f;
+	private float MonPrevCrouchDelta = 0.0f;
+	private FVector MonPrevHandR;
+	private bool bMonInit = false;
+
+	private void UpdateMotionMonitor(float DeltaTime)
+	{
+		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
+		float Yaw = GetActorRotation().Yaw;
+		float CrouchNow = (Anim != nullptr) ? Anim.CrouchAmount : 0.0f;
+		FVector HandR = (Anim != nullptr) ? Anim.HandTargetR : FVector::ZeroVector;
+
+		if (!bMonInit)
+		{
+			bMonInit = true;
+			MonPrevVel = PlayerVelocity;
+			MonPrevYaw = Yaw;
+			MonPrevCrouch = CrouchNow;
+			MonPrevHandR = HandR;
+			return;
+		}
+
+		// 1) Locomotion reversals: both frames moving, direction flipped.
+		FVector V = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+		FVector PV = FVector(MonPrevVel.X, MonPrevVel.Y, 0);
+		if (V.Size() > 60.0f && PV.Size() > 60.0f
+			&& V.DotProduct(PV) < -0.2f * V.Size() * PV.Size())
+			MonMoveFlips++;
+
+		// 2) Yaw oscillation: turn direction alternates at a real turn RATE.
+		// Thresholds are rates (per second), not per-frame deltas — a per-frame
+		// threshold silently under-detects at high frame rates (nullrhi runs
+		// uncapped and the first detector pass saw nothing at any fps).
+		float YawDelta = Math::FindDeltaAngleDegrees(MonPrevYaw, Yaw);
+		float YawRate = YawDelta / DeltaTime;
+		if (Math::Abs(YawRate) > 60.0f && Math::Abs(MonPrevYawDelta) > 60.0f
+			&& YawRate * MonPrevYawDelta < 0.0f)
+			MonYawFlips++;
+		if (Math::Abs(YawRate) > 20.0f) MonPrevYawDelta = YawRate;
+
+		// 3) Crouch flapping: knee direction alternates at a real rate.
+		float CrouchRate = (CrouchNow - MonPrevCrouch) / DeltaTime;
+		if (Math::Abs(CrouchRate) > 1.0f && Math::Abs(MonPrevCrouchDelta) > 1.0f
+			&& CrouchRate * MonPrevCrouchDelta < 0.0f)
+			MonCrouchFlips++;
+		if (Math::Abs(CrouchRate) > 0.3f) MonPrevCrouchDelta = CrouchRate;
+
+		// 4) IK-sink violation: the hand target moved faster than the sink's
+		// speed limit allows — something writes past the anti-flicker sink.
+		if ((HandR - MonPrevHandR).Size() > 900.0f * DeltaTime * 1.6f + 2.0f)
+			MonIKTeleports++;
+
+		MonPrevVel = PlayerVelocity;
+		MonPrevYaw = Yaw;
+		MonPrevCrouch = CrouchNow;
+		MonPrevHandR = HandR;
+
+		MonWindow += DeltaTime;
+		if (MonWindow >= 0.5f)
+		{
+			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3 || MonIKTeleports >= 1)
+			{
+				Log("JITTER team=" + int(TeamSide)
+					+ " moveFlips=" + MonMoveFlips
+					+ " yawFlips=" + MonYawFlips
+					+ " crouchFlips=" + MonCrouchFlips
+					+ " ikTeleports=" + MonIKTeleports
+					+ " speed=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
+					+ " hit=" + int(CurrentHit)
+					+ " grounded=" + bIsGrounded);
+			}
+			MonWindow = 0.0f;
+			MonMoveFlips = 0;
+			MonYawFlips = 0;
+			MonCrouchFlips = 0;
+			MonIKTeleports = 0;
+		}
+	}
 
 	// ANTI-FLICKER SINK STATE: everything the ABP sees is speed-limited at the
 	// single write point (end of UpdateIKTargets). Public: the mixin owns them.

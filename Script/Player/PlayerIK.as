@@ -114,9 +114,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// that it becomes a one-knee kneel whose dropped chest puts the platform
 		// targets outside the reach envelope and the solver gives up (hands end
 		// up at the thighs).
+		// The knee depth keys on the BALL's height (pose-independent), never on
+		// the chest: chest-derived depth fed back through the ABP (crouch
+		// lowers the chest → recomputed depth → new crouch) and the legs
+		// oscillated at up to 29 direction flips per half-second window — the
+		// exact up-and-down shake the jitter monitor caught (crouchFlips).
 		float FeetZ = Self.GetActorLocation().Z - Self.PlayerHeight;
-		float PlatAboveFeet = PlatEnd.Z - FeetZ;
-		float BallLow = Math::Clamp((110.0f - PlatAboveFeet) / 80.0f, 0.0f, 1.0f);
+		float ContactAboveFeet = PlatformBall.Z - FeetZ;
+		float BallLow = Math::Clamp((110.0f - ContactAboveFeet) / 80.0f, 0.0f, 1.0f);
 		Crouch = 0.5f + 0.2f * BallLow;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
@@ -349,10 +354,16 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	Self.SmRotL = Math::LerpShortestPath(Self.SmRotL, PalmL, RotAlpha);
 	// Asymmetric: sinking is athletic (dives, split steps, landings need it
 	// fast); RISING is never urgent — a slow release means any on/off crouch
-	// source reads as a held stance, not an up-and-down bob.
-	float CrouchDown = 6.0f * Dt;
-	float CrouchUp   = 1.5f * Dt;
-	Self.SmCrouch = Math::Clamp(WantCrouch, Self.SmCrouch - CrouchUp, Self.SmCrouch + CrouchDown);
+	// source reads as a held stance, not an up-and-down bob. The DEADBAND
+	// swallows residual micro-alternation from any upstream source: knees
+	// only move for a real change of intent.
+	float CrouchErr = WantCrouch - Self.SmCrouch;
+	if (Math::Abs(CrouchErr) > 0.04f)
+	{
+		float CrouchDown = 6.0f * Dt;
+		float CrouchUp   = 1.5f * Dt;
+		Self.SmCrouch = Math::Clamp(WantCrouch, Self.SmCrouch - CrouchUp, Self.SmCrouch + CrouchDown);
+	}
 
 	Self.Anim.HandTargetR  = Self.SmHandR;
 	Self.Anim.HandTargetL  = Self.SmHandL;
