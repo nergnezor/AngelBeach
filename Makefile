@@ -159,6 +159,7 @@ package-linux: check ## Package a Development build for Linux (output: $(OUTPUT_
 		-platform=Linux \
 		-clientconfig=Development \
 		-cook -build -stage -pak -archive \
+		-nozenstore \
 		-archivedirectory="$(OUTPUT_DIR)/Linux"
 	@echo ">> Linux package ready at $(OUTPUT_DIR)/Linux"
 
@@ -183,6 +184,7 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 		-cookflavor=Multi \
 		-clientconfig=Development \
 		-cook -build -stage -pak -archive \
+		-nozenstore \
 		-archivedirectory="$(OUTPUT_DIR)/Android"
 	@echo ">> Android package ready at $(OUTPUT_DIR)/Android"
 
@@ -198,6 +200,7 @@ package-web: check ## Package for HTML5/WebGL (output: $(OUTPUT_DIR)/Web) — re
 		-platform=HTML5 \
 		-clientconfig=Development \
 		-cook -build -stage -pak -archive \
+		-nozenstore \
 		-archivedirectory="$(OUTPUT_DIR)/Web"
 	@echo ">> Web package ready at $(OUTPUT_DIR)/Web/HTML5"
 

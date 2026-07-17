@@ -14,17 +14,13 @@ jobs:
       ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
-      # Android SDK/NDK paths — set these as repository variables or override below.
+      # Android SDK root — set as a repository variable or override below.
       ANDROID_HOME: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
-      ANDROID_SDK_ROOT: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
-      ANDROID_NDK_HOME: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
-      # UBT locates the NDK via NDKROOT / NDK_ROOT (not ANDROID_NDK_HOME).
-      NDKROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
-      NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
-      ANDROID_NDK_ROOT: ${{ vars.ANDROID_NDK_HOME || '/opt/android-ndk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
-      # Persistent DDC outside workspace — survives between runs
-      UE_DERIEDDATACACHE_ROOT: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}/Engine/DerivedDataCache
+      # NDK version the engine requires. UnrealBuildTool rejects any other
+      # version with "Sdk: not found. Required version rXXx". Bump this if the
+      # engine's required NDK changes (see Engine AndroidPlatformSDK).
+      NDK_VERSION: "27.2.12479018"   # r27c
 
     steps:
       - name: Checkout
@@ -44,12 +40,36 @@ jobs:
           }
           echo "Engine OK: $ENGINE_DIR"
 
-      - name: Verify Android SDK/NDK
+      - name: Ensure engine-required Android NDK (r27c)
         run: |
           test -d "$ANDROID_HOME" || { echo "ERROR: ANDROID_HOME not found: $ANDROID_HOME"; exit 1; }
-          test -d "$ANDROID_NDK_HOME" || { echo "ERROR: ANDROID_NDK_HOME not found: $ANDROID_NDK_HOME"; exit 1; }
+
+          NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ ! -d "$NDK_DIR" ]; then
+            echo ">> NDK $NDK_VERSION not installed; installing via sdkmanager..."
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+            [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+            test -n "$SDKMANAGER" || {
+              echo "ERROR: sdkmanager not found under $ANDROID_HOME/cmdline-tools/latest/bin"
+              echo "       Install the Android command-line tools on the runner."
+              exit 1
+            }
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            # NDK plus the SDK bits gradle needs to assemble the APK.
+            "$SDKMANAGER" "ndk;$NDK_VERSION" \
+              "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          fi
+          test -d "$NDK_DIR" || { echo "ERROR: NDK still missing at $NDK_DIR"; exit 1; }
+
+          # UnrealBuildTool reads the NDK location from NDKROOT / ANDROID_NDK_ROOT
+          # (NOT ANDROID_NDK_HOME). Export all three for subsequent steps.
+          {
+            echo "ANDROID_NDK_HOME=$NDK_DIR"
+            echo "ANDROID_NDK_ROOT=$NDK_DIR"
+            echo "NDKROOT=$NDK_DIR"
+          } >> "$GITHUB_ENV"
           echo "Android SDK : $ANDROID_HOME"
-          echo "Android NDK : $ANDROID_NDK_HOME"
+          echo "Android NDK : $NDK_DIR"
 
       - name: Ensure Zen storage server is running
         run: |
@@ -96,16 +116,43 @@ jobs:
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
-            -cookflavor=Multi \
-            -clientconfig=Shipping \
-            -cook -build -stage -pak -package -archive \
-            -iterativecooking \
-            -ddc="$UE_DERIEDDATACACHE_ROOT" \
+            -clientconfig=Development \
+            -cook -build -stage -package -archive \
+            -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
-      - name: Upload artifact
+      - name: Collect APK
+        run: |
+          APK_DIR="$GITHUB_WORKSPACE/Artifacts/apk"
+          mkdir -p "$APK_DIR"
+          found=0
+          # The APK lands in the archive dir and/or the staged build tree.
+          while IFS= read -r apk; do
+            echo "Found APK: $apk"
+            cp -f "$apk" "$APK_DIR/"
+            found=1
+          done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
+                     -name '*.apk' 2>/dev/null)
+          if [ "$found" = "0" ]; then
+            echo "ERROR: packaging produced no .apk"
+            exit 1
+          fi
+          ls -lh "$APK_DIR"
+
+      # The APK as its own dedicated artifact.
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-${{ github.sha }}
-          path: PackagedBuilds/Android/
+          name: android-apk-${{ github.sha }}
+          path: Artifacts/apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Full staged build (loose files) kept as a separate artifact.
+      - name: Upload staged build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-staged-${{ github.sha }}
+          path: Saved/StagedBuilds/Android/
+          if-no-files-found: warn
           retention-days: 14

@@ -6,7 +6,7 @@ public class BeachVolleyballEditorTarget : TargetRules
 	public BeachVolleyballEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
-		DefaultBuildSettings = BuildSettingsVersion.V7;
+		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
 		ExtraModuleNames.Add("BeachVolleyball");
 	}
