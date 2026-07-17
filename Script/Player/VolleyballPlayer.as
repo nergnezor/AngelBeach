@@ -24,6 +24,7 @@ class AVolleyballPlayer : APawn
 	// which caused jerky spinning (especially around jumps).
 	FVector FacingDir = FVector(1, 0, 0);
 	bool bHasFacing = false;
+	private float FacingHoldTimer = 0.0f;   // facing requests lapse on this
 
 	ETeam TeamSide = ETeam::Team_A;
 	bool bCanHit = true;
@@ -220,9 +221,18 @@ class AVolleyballPlayer : APawn
 		// SINGLE rotation authority. Prefer the AI's desired facing (e.g. toward the
 		// ball); otherwise face the travel direction so locomotion reads correctly.
 		// Always a smooth lerp — never a snap — so the body never jerks.
+		// A facing request HOLDS for a beat (same lapse pattern as Reach/crouch):
+		// the AI only re-asserts every reaction tick (~0.1s), and clearing the
+		// request per frame made the rotation target alternate ball-facing on
+		// tick frames / travel-facing between them — a visible two-pose shimmer.
 		float HSpeed2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+		if (bHasFacing)
+			FacingHoldTimer = 0.2f;
+		else
+			FacingHoldTimer -= DeltaTime;
+
 		FVector Want = FVector::ZeroVector;
-		if (bHasFacing && FacingDir.SizeSquared() > 0.01f)
+		if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
 			Want = FVector(FacingDir.X, FacingDir.Y, 0);
 		else if (HSpeed2 > 30.0f)
 			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
@@ -233,7 +243,7 @@ class AVolleyballPlayer : APawn
 			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
 			SetActorRotation(Math::LerpShortestPath(Cur, Want.Rotation(), Alpha));
 		}
-		bHasFacing = false;   // AI must re-assert each frame; lapses otherwise
+		bHasFacing = false;   // requests lapse via FacingHoldTimer above
 
 		UpdatePredictedMeet();
 		UpdateAnimation(DeltaTime, HSpeed2);
@@ -266,7 +276,11 @@ class AVolleyballPlayer : APawn
 		Anim.Speed         = HSpeed;
 		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
 		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
-		Anim.bIsMoving     = HSpeed > 40.0f;
+		// HYSTERESIS: a single threshold made bIsMoving flip every frame when
+		// the speed hovered at the boundary (deceleration, hold drift), and the
+		// Anim BP popped between the idle and locomotion poses at frame rate.
+		bMovingState = bMovingState ? (HSpeed > 30.0f) : (HSpeed > 70.0f);
+		Anim.bIsMoving     = bMovingState;
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
 		Anim.bDiving       = IsDiving();
@@ -423,6 +437,7 @@ class AVolleyballPlayer : APawn
 
 	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
 	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
+	private bool bMovingState = false;  // hysteresis state for Anim.bIsMoving
 
 	// Extra crouch (0..1) requested for THIS frame by AI/dive: athletic ready
 	// stance, split step dip, dive recovery. Added on top of the pose crouch in
