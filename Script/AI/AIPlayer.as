@@ -281,14 +281,14 @@ class AAIPlayer : AVolleyballPlayer
 	// Role assignment — deterministic so the two players never swap
 	// mid-rally and end up chasing the same ball.
 	// ---------------------------------------------------------------
-	private bool AmIHitter(FVector Landing) const
+	private bool AmIHitter(FVector Landing)
 	{
 		if (Teammate == nullptr) return true;
 
 		// I never take two contacts in a row — if I made the last touch, it's
 		// my teammate's turn now. This guarantees digger != setter != attacker.
-		if (bIMadeLastTouch) return false;
-		if (Teammate.bIMadeLastTouch) return true;
+		if (bIMadeLastTouch)          { bWasHitter = false; return false; }
+		if (Teammate.bIMadeLastTouch) { bWasHitter = true;  return true;  }
 
 		// Fresh ball coming over (no team touches yet): closest player digs,
 		// with the back player favored for deep balls (typical serve receive).
@@ -296,11 +296,20 @@ class AAIPlayer : AVolleyballPlayer
 		float TheirDist = (Teammate.GetActorLocation() - Landing).Size2D();
 
 		bool bDeep = IsDeep(Landing.X);
-		if (bDeep && Role == EPlayerRole::Role_Back)  return true;
-		if (bDeep && Role == EPlayerRole::Role_Front) return false;
+		if (bDeep && Role == EPlayerRole::Role_Back)  { bWasHitter = true;  return true;  }
+		if (bDeep && Role == EPlayerRole::Role_Front) { bWasHitter = false; return false; }
 
-		return MyDist <= TheirDist;
+		// STICKY ROLE: with a bare closest-player rule, two nearly equidistant
+		// teammates swapped hitter/support every AI tick and both shuttled
+		// between two goals. The incumbent keeps the ball unless the partner
+		// is CLEARLY closer.
+		float Margin = bWasHitter ? 60.0f : -60.0f;
+		bWasHitter = MyDist <= TheirDist + Margin;
+		return bWasHitter;
 	}
+
+	// Hysteresis state for AmIHitter (who owns the current ball).
+	private bool bWasHitter = false;
 
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
@@ -338,8 +347,10 @@ class AAIPlayer : AVolleyballPlayer
 		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
-		if (Intend == EHitType::Hit_Bump) DoDig();
-		else                              DoSet();
+		// The reception pops to the setter zone; the SECOND ball is always
+		// PLACED at the pin (see DoSet) no matter which stroke plays it.
+		if (Touches == 0) DoDig();
+		else              DoSet();
 
 		// Desperate ball: it will drop to play height before we can run there —
 		// launch a dive at it instead of jogging hopelessly and watching it land.
@@ -623,16 +634,16 @@ class AAIPlayer : AVolleyballPlayer
 	// height. Momentum now carries through the jump (no air steering), which is
 	// exactly how a real approach converts run speed into attack reach.
 	// ---------------------------------------------------------------
-	// Contact height for the jump attack: hands top out ~424cm at the jump apex
-	// (chest ~329 + arm ~95), so we strike where the DESCENDING ball is slow and
-	// still inside that envelope. 380 was tuned for floatier sets; with the
-	// faster ones it put the ball 75cm above the hands at apex.
-	const float SpikeStrikeZ = 410.0f;
+	// Contact height for the jump attack: with the loaded jump (~115cm rise at
+	// the heavy player gravity) the hands top out ~355cm at apex — strike
+	// where the descending ball is slow and still inside that envelope. These
+	// are real beach volleyball numbers (net 243, contact ~350).
+	const float SpikeStrikeZ = 350.0f;
 	const float ApproachBack = 200.0f;  // run-up starts this far behind the plant
 
 	private void ApproachForSpike(float DeltaTime)
 	{
-		float TimeToApex = JumpVelocity / 980.0f;   // ≈ 0.61s
+		float TimeToApex = LoadedJumpVelocity / Math::Abs(Gravity);   // ≈ 0.35s (loaded jump)
 
 		FVector Strike;
 		float Tau = PredictBallTimeToHeight(SpikeStrikeZ, Strike);
@@ -698,19 +709,15 @@ class AAIPlayer : AVolleyballPlayer
 				// contacts at +0.18); a LATE jump meets the ball a touch lower but
 				// still inside the envelope. Keep the margin tiny so AI tick
 				// jitter lands on the late (reachable) side.
-				if (DistToPlant < 90.0f && Tau <= TimeToApex + 0.04f)
+				// The gather (JumpLoadDuration) happens BEFORE takeoff, so the
+				// decision fires one load earlier. StartLoadedJump does the
+				// plant (momentum brake — full-speed jumps drifted 3-4m past
+				// the strike point) and the deep full-body sink.
+				if (DistToPlant < 90.0f && Tau <= TimeToApex + JumpLoadDuration + 0.04f)
 				{
 					MovePlayer(FVector2D::ZeroVector);
-					// PLANT: the penultimate-step brake every real approach has.
-					// Keeping full sprint momentum carried the hitter 3-4m PAST
-					// the strike point in the air (bodyHoriz 300-500 in the whiff
-					// autopsies) — the jump must convert run into HEIGHT. The 25%
-					// residue is the natural forward drift that closes the last
-					// ~90cm to the ball during the ascent.
-					PlayerVelocity.X *= 0.25f;
-					PlayerVelocity.Y *= 0.25f;
-					Jump();
-					if (bDebugAI) Log(DebugTag() + " SPIKE JUMP tau=" + int(Tau * 100) + " dist=" + int(DistToPlant));
+					StartLoadedJump();
+					if (bDebugAI && IsJumpLoading()) Log(DebugTag() + " SPIKE JUMP tau=" + int(Tau * 100) + " dist=" + int(DistToPlant));
 				}
 			}
 		}
@@ -749,34 +756,29 @@ class AAIPlayer : AVolleyballPlayer
 	}
 	const float SetterZoneX = 280.0f;
 
+	// PLACEMENT RULE (Erik): EVERY pass — reception and second ball alike —
+	// goes to one metre from the FAR antenna top. The antennas stand on the
+	// net plane at the sidelines (Y ±450), tops ~80cm above the tape; "far" =
+	// the pin on the opposite Y half from me, so the play runs the long
+	// diagonal. The aim point hangs at antenna-top height, 1m inside the pin,
+	// just our side of the net.
+	private FVector FarPinTarget() const
+	{
+		float Sign = MySign();
+		float AntennaTopZ = (Ball != nullptr) ? Ball.NetTopZ + 80.0f : 323.0f;
+		float PinY = (GetActorLocation().Y > 0.0f) ? CourtMinY : CourtMaxY;
+		float AimY = (PinY < 0.0f) ? PinY + 100.0f : PinY - 100.0f;
+		return FVector(Sign * 50.0f, AimY, AntennaTopZ);
+	}
+
 	private void DoDig()
 	{
-		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone. The
-		// contact is ballistic (BallisticVelocity in OnBallContact): the aim point
-		// is where the arc comes DOWN — chest height in the setter zone, centre
-		// court (Y=0) so the 2nd-ball attack can go either direction.
-		FVector Zone = SetterZone();
-		AimAt(FVector(Zone.X, Zone.Y, 150.0f));
+		AimAt(FarPinTarget());
 	}
 
 	private void DoSet()
 	{
-		// Set: a HIGH float the attacker can take a full jump attack on. Ballistic
-		// contact: aim at the attack spot, arc apex ~4m up — the ball crosses
-		// strike height (~SpikeStrikeZ) descending right over the plant point.
-		//
-		// SET TO YOUR PARTNER: the next hitter is always the player who did NOT
-		// just touch (the roles guarantee it) — usually the RECEIVER, still deep
-		// after the pass. Aiming at "the front player's Y" put the ball where the
-		// attacker wasn't and the third touch never happened (the ball dropped
-		// untouched on the attack spot). Aim at the partner's actual Y so their
-		// approach is a straight run-in.
-		float Sign = MySign();
-		float SetX = Sign * 250.0f;
-		float SetY = (Teammate != nullptr)
-			? Math::Clamp(Teammate.GetActorLocation().Y, CourtMinY + 120.0f, CourtMaxY - 120.0f)
-			: Ball.Position.Y * 0.4f;
-		AimAt(FVector(SetX, SetY, 170.0f));
+		AimAt(FarPinTarget());
 	}
 
 	private void DoSpike()
@@ -873,10 +875,12 @@ class AAIPlayer : AVolleyballPlayer
 				{
 					// Kill the drive FIRST so the block jump is vertical — momentum
 					// carries in the air, and drifting into the net is a fault.
+					// Blocks load too: the same full-body gather, matching the
+					// attacker's own load delay.
 					MovePlayer(FVector2D::ZeroVector);
 					float HSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
 					if (HSpd < 90.0f)
-						Jump();
+						StartLoadedJump();
 				}
 				else
 				{

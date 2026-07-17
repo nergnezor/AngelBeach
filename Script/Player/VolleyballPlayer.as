@@ -10,8 +10,12 @@ class AVolleyballPlayer : APawn
 	USkeletalMeshComponent Mesh;
 
 	float MoveSpeed = 450.0f;
-	float JumpVelocity = 600.0f;
-	float Gravity = -980.0f;
+	// PLAYER gravity is ~2x earth (the ball keeps real -980): with real g the
+	// tuned jump heights hung airborne ~1.5s and read as moon-floating. Heavy
+	// player gravity + scaled jump speeds is the standard trick for snappy,
+	// athletic jumps — rise ~70cm reactive / ~115cm loaded, air time ~0.7s.
+	float JumpVelocity = 520.0f;
+	float Gravity = -1900.0f;
 
 	FVector PlayerVelocity = FVector::ZeroVector;
 	bool bIsGrounded = true;
@@ -137,6 +141,7 @@ class AVolleyballPlayer : APawn
 	{
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
+		UpdateJumpLoad(DeltaTime);
 		if (!IsDiving())
 			ApplyMoveInput(DeltaTime);
 
@@ -253,6 +258,8 @@ class AVolleyballPlayer : APawn
 	// these and does the actual blending in its AnimGraph.
 	private void UpdateAnimation(float DeltaTime, float HSpeed)
 	{
+		GestureAge += DeltaTime;
+
 		// Decay the swing timer. Keep CurrentHit set until the pose has fully
 		// relaxed (below) so the arm doesn't snap to neutral mid-gesture.
 		if (HitAnimTimer > 0.0f)
@@ -346,12 +353,18 @@ class AVolleyballPlayer : APawn
 		// Pose shape uses the full 0..1 gesture curve, remapped so even the 0.85
 		// reach hold reaches the contact shape (reach should look committed).
 		float Shape = Math::Clamp(CurrentPose / 0.85f, 0.0f, 1.0f);
-		this.UpdateIKTargets(Shape);   // mixin in PlayerIK.as
+		this.UpdateIKTargets(Shape, DeltaTime);   // mixin in PlayerIK.as
 
 		// Once the gesture has fully relaxed and we're no longer hitting/reaching,
-		// release the hit type so the next contact can pick a fresh one.
-		if (HitAnimTimer <= 0.0f && !bReaching && CurrentPose < 0.02f)
+		// release the hit type so the next contact can pick a fresh one. The
+		// release respects the same dwell as Reach — a release/re-reach cycle
+		// is just as much a flicker as a type swap.
+		if (HitAnimTimer <= 0.0f && !bReaching && CurrentPose < 0.02f
+			&& CurrentHit != EHitType::Hit_None && GestureAge >= MinGestureDwell)
+		{
 			CurrentHit = EHitType::Hit_None;
+			GestureAge = 0.0f;
+		}
 
 		// Per-attempt summary tracking: while gesturing, remember how close the hand
 		// actually got to the ball. Emit ONE line when the attempt ends — far less
@@ -422,7 +435,13 @@ class AVolleyballPlayer : APawn
 			bReaching = false;
 		CrouchHoldTimer -= DeltaTime;
 		if (CrouchHoldTimer <= 0.0f)
-			ExtraCrouch = 0.0f;
+		{
+			// DECAY, don't hard-zero: the AI re-requests every ~0.11s and the
+			// hold is 0.25s, but sources that flip per tick (plant crouch at the
+			// goal-radius boundary) made ExtraCrouch sawtooth 0 <-> 0.45 — the
+			// body visibly bobbed up and down. Standing up is never urgent.
+			ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
+		}
 	}
 
 	private bool bAttemptActive = false;
@@ -438,6 +457,17 @@ class AVolleyballPlayer : APawn
 	private float CurrentPose = 0.0f;   // smoothed arm-pose SHAPE weight (ready->contact)
 	private float IKWeight = 0.0f;      // smoothed IK node Alpha (how much IK applies)
 	private bool bMovingState = false;  // hysteresis state for Anim.bIsMoving
+
+	// ANTI-FLICKER SINK STATE: everything the ABP sees is speed-limited at the
+	// single write point (end of UpdateIKTargets). Public: the mixin owns them.
+	FVector SmHandR;
+	FVector SmHandL;
+	FVector SmPoleR;
+	FVector SmPoleL;
+	FRotator SmRotR;
+	FRotator SmRotL;
+	float SmCrouch = 0.0f;
+	bool bSmInit = false;
 
 	// Extra crouch (0..1) requested for THIS frame by AI/dive: athletic ready
 	// stance, split step dip, dive recovery. Added on top of the pose crouch in
@@ -460,9 +490,22 @@ class AVolleyballPlayer : APawn
 	{
 		bReaching = true;
 		ReachHoldTimer = 0.25f;
-		if (HitAnimTimer <= 0.0f)   // don't override an active swing
+		if (HitAnimTimer > 0.0f) return;   // don't override an active swing
+		if (Type != CurrentHit)
+		{
+			// ANTI-FLICKER: a gesture must live MinGestureDwell before another
+			// may replace it — two systems disagreeing about the stroke at
+			// different rates alternated IK branches per frame. Real contacts
+			// (TriggerHit) bypass this: they're events, not opinions.
+			if (GestureAge < MinGestureDwell) return;
 			CurrentHit = Type;
+			GestureAge = 0.0f;
+		}
 	}
+
+	// Age of the current gesture type; guards against per-frame branch flips.
+	private float GestureAge = 10.0f;
+	const float MinGestureDwell = 0.15f;
 
 	// Crouch request that survives between AI reaction ticks (ready stance etc.).
 	// Per-frame writers (split step, dive) can set ExtraCrouch directly instead.
@@ -755,10 +798,9 @@ class AVolleyballPlayer : APawn
 			Target = DesiredAim;
 		else if (bBlockContact)
 			Target = FVector(-Own * 300.0f, 0.0f, FloorZ);
-		else if (MyTouches == 0)
-			Target = FVector(Own * 280.0f, BallPos.Y * 0.5f, 150.0f);
-		else if (MyTouches == 1)
-			Target = FVector(Own * 250.0f, BallPos.Y * 0.4f, 170.0f);
+		else if (MyTouches == 0 || MyTouches == 1)
+			// Placement rule: every pass goes to 1m from the far antenna top.
+			Target = FVector(Own * 50.0f, (BallPos.Y > 0.0f) ? -350.0f : 350.0f, 323.0f);
 		else
 			Target = FVector(-Own * 500.0f, (BallPos.Y > 0.0f) ? -180.0f : 180.0f, 15.0f);
 
@@ -804,11 +846,11 @@ class AVolleyballPlayer : APawn
 			// hot serves feeling physical — but if it would carry the ball over
 			// the net (protocol break: only touch 3 crosses), drop it and keep
 			// the pure ballistic, which by construction stays on our side.
-			// Set apex 340: high enough that the attacker (usually the deep
-			// receiver) can run in, low enough that the ball crosses the strike
-			// zone SLOWLY — apex 400 sent it through at -577cm/s and the jump
-			// window shrank below the AI's timing jitter (13 jumps, 0 contacts).
-			float Apex = (Type == EHitType::Hit_Set) ? 340.0f : 260.0f;
+			// Set apex 160 (scaled to the realistic jump heights): high enough
+			// that the attacker can run in, low enough that the ball crosses
+			// the strike zone SLOWLY — a too-high set falls through the jump
+			// window faster than the AI's timing jitter and every spike whiffs.
+			float Apex = (Type == EHitType::Hit_Set) ? 160.0f : 260.0f;
 			FVector Pure = BallisticVelocity(BallPos, Target, Apex);
 			OutVel = Pure + Reflected * 0.15f;
 			if (CrossesNetPlane(BallPos, OutVel))
@@ -840,7 +882,8 @@ class AVolleyballPlayer : APawn
 	protected void TriggerHit(EHitType Type, FVector WorldDir)
 	{
 		ReachDir = WorldDir.GetSafeNormal();
-		CurrentHit = Type;
+		CurrentHit = Type;      // a real contact is an event — no dwell gate
+		GestureAge = 0.0f;
 		HitAnimTimer = HitAnimDuration;
 		if (bDebugHit)
 		{
@@ -921,8 +964,9 @@ class AVolleyballPlayer : APawn
 		if (Flat.SizeSquared() < 0.01f) return;
 		DiveDir = Flat.GetSafeNormal();
 		DiveTimer = DiveDuration;
-		// Small hop so the lunge leaves the ground for a beat.
-		PlayerVelocity.Z = 130.0f;
+		// Small hop so the lunge leaves the ground for a beat (scaled for the
+		// heavy player gravity).
+		PlayerVelocity.Z = 200.0f;
 		bIsGrounded = false;
 	}
 
@@ -954,6 +998,43 @@ class AVolleyballPlayer : APawn
 		if (bIsGrounded)
 		{
 			PlayerVelocity.Z = JumpVelocity;
+			bIsGrounded = false;
+		}
+	}
+
+	// --- Loaded jump: the full-body gather every real attack/block jump has —
+	// plant, sink deep (the arms are already back in the swing windup), then
+	// explode. The load converts the gather into HEIGHT: ~115cm rise vs the
+	// reactive jump's ~70cm (at the heavy player gravity above).
+	float JumpLoadTimer = 0.0f;
+	const float JumpLoadDuration = 0.16f;
+	const float LoadedJumpVelocity = 660.0f;
+
+	bool IsJumpLoading() const { return JumpLoadTimer > 0.0f; }
+
+	void StartLoadedJump()
+	{
+		if (!bIsGrounded || JumpLoadTimer > 0.0f) return;
+		// The plant: the gather brakes the run — momentum becomes height, and
+		// the small residue drifts the body into the contact during the ascent.
+		PlayerVelocity.X *= 0.25f;
+		PlayerVelocity.Y *= 0.25f;
+		JumpLoadTimer = JumpLoadDuration;
+	}
+
+	private void UpdateJumpLoad(float DeltaTime)
+	{
+		if (JumpLoadTimer <= 0.0f) return;
+		if (!bIsGrounded) { JumpLoadTimer = 0.0f; return; }   // knocked airborne: cancel
+
+		// Sink through the load — deepest right before the explosion.
+		float Prog = 1.0f - JumpLoadTimer / JumpLoadDuration;
+		ExtraCrouch = Math::Max(ExtraCrouch, 0.65f * Prog);
+
+		JumpLoadTimer -= DeltaTime;
+		if (JumpLoadTimer <= 0.0f)
+		{
+			PlayerVelocity.Z = LoadedJumpVelocity;
 			bIsGrounded = false;
 		}
 	}
