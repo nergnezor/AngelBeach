@@ -9,8 +9,8 @@
 //
 // 'Blend' (0..1) is the gesture weight: 0 = relaxed ready pose, 1 = full contact
 // pose. Reads Self.CurrentHit / Self.Anim / Self.DesiredAim / the ball (all public
-// on AVolleyballPlayer for this mixin).
-mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
+// on AVolleyballPlayer for this mixin). 'Dt' feeds the anti-flicker sink at the end.
+mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 {
 	if (Self.Mesh == nullptr) return;
 
@@ -307,22 +307,67 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend)
 	// serve build their own motion into ContactR/L (via SwingPhase/ServePhase), so
 	// they should NOT be re-lerped from the ready pose (that would start the hand
 	// at the hip instead of cocked/up). Other hits ease from ready as usual.
+	FVector WantHandR;
+	FVector WantHandL;
 	if (Self.CurrentHit == EHitType::Hit_Spike || Self.CurrentHit == EHitType::Hit_Block
 		|| Self.CurrentHit == EHitType::Hit_Serve)
 	{
-		Self.Anim.HandTargetR = ContactR;
-		Self.Anim.HandTargetL = ContactL;
+		WantHandR = ContactR;
+		WantHandL = ContactL;
 	}
 	else
 	{
-		Self.Anim.HandTargetR = ReadyR + (ContactR - ReadyR) * Blend;
-		Self.Anim.HandTargetL = ReadyL + (ContactL - ReadyL) * Blend;
+		WantHandR = ReadyR + (ContactR - ReadyR) * Blend;
+		WantHandL = ReadyL + (ContactL - ReadyL) * Blend;
 	}
-	Self.Anim.ElbowPoleR  = PoleR;
-	Self.Anim.ElbowPoleL  = PoleL;
-	Self.Anim.HandRotR    = PalmR;
-	Self.Anim.HandRotL    = PalmL;
 	// Pose crouch plus whatever extra the AI asked for this frame (ready stance,
 	// split step, dive) — the deepest request wins, capped at full crouch.
-	Self.Anim.CrouchAmount = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
+	float WantCrouch = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
+
+	// --- ANTI-FLICKER GUARD (the sink) --------------------------------------
+	// Everything the ABP sees passes through HERE with a speed limit, so no
+	// upstream disagreement can ever alternate the pose between two solutions
+	// at frame rate again — such a conflict now collapses into a small wobble
+	// around the midpoint instead of a two-pose teleport. The limits sit far
+	// above legitimate gesture speeds (fastest whip ≈ 600-800cm/s), so real
+	// choreography passes through untouched.
+	if (!Self.bSmInit)
+	{
+		Self.bSmInit = true;
+		Self.SmHandR = WantHandR; Self.SmHandL = WantHandL;
+		Self.SmPoleR = PoleR;     Self.SmPoleL = PoleL;
+		Self.SmRotR  = PalmR;     Self.SmRotL  = PalmL;
+		Self.SmCrouch = WantCrouch;
+	}
+	float MaxStep = 900.0f * Dt;
+	Self.SmHandR = MoveTowardClamped(Self.SmHandR, WantHandR, MaxStep);
+	Self.SmHandL = MoveTowardClamped(Self.SmHandL, WantHandL, MaxStep);
+	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
+	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);
+	float RotAlpha = Math::Clamp(14.0f * Dt, 0.0f, 1.0f);
+	Self.SmRotR = Math::LerpShortestPath(Self.SmRotR, PalmR, RotAlpha);
+	Self.SmRotL = Math::LerpShortestPath(Self.SmRotL, PalmL, RotAlpha);
+	// Asymmetric: sinking is athletic (dives, split steps, landings need it
+	// fast); RISING is never urgent — a slow release means any on/off crouch
+	// source reads as a held stance, not an up-and-down bob.
+	float CrouchDown = 6.0f * Dt;
+	float CrouchUp   = 1.5f * Dt;
+	Self.SmCrouch = Math::Clamp(WantCrouch, Self.SmCrouch - CrouchUp, Self.SmCrouch + CrouchDown);
+
+	Self.Anim.HandTargetR  = Self.SmHandR;
+	Self.Anim.HandTargetL  = Self.SmHandL;
+	Self.Anim.ElbowPoleR   = Self.SmPoleR;
+	Self.Anim.ElbowPoleL   = Self.SmPoleL;
+	Self.Anim.HandRotR     = Self.SmRotR;
+	Self.Anim.HandRotL     = Self.SmRotL;
+	Self.Anim.CrouchAmount = Self.SmCrouch;
+}
+
+// Move From toward To by at most MaxStep (cm) — the sink's speed limiter.
+FVector MoveTowardClamped(FVector From, FVector To, float MaxStep)
+{
+	FVector D = To - From;
+	float L = D.Size();
+	if (L <= MaxStep || L < 0.001f) return To;
+	return From + D * (MaxStep / L);
 }
