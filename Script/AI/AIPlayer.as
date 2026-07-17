@@ -116,9 +116,20 @@ class AAIPlayer : AVolleyballPlayer
 				return FVector(Sign * 130.0f, 0.0f, Z);     // partner up at the net
 		}
 
-		// Receiving: spread to mid-court, one on each Y half.
-		float Y = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
-		return FVector(Sign * 450.0f, Y, Z);                 // mid-depth, half each
+		return HomePosition();
+	}
+
+	// Stable base position for each role. This is where a player resets while
+	// the opponent constructs its play and when supporting a teammate: do not
+	// chase a ball that is not ours. The front/back depth keeps two useful
+	// options while the small Y split covers the court without both players
+	// wandering toward every lateral ball movement.
+	private FVector HomePosition() const
+	{
+		float Sign = MySign();
+		float X = (Role == EPlayerRole::Role_Front) ? 250.0f : 560.0f;
+		float Y = (Role == EPlayerRole::Role_Front) ? -120.0f : 120.0f;
+		return FVector(Sign * X, Y, FloorZ + PlayerHeight);
 	}
 
 	// ---------------------------------------------------------------
@@ -531,7 +542,6 @@ class AAIPlayer : AVolleyballPlayer
 	private void PlaySupport(FVector Landing, float DeltaTime)
 	{
 		int Touches = TeamTouches();
-		float Sign = MySign();
 		FVector Target;
 
 		if (Touches == 1)
@@ -553,14 +563,17 @@ class AAIPlayer : AVolleyballPlayer
 		else if (Touches == 2)
 		{
 			// Our set is up and my TEAMMATE attacks (I just set it — AmIHitter
-			// never gives me two touches in a row). COVER the attack: drop to
-			// mid-court behind the hitter for the block rebound. Running to the
-			// net with them just crowded the attack lane with two bodies.
-			Target = FVector(Sign * 480.0f, Landing.Y * 0.5f, FloorZ + PlayerHeight);
+			// never gives me two touches in a row). Reset behind the hitter at the
+			// role's home rather than following their approach or the ball's Y. This
+			// is the stable cover point for a block rebound without needless motion.
+			Target = HomePosition();
 		}
 		else
 		{
-			Target = SupportPos(Landing);
+			// First contact is somebody else's receive. Stay in the middle of the
+			// assigned zone until the touch happens; only the designated hitter
+			// travels to the incoming ball.
+			Target = HomePosition();
 		}
 
 		// The setter (Touches==1) is tracking a moving target — the spot the ball is
@@ -855,8 +868,6 @@ class AAIPlayer : AVolleyballPlayer
 			// fast-descending ball at the net as fallback). Arms go up only once
 			// we're airborne; the IK reaches the hands to the ball.
 			float NetX = MySign() * 55.0f;   // right up at the net on our side
-			float BlockY = Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f);
-			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
 
 			// Aim the block at the middle of the opponent's court so a stuffed ball
 			// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
@@ -867,6 +878,13 @@ class AAIPlayer : AVolleyballPlayer
 			bool bBallNearNet = Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f;
 			bool bSpikeIncoming = (bAttackerAirborne && bBallNearNet)
 				|| (bBallNearNet && Ball.BallVel.Z < -250.0f);   // already smashed/dropping fast
+			// Hold the middle of the net while the opponent is still building. Track
+			// laterally only after the attack cue; following every set's small Y
+			// drift was visually busy and gave up the centre for no benefit.
+			float BlockY = bSpikeIncoming
+				? Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f)
+				: HomePosition().Y;
+			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
 
 			if (bIsGrounded)
 			{
@@ -901,23 +919,22 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else if (Role == EPlayerRole::Role_Back && bAttackable)
 		{
-			// Back defender covers deep behind the block, toward the open court the
-			// blocker isn't taking away.
-			float DeepX = MySign() * 600.0f;
-			float CoverY = (Attacker != nullptr)
-				? Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f, CourtMinY + 80.0f, CourtMaxY - 80.0f)
-				: 0.0f;
-			Goal = FVector(DeepX, CoverY, FloorZ + PlayerHeight);
+			// Back defender starts from the centre of the deep zone. Do not mirror
+			// the opponent's lateral setup; move toward that line only when the
+			// attacker has actually committed to the spike.
+			Goal = HomePosition();
+			bool bSpikeIncoming = (Attacker != nullptr && !Attacker.bIsGrounded
+				&& Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f)
+				|| (Math::Abs(Ball.Position.X) < 350.0f && Ball.BallVel.Z < -250.0f);
+			if (bSpikeIncoming && Attacker != nullptr)
+				Goal.Y = Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f,
+					CourtMinY + 80.0f, CourtMaxY - 80.0f);
 		}
 		else
 		{
-			// Pass was poor / no attack coming — drop off the block and split the
-			// court so each defender owns a Y half at a FIXED defensive spot. No
-			// per-frame leaning toward the ball: that caused constant shuffling.
-			// Stand still on your half and react only when the ball comes over.
-			float Depth = (Role == EPlayerRole::Role_Front) ? MySign() * 250.0f : MySign() * 560.0f;
-			float HalfCenter = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
-			Goal = FVector(Depth, HalfCenter, FloorZ + PlayerHeight);
+			// No actual attack cue: return to the fixed base, then react when the
+			// ball crosses. This replaces continuous pre-emptive roaming.
+			Goal = HomePosition();
 		}
 
 		if (bDebugAI) Log(DebugTag() + " DEFEND " + (bAttackable ? "BLOCK/COVER" : "SPLIT")
