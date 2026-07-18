@@ -18,6 +18,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Content/Characters/ (Manny mesh/skeleton/anims) is tracked via Git LFS —
+          # without lfs: true, checkout only pulls the small pointer files, and cook
+          # sees corrupt/unreadable .uasset files instead of the real binary content.
+          lfs: true
 
       - name: Resolve Unreal Engine
         shell: bash
