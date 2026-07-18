@@ -159,6 +159,22 @@ mixin float BodyTravelTime(AAIPlayer Self, float Dist)
 	return MB_BodyTravelTimeRaw(Dist, Self.MoveSpeed, Self.GroundAccel);
 }
 
+// RETENTION check for a decision already committed to: does the ball still
+// cross TargetZ at all, full stop — no body-time re-litigation. PlanIntercept
+// answers "should I COMMIT to this" (a locomotion decision, rightly gated by
+// whether the body can still get there); once already committed and standing
+// at the spot, body time no longer shrinks with τ the way the ball's does, so
+// re-running the SAME margin check every tick fails right as contact nears
+// (BodyTime+HandTime+Margin is a near-fixed floor; τ keeps falling toward it
+// by construction) — the exact bug that made a fingerpass abort into a bump
+// a beat before every contact (Reach() re-commanded the low pose just in time
+// to guarantee it). Use this for "am I still on" once committed.
+mixin bool BallStillCrossesHeight(AAIPlayer Self, float TargetZ, float& OutTau)
+{
+	FVector Pos;
+	return MB_BallTimeToHeight(Self.Ball, TargetZ, Pos, OutTau);
+}
+
 // The planner. Evaluates the preferred contact height first (stroke-specific:
 // forehead for a set, waist for a bagger), then the fallback (waist), then
 // the dive window. Reads the body from Self; the ball speaks for itself.
