@@ -119,8 +119,24 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// lowers the chest → recomputed depth → new crouch) and the legs
 		// oscillated at up to 29 direction flips per half-second window — the
 		// exact up-and-down shake the jitter monitor caught (crouchFlips).
+		// ...and "the ball" must be the UNCLAMPED meet/ball height: PlatformBall
+		// is clamped onto a 110cm sphere around the CHEST when the meet point is
+		// out of reach (mid-run), which sneaks the chest back into the loop —
+		// crouch lowers chest, lowers PlatformBall.Z, deepens BallLow, deepens
+		// crouch. That was the residual mid-run crouchFlips source (stats22-24).
+		float KneeKeyZ = PlatformBall.Z;
+		{
+			ABall KB = Self.GetWorldBall();
+			if (KB != nullptr && KB.bInPlay)
+			{
+				KneeKeyZ = (Self.bHasPredictedMeetLow
+							&& KB.Position.Z > Self.PredictedMeetLow.Z + 30.0f)
+					? Self.PredictedMeetLow.Z
+					: KB.Position.Z;
+			}
+		}
 		float FeetZ = Self.GetActorLocation().Z - Self.PlayerHeight;
-		float ContactAboveFeet = PlatformBall.Z - FeetZ;
+		float ContactAboveFeet = KneeKeyZ - FeetZ;
 		float BallLow = Math::Clamp((110.0f - ContactAboveFeet) / 80.0f, 0.0f, 1.0f);
 		Crouch = 0.5f + 0.2f * BallLow;
 	}
@@ -328,6 +344,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// Pose crouch plus whatever extra the AI asked for this frame (ready stance,
 	// split step, dive) — the deepest request wins, capped at full crouch.
 	float WantCrouch = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
+	Self.DbgPoseCrouch = Crouch * Blend;
+	Self.DbgWantCrouch = WantCrouch;
 
 	// --- ANTI-FLICKER GUARD (the sink) --------------------------------------
 	// Everything the ABP sees passes through HERE with a speed limit, so no
@@ -352,18 +370,19 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	float RotAlpha = Math::Clamp(14.0f * Dt, 0.0f, 1.0f);
 	Self.SmRotR = Math::LerpShortestPath(Self.SmRotR, PalmR, RotAlpha);
 	Self.SmRotL = Math::LerpShortestPath(Self.SmRotL, PalmL, RotAlpha);
-	// Asymmetric: sinking is athletic (dives, split steps, landings need it
-	// fast); RISING is never urgent — a slow release means any on/off crouch
-	// source reads as a held stance, not an up-and-down bob. The DEADBAND
-	// swallows residual micro-alternation from any upstream source: knees
-	// only move for a real change of intent.
+	// PROPORTIONAL rate (exponential approach), NOT a rate clamp: the old
+	// clamp moved at its full limit rate (-1.5/+6.0 per s) for ANY error
+	// beyond a 0.04 deadband, so the ±0.04 upstream zigzag (9Hz meet-point
+	// re-prediction, extra-crouch re-asserts) became full-rate knee flapping
+	// — the residual crouchFlips class that survived every source-side fix
+	// (stats22-26; the CFLIP dumps show rate pinned at exactly -1.5/+6.0
+	// with |want-sm| ≈ 0.04). Rate ∝ error makes micro-noise yield micro-
+	// rates (0.04·8 = 0.32/s) while real intent changes (err 0.3+) still
+	// sink athletically (2.4+/s). Asymmetry kept: sinking fast (dives,
+	// landings), rising lazy — a slow release reads as a held stance.
 	float CrouchErr = WantCrouch - Self.SmCrouch;
-	if (Math::Abs(CrouchErr) > 0.04f)
-	{
-		float CrouchDown = 6.0f * Dt;
-		float CrouchUp   = 1.5f * Dt;
-		Self.SmCrouch = Math::Clamp(WantCrouch, Self.SmCrouch - CrouchUp, Self.SmCrouch + CrouchDown);
-	}
+	float CrouchGain = (CrouchErr > 0.0f) ? 8.0f : 3.0f;
+	Self.SmCrouch += CrouchErr * Math::Min(CrouchGain * Dt, 1.0f);
 
 	Self.Anim.HandTargetR  = Self.SmHandR;
 	Self.Anim.HandTargetL  = Self.SmHandL;
