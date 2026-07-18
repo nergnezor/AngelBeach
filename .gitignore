@@ -29,3 +29,4 @@ Content/*.umap
 *.xcworkspace
 *.xcodeproj
 Config/DefaultEditor.ini
+Script/Binds.Cache*

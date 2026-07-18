@@ -322,6 +322,9 @@ class AAIPlayer : AVolleyballPlayer
 	// Hysteresis state for AmIHitter (who owns the current ball).
 	private bool bWasHitter = false;
 
+	// Hysteresis state for the hitter's plant (see PlayHitter).
+	private bool bHitterPlanted = false;
+
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
 	// ---------------------------------------------------------------
@@ -396,7 +399,19 @@ class AAIPlayer : AVolleyballPlayer
 		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0) + Back * Standoff);
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		if (DistToGoal > PlantRadius)
+		// Plant state with HYSTERESIS: the goal recomputes every tick with a
+		// few cm of prediction noise, and a bare radius check flip-flopped
+		// planted <-> running at tick rate — the crouch request alternated
+		// with it and the knees vibrated (the jitter monitor's residual
+		// crouchFlips after the chest-feedback fix).
+		if (bHitterPlanted)
+		{
+			if (DistToGoal > PlantRadius + 35.0f) bHitterPlanted = false;
+		}
+		else if (DistToGoal <= PlantRadius)
+			bHitterPlanted = true;
+
+		if (!bHitterPlanted)
 			MoveToward2D(Goal, DeltaTime, false, Plan.SpeedFraction);
 		else
 		{

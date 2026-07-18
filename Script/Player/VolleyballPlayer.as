@@ -150,6 +150,15 @@ class AVolleyballPlayer : APawn
 
 	void UpdatePlayer(float DeltaTime)
 	{
+		// Crouch release runs FIRST, before any writer: with the decay at the
+		// end of the frame it subtracted from what dive/tuck/split-step had
+		// just asserted and ExtraCrouch sawtoothed ±0.04 at frame rate — the
+		// universal residual the jitter monitor kept catching. Decay first,
+		// writers last, the final value each frame is the writer's.
+		CrouchHoldTimer -= DeltaTime;
+		if (CrouchHoldTimer <= 0.0f)
+			ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
+
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
 		UpdateJumpLoad(DeltaTime);
@@ -445,15 +454,8 @@ class AVolleyballPlayer : APawn
 		ReachHoldTimer -= DeltaTime;
 		if (ReachHoldTimer <= 0.0f)
 			bReaching = false;
-		CrouchHoldTimer -= DeltaTime;
-		if (CrouchHoldTimer <= 0.0f)
-		{
-			// DECAY, don't hard-zero: the AI re-requests every ~0.11s and the
-			// hold is 0.25s, but sources that flip per tick (plant crouch at the
-			// goal-radius boundary) made ExtraCrouch sawtooth 0 <-> 0.45 — the
-			// body visibly bobbed up and down. Standing up is never urgent.
-			ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
-		}
+		// (Crouch decay moved to the TOP of UpdatePlayer — it must run before
+		// the per-frame writers, not after them.)
 	}
 
 	private bool bAttemptActive = false;
@@ -489,6 +491,10 @@ class AVolleyballPlayer : APawn
 	private float MonPrevCrouchDelta = 0.0f;
 	private FVector MonPrevHandR;
 	private bool bMonInit = false;
+	private int MonCFlipLogs = 0;
+	// Written by UpdateIKTargets each frame so CFLIP can attribute the source.
+	float DbgPoseCrouch = 0.0f;
+	float DbgWantCrouch = 0.0f;
 
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
@@ -529,7 +535,20 @@ class AVolleyballPlayer : APawn
 		float CrouchRate = (CrouchNow - MonPrevCrouch) / DeltaTime;
 		if (Math::Abs(CrouchRate) > 1.0f && Math::Abs(MonPrevCrouchDelta) > 1.0f
 			&& CrouchRate * MonPrevCrouchDelta < 0.0f)
+		{
 			MonCrouchFlips++;
+			// Component dump: which upstream source is alternating? (pose*blend
+			// vs ExtraCrouch vs the sink itself). Capped so logs stay readable.
+			if (MonCFlipLogs < 60)
+			{
+				MonCFlipLogs++;
+				Log("CFLIP rate=" + CrouchRate + " prevRate=" + MonPrevCrouchDelta
+					+ " sm=" + CrouchNow + " want=" + DbgWantCrouch
+					+ " pose=" + DbgPoseCrouch + " extra=" + ExtraCrouch
+					+ " dt=" + DeltaTime + " hit=" + int(CurrentHit)
+					+ " speed=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size()));
+			}
+		}
 		if (Math::Abs(CrouchRate) > 0.3f) MonPrevCrouchDelta = CrouchRate;
 
 		// 4) IK-sink violation: the hand target moved faster than the sink's
