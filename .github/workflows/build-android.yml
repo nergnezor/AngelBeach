@@ -14,6 +14,9 @@ jobs:
       ENGINE_DIR: ${{ vars.ENGINE_DIR }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
+      # Must match Config/DefaultEngine.ini [/Script/AndroidRuntimeSettings...] PackageName
+      # and the app's package name in Play Console.
+      PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME || 'com.angelbeach.beachvolleyball' }}
       # Android SDK root — set as a repository variable or override below.
       ANDROID_HOME: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
@@ -113,7 +116,36 @@ jobs:
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -progress
 
-      - name: Package for Android (APK)
+      - name: Prepare Android signing (from secrets)
+        run: |
+          for s in ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD; do
+            eval "val=\${$s}"
+            test -n "$val" || { echo "ERROR: secret $s is not set (Settings → Secrets and variables → Actions)"; exit 1; }
+          done
+
+          mkdir -p "$GITHUB_WORKSPACE/Build/Android"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/Build/Android/release.keystore"
+
+          # UE layers Config/Android/AndroidEngine.ini on top of DefaultEngine.ini for
+          # Android builds. Generated here from secrets, gitignored, never committed.
+          mkdir -p "$GITHUB_WORKSPACE/Config/Android"
+          cat > "$GITHUB_WORKSPACE/Config/Android/AndroidEngine.ini" << EOF
+          [/Script/AndroidRuntimeSettings.AndroidRuntimeSettings]
+          KeyStore=release.keystore
+          KeyAlias=$ANDROID_KEY_ALIAS
+          KeyStorePassword=$ANDROID_KEYSTORE_PASSWORD
+          KeyPassword=$ANDROID_KEY_PASSWORD
+          ; Play requires versionCode to strictly increase on every upload.
+          StoreVersion=$GITHUB_RUN_NUMBER
+          EOF
+          echo "Signing config + StoreVersion=$GITHUB_RUN_NUMBER prepared."
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Package for Android (APK + AAB)
         run: |
           # Scripts are staged separately from cooked content. Without this targeted
           # cleanup UAT can combine current scripts with an hours-old IoStore container,
@@ -132,31 +164,45 @@ jobs:
             -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
-      - name: Collect APK
+      - name: Collect APK + AAB
         run: |
           APK_DIR="$GITHUB_WORKSPACE/Artifacts/apk"
-          mkdir -p "$APK_DIR"
-          found=0
-          # The APK lands in the archive dir and/or the staged build tree.
-          while IFS= read -r apk; do
-            echo "Found APK: $apk"
-            cp -f "$apk" "$APK_DIR/"
-            found=1
+          AAB_DIR="$GITHUB_WORKSPACE/Artifacts/aab"
+          mkdir -p "$APK_DIR" "$AAB_DIR"
+          found_apk=0
+          found_aab=0
+          while IFS= read -r f; do
+            echo "Found APK: $f"; cp -f "$f" "$APK_DIR/"; found_apk=1
           done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
                      -name '*.apk' 2>/dev/null)
-          if [ "$found" = "0" ]; then
-            echo "ERROR: packaging produced no .apk"
-            exit 1
+          while IFS= read -r f; do
+            echo "Found AAB: $f"; cp -f "$f" "$AAB_DIR/"; found_aab=1
+          done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
+                     -name '*.aab' 2>/dev/null)
+          if [ "$found_apk" = "0" ]; then
+            echo "ERROR: packaging produced no .apk"; exit 1
           fi
-          ls -lh "$APK_DIR"
+          if [ "$found_aab" = "0" ]; then
+            echo "WARNING: packaging produced no .aab (bEnableBundle may need adjusting) — Play upload step will be skipped."
+          fi
+          ls -lh "$APK_DIR" "$AAB_DIR" 2>/dev/null
 
-      # The APK as its own dedicated artifact.
+      # The APK as its own dedicated artifact (for direct sideload installs).
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-${{ github.sha }}
           path: Artifacts/apk/*.apk
           if-no-files-found: error
+          retention-days: 14
+
+      # The AAB as its own artifact (for Play Console upload).
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab-${{ github.sha }}
+          path: Artifacts/aab/*.aab
+          if-no-files-found: warn
           retention-days: 14
 
       # Full staged build (loose files) kept as a separate artifact.
@@ -167,3 +213,55 @@ jobs:
           path: Saved/StagedBuilds/Android/
           if-no-files-found: warn
           retention-days: 14
+
+  # ── Play Internal Testing ──────────────────────────────────────────────────
+  # Only on main/master: a broken experimental branch shouldn't push a bad
+  # build to testers' phones. Play auto-updates the Play Store app on any
+  # device that has opted into the internal test — no cable, no manual APK.
+  publish-play-internal:
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 15
+
+    env:
+      PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME || 'com.angelbeach.beachvolleyball' }}
+
+    steps:
+      - name: Checkout (for the upload script)
+        uses: actions/checkout@v4
+
+      - name: Download AAB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-aab-${{ github.sha }}
+          path: aab
+
+      - name: Write service account key
+        run: |
+          test -n "$PLAY_SERVICE_ACCOUNT_JSON" || {
+            echo "ERROR: secret PLAY_SERVICE_ACCOUNT_JSON is not set."
+            echo "       Play Console → Setup → API access → service account JSON."
+            exit 1
+          }
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+      - name: Install uploader dependencies
+        run: pip install --quiet --user google-api-python-client google-auth
+
+      - name: Upload to Play internal testing track
+        run: |
+          AAB=$(find aab -name '*.aab' | head -1)
+          test -n "$AAB" || { echo "ERROR: no .aab downloaded"; exit 1; }
+          python3 scripts/upload_play_internal.py \
+            --package "$PACKAGE_NAME" \
+            --aab "$AAB" \
+            --service-account-json "$RUNNER_TEMP/play-service-account.json" \
+            --track internal \
+            --release-notes "CI build ${{ github.sha }}"
+
+      - name: Clean up service account key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"

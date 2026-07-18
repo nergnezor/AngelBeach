@@ -27,3 +27,13 @@ Content/*.umap
 *.xcodeproj
 Config/DefaultEditor.ini
 Script/Binds.Cache*
+
+# Android signing — generated at CI time from GitHub Secrets, never committed.
+# (Build/ above already covers Build/Android/*.keystore; these are belt-and-suspenders.)
+Config/Android/AndroidEngine.ini
+*.keystore
+*.jks
+
+# Python bytecode
+__pycache__/
+*.pyc
