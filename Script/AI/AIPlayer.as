@@ -81,8 +81,35 @@ class AAIPlayer : AVolleyballPlayer
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
 			bIMadeLastTouch = false;
+			PlanSlackLog = -1.0f;   // an unconsumed promise must not leak into the next rally
+			bHitterPlanted = false; // ...nor a stale plant (PLANVA settle counts from it)
+			PlantedFor = 0.0f;
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
+			return;
+		}
+
+		// PLAN vs ACTUAL bookkeeping: how long the hitter has stood planted
+		// (read by OnBallContact's PLANVA telemetry line).
+		PlantedFor = bHitterPlanted ? PlantedFor + DeltaTime : 0.0f;
+
+		// PERCEPTION LATENCY (first principles): a ball EVENT — any touch, the
+		// serve going live — is not seen instantly. The previous action keeps
+		// running for a visual-reaction beat before any re-planning; stored
+		// move input and the facing hold carry the old intent through the gap.
+		// The split step is exempt above: it is anticipatory, not a reaction.
+		ABeachVolleyballGameState PGS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		int PerceptStamp = (PGS != nullptr)
+			? int(PGS.LastTouchTeam) * 100 + PGS.TouchesThisRally + (Ball.bInPlay ? 1000 : 0)
+			: -1;
+		if (PerceptStamp != PrevPerceptStamp)
+		{
+			PrevPerceptStamp = PerceptStamp;
+			PerceptionTimer = PerceptionLatency;
+		}
+		if (PerceptionTimer > 0.0f)
+		{
+			PerceptionTimer -= DeltaTime;
 			return;
 		}
 
@@ -92,6 +119,12 @@ class AAIPlayer : AVolleyballPlayer
 
 		UpdateAI(DeltaTime);
 	}
+
+	// Human visual reaction to an unanticipated event (~0.16s). Separate from
+	// ReactionDelay (the decision cadence): this one fires per EVENT.
+	const float PerceptionLatency = 0.16f;
+	private float PerceptionTimer = 0.0f;
+	private int PrevPerceptStamp = -12345;
 
 	// Formation spot to occupy while the ball is dead, depending on whether our
 	// team is serving or receiving:
@@ -385,6 +418,27 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
+		// PLAN vs ACTUAL: record the FIRST promise the budget made for this
+		// contact (later ticks re-plan with shrinking τ and always converge to
+		// slack≈0 — the informative number is what was booked at commitment).
+		if (PlanSlackLog < 0.0f)
+		{
+			PlanSlackLog = Plan.Slack;
+			PlanSpeedFracLog = Plan.SpeedFraction;
+		}
+
+		// UNCERTAINTY BUDGET: slack-rich ball — hold my expectation point (the
+		// pin approach spot) in a ready stance instead of chasing the current
+		// read; commit when remaining slack no longer buys the drift back.
+		// τ only shrinks, so stage → go crosses exactly once — no flicker.
+		if (Plan.bReachable && Plan.bStage)
+		{
+			MoveToHold(MyPinApproachStart(), DeltaTime, 0.6f);
+			RequestCrouch(0.25f);
+			FaceBall();
+			return;
+		}
+
 		// Stand where the plan meets the ball — MINUS a standoff along the
 		// flight chord, so the contact happens IN FRONT of the chest where the
 		// platform/cup is, never on top of the head. (Chord, not live velocity:
@@ -633,7 +687,17 @@ class AAIPlayer : AVolleyballPlayer
 	// the heavy player gravity) the hands top out ~355cm at apex — strike
 	// where the descending ball is slow and still inside that envelope. These
 	// are real beach volleyball numbers (net 243, contact ~350).
-	const float SpikeStrikeZ = 350.0f;
+	// Strike height DERIVED from jump physics: actor base + the loaded jump's
+	// ballistic rise (v²/2g) + the rig's raised-hand reach above the actor
+	// centre (the one measured constant). Retuning jump speed or gravity
+	// re-derives the strike zone automatically instead of stranding a magic
+	// 350 that silently stops matching the body. (Sanity: 112 + 115 + 123 ≈ 350.)
+	const float StrikeReachAboveCenter = 123.0f;
+	float SpikeStrikeZ() const
+	{
+		float Rise = (LoadedJumpVelocity * LoadedJumpVelocity) / (2.0f * Math::Abs(Gravity));
+		return FloorZ + PlayerHeight + Rise + StrikeReachAboveCenter;
+	}
 	const float ApproachBack = 200.0f;  // run-up starts this far behind the plant
 
 	private void ApproachForSpike(float DeltaTime)
@@ -641,7 +705,7 @@ class AAIPlayer : AVolleyballPlayer
 		float TimeToApex = LoadedJumpVelocity / Math::Abs(Gravity);   // ≈ 0.35s (loaded jump)
 
 		FVector Strike;
-		float Tau = PredictBallTimeToHeight(SpikeStrikeZ, Strike);
+		float Tau = PredictBallTimeToHeight(SpikeStrikeZ(), Strike);
 
 		if (Tau < 0.0f)
 		{
@@ -709,7 +773,12 @@ class AAIPlayer : AVolleyballPlayer
 				// decision fires one load earlier. StartLoadedJump does the
 				// plant (momentum brake — full-speed jumps drifted 3-4m past
 				// the strike point) and the deep full-body sink.
-				if (DistToPlant < 90.0f && Tau <= TimeToApex + JumpLoadDuration + 0.04f)
+				// Window sized to the decision cadence (this gate is examined
+				// every ReactionDelay) but capped LATE-biased: an early jump
+				// tops out above the ball and whiffs, a late one still meets
+				// it inside the envelope (stats2 autopsy).
+				float JumpEps = Math::Clamp(ReactionDelay * 0.4f, 0.02f, 0.05f);
+				if (DistToPlant < 90.0f && Tau <= TimeToApex + JumpLoadDuration + JumpEps)
 				{
 					MovePlayer(FVector2D::ZeroVector);
 					StartLoadedJump();
