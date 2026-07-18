@@ -341,9 +341,13 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		WantHandR = ReadyR + (ContactR - ReadyR) * Blend;
 		WantHandL = ReadyL + (ContactL - ReadyL) * Blend;
 	}
-	// Pose crouch plus whatever extra the AI asked for this frame (ready stance,
-	// split step, dive) — the deepest request wins, capped at full crouch.
-	float WantCrouch = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
+	// Pose crouch plus whatever extra was requested — the deepest of the two
+	// extra channels wins (held AI stance vs frame-rate transient), added on top
+	// of the pose crouch, capped at full crouch. Max (not sum) between the extra
+	// channels: a 0.45 planted stance and a 0.5 split-step dip are the SAME
+	// lowering of the hips, not 0.95 of stacked bend.
+	float ExtraC = Math::Max(Self.ExtraCrouch, Self.HeldCrouch);
+	float WantCrouch = Math::Clamp(Crouch * Blend + ExtraC, 0.0f, 1.0f);
 	Self.DbgPoseCrouch = Crouch * Blend;
 	Self.DbgWantCrouch = WantCrouch;
 

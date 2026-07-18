@@ -155,9 +155,24 @@ class AVolleyballPlayer : APawn
 		// just asserted and ExtraCrouch sawtoothed ±0.04 at frame rate — the
 		// universal residual the jitter monitor kept catching. Decay first,
 		// writers last, the final value each frame is the writer's.
+		//
+		// TWO CHANNELS with different lifetimes (see the declarations):
+		//  - ExtraCrouch (frame-rate transients: split step, dive, jump load,
+		//    land absorb, air tuck) decays EVERY frame. Its writers run every
+		//    frame while active, so decay-then-rewrite reproduces the envelope
+		//    exactly and the value falls the instant the envelope stops.
+		//  - HeldCrouch (tick-rate AI stance via RequestCrouch) is HELD across
+		//    the reaction-tick gap and only decays once the hold lapses.
+		// The old single channel gave the transients the HELD lifetime too: a
+		// split-step peak Max()-ed in while a stance hold was live could not
+		// decay until the hold gap — and the gaps land on ball events — so the
+		// knee stuck deep through the approach and popped up at the meet. The
+		// two are re-combined by Max at the read site, so the deepest legitimate
+		// request still wins; only the STUCK residual is gone.
+		ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
 		CrouchHoldTimer -= DeltaTime;
 		if (CrouchHoldTimer <= 0.0f)
-			ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
+			HeldCrouch = Math::Max(0.0f, HeldCrouch - 2.5f * DeltaTime);
 
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
@@ -558,7 +573,7 @@ class AVolleyballPlayer : APawn
 				MonCFlipLogs++;
 				Log("CFLIP rate=" + CrouchRate + " prevRate=" + MonPrevCrouchDelta
 					+ " sm=" + CrouchNow + " want=" + DbgWantCrouch
-					+ " pose=" + DbgPoseCrouch + " extra=" + ExtraCrouch
+					+ " pose=" + DbgPoseCrouch + " extra=" + ExtraCrouch + " held=" + HeldCrouch
 					+ " dt=" + DeltaTime + " hit=" + int(CurrentHit)
 					+ " speed=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size()));
 			}
@@ -608,10 +623,18 @@ class AVolleyballPlayer : APawn
 	float SmCrouch = 0.0f;
 	bool bSmInit = false;
 
-	// Extra crouch (0..1) requested for THIS frame by AI/dive: athletic ready
-	// stance, split step dip, dive recovery. Added on top of the pose crouch in
-	// UpdateIKTargets, then cleared each frame (same lapse pattern as bReaching).
+	// Extra crouch (0..1) from FRAME-RATE transient envelopes (split step, dive,
+	// jump load, landing absorb, air tuck). Written by Max every frame while the
+	// envelope is active; decays every frame (top of UpdatePlayer) so it releases
+	// the instant the envelope ends. Combined with HeldCrouch by Max in the IK.
 	float ExtraCrouch = 0.0f;
+
+	// Extra crouch (0..1) from the AI's TICK-RATE stance requests (RequestCrouch:
+	// ready stance, planted wait, block track, defensive base). The AI only
+	// re-asserts every ReactionDelay, so this is HELD across the gap (CrouchHoldTimer)
+	// and only decays once the AI stops asking — separate lifetime from the
+	// per-frame transients so a transient peak can't get frozen at the held rate.
+	float HeldCrouch = 0.0f;
 
 	// Landing absorption state (knees flex on touchdown, see UpdatePlayer).
 	private float LandAbsorbTimer = 0.0f;
@@ -647,10 +670,11 @@ class AVolleyballPlayer : APawn
 	const float MinGestureDwell = 0.15f;
 
 	// Crouch request that survives between AI reaction ticks (ready stance etc.).
-	// Per-frame writers (split step, dive) can set ExtraCrouch directly instead.
+	// Per-frame writers (split step, dive) set ExtraCrouch directly instead — this
+	// channel is HELD across the tick gap; theirs decays every frame.
 	void RequestCrouch(float Amount)
 	{
-		ExtraCrouch = Math::Max(ExtraCrouch, Amount);
+		HeldCrouch = Math::Max(HeldCrouch, Amount);
 		CrouchHoldTimer = 0.25f;
 	}
 
