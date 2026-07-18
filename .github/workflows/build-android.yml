@@ -248,12 +248,12 @@ jobs:
     steps:
       - name: Checkout (for the upload script)
         uses: actions/checkout@v4
-
-      - name: Download AAB artifact
-        uses: actions/download-artifact@v4
         with:
-          name: android-aab-${{ github.sha }}
-          path: aab
+          # This job runs on the same runner and shares the build job's workspace.
+          # The default clean (git clean -ffdx) would wipe the Intermediate/ and
+          # Binaries/ caches the build job just left behind — and the freshly
+          # collected Artifacts/aab/ we upload from below.
+          clean: false
 
       - name: Write service account key
         run: |
@@ -271,8 +271,12 @@ jobs:
 
       - name: Upload to Play internal testing track
         run: |
-          AAB=$(find aab -name '*.aab' | head -1)
-          test -n "$AAB" || { echo "ERROR: no .aab downloaded"; exit 1; }
+          # Single-runner setup: the build job wrote Artifacts/aab/ into this same
+          # workspace, so use it directly instead of round-tripping the AAB through
+          # GitHub artifact storage. If a second runner machine is ever added, this
+          # needs a download-artifact step (name: android-aab-<sha>) again.
+          AAB=$(find "$GITHUB_WORKSPACE/Artifacts/aab" -name '*.aab' 2>/dev/null | head -1)
+          test -n "$AAB" || { echo "ERROR: no .aab found in workspace (built on another machine?)"; exit 1; }
           python3 scripts/upload_play_internal.py \
             --package "$PACKAGE_NAME" \
             --aab "$AAB" \
