@@ -1207,6 +1207,16 @@ class AAIPlayer : AVolleyballPlayer
 
 	protected void UpdateSplitStep(float Dt)
 	{
+		// The split step is the anticipatory READ load — it belongs BEFORE the
+		// approach, not on top of a committed contact. Once we're actively
+		// reaching for this ball the reach/RequestCrouch stance owns the hips;
+		// letting the dip's rise phase overlap the dig produced a fast up-down
+		// bob right at the meet on quick balls (the read hadn't finished before
+		// contact). Cancel it the moment we commit — a real player who has no
+		// time to gather simply skips the hop.
+		if (bReaching)
+			SplitStepTimer = 0.0f;
+
 		if (SplitStepTimer > 0.0f)
 		{
 			SplitStepTimer -= Dt;

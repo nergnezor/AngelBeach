@@ -142,11 +142,15 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{
-		// Fingerpass/set: hands form a CUP under/around the ball above the brow,
-		// elbows forward. At contact the arms EXTEND fully through the ball toward
-		// the aim (the wrist/elbow extension is what a set's power comes from).
-		// Same park-at-the-meet-point trick as the bump: the cup waits where the
-		// ball will cross brow height instead of chasing it down.
+		// Fingerpass/set from first principles — the overhead "window" set:
+		//  - hands form a triangle window ABOVE THE FOREHEAD, elbows OUT and
+		//    forward, palms up toward the ball (the finger pads take it);
+		//  - at contact the wrists/elbows GIVE a touch to load (the cushion),
+		//  - then the whole body EXTENDS through the ball toward the aim — legs,
+		//    elbows and wrists straightening together. A set with no cushion and
+		//    no leg drive reads as a stiff tap.
+		// Same park-at-the-meet-point trick as the bump: the window waits where
+		// the ball will cross brow height instead of chasing it down.
 		FVector CupBall = BallContact;
 		{
 			ABall SB2 = Self.GetWorldBall();
@@ -159,30 +163,66 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 					: Self.PredictedMeetHigh;
 			}
 		}
-		FVector Cup = CupBall - Up * 6.0f;                   // hands just under the ball
+		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
 		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();
-		FVector Extend = Push * (6.0f * Blend + 26.0f * Swing);
-		ContactR = Cup - Right * 11.0f + Extend;
-		ContactL = Cup + Right * 11.0f + Extend;
-		// Elbows point FORWARD (and slightly out) — the set's signature shape.
-		PoleR = ShR + Fwd * 40.0f - Right * 10.0f;
-		PoleL = ShL + Fwd * 40.0f + Right * 10.0f;
+
+		// Offset along the push axis: CUSHION (give) then DRIVE through. Swing is
+		// 0 until the real contact fires TriggerHit, so pre-contact the window
+		// just holds under the ball; the give+extend is the follow-through.
+		float Along;
+		if (Swing <= 0.0f)
+			Along = 6.0f * Blend;                             // window formed, waiting
+		else if (Swing < 0.2f)
+			Along = 6.0f - 14.0f * (Swing / 0.2f);           // CUSHION: give down to -8 (load)
+		else
+			Along = -8.0f + 42.0f * ((Swing - 0.2f) / 0.8f); // EXTEND: drive up & through
+		FVector Extend = Push * Along;
+
+		// Hands ~20cm apart, UNCROSSED (right hand right, left hand left). The old
+		// pose crossed them — inherited from the bump's symmetric ±Right split,
+		// where the joined platform makes the side irrelevant, but here it
+		// X-crossed the forearms over the head.
+		ContactR = Cup + Right * 10.0f + Extend;
+		ContactL = Cup - Right * 10.0f + Extend;
+		// Elbows OUT to the sides and forward — the open triangle window. (The old
+		// poles pulled the elbows INWARD, cramping the shape into a pancake.)
+		PoleR = ShR + Fwd * 30.0f + Right * 18.0f + Up * 4.0f;
+		PoleL = ShL + Fwd * 30.0f - Right * 18.0f + Up * 4.0f;
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
-		Crouch = 0.2f;
+		// Legs load through the cushion and EXTEND through the drive — a set's
+		// power is a full-body push, not just the arms. Single-direction in Swing
+		// so it can't oscillate (the crouch-jitter class we just closed).
+		Crouch = 0.22f - 0.22f * Math::Clamp((Swing - 0.2f) / 0.5f, 0.0f, 1.0f);
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Spike)
 	{
-		// Spike — the real arm choreography, driven by how far the ball has
-		// DESCENDED toward the strike point (SwingPhase 0 = loading, 1 = contact):
-		//  - RIGHT arm: backswing (hand low behind the hip) -> cocked (outside the
-		//    right cheek) -> strike (above/in front of the shoulder).
-		//  - LEFT arm: the timing arm. POINTS at the ball through the windup, then
-		//    PULLS DOWN to the ribs as the right whips through — the counter-
-		//    rotation every real hitter uses for power. A left arm that keeps
-		//    pointing through contact is the tell of a video-game spike.
-		FVector BackSw = ShR - Fwd * 30.0f - Up * 30.0f + Right * 20.0f;  // behind the hip
-		FVector Cheek  = Head + Right * 22.0f + Up * 2.0f - Fwd * 8.0f;   // outside right cheek
+		// Spike — a REAL overhand arm swing from first principles, in four phases.
+		// The hitting (right) arm draws a bow and whips over the top; the left arm
+		// is the timing / counter-rotation arm.
+		//
+		//   1 BACKSWING  the arm is swung back at ~shoulder height as the body
+		//                rises on the approach (both arms have lifted together).
+		//   2 COCKED     the bow fully drawn: elbow HIGH, hand dropped back ABOVE
+		//                and BEHIND the head — the loaded position a real hitter
+		//                snaps from. (The old pose cocked "outside the cheek" from
+		//                a hand-low-behind-the-hip backswing — an underhand throw
+		//                shape, not an overhand spike.)
+		//   3 STRIKE     the elbow leads, the forearm whips over the top, the hand
+		//                meets the ball at full extension above & in front.
+		//   4 FOLLOW     AFTER contact the hand snaps DOWN and ACROSS the body to
+		//                the opposite hip. Without a follow-through the arm freezes
+		//                at extension and reads as a push; the finish is what makes
+		//                it a whip.
+		//
+		// Phases 1->3 are timed to the BALL DESCENDING toward the strike point
+		// (SwingPhase); phase 4 is driven by the post-contact swing envelope
+		// (Swing — exactly 0 until the real hit fires TriggerHit), so the finish
+		// plays only once we've actually connected. A whiffed swing simply retracts
+		// along the windup instead.
+		FVector BackSw = ShR - Fwd * 18.0f - Up * 6.0f + Right * 16.0f;   // swung back, shoulder height
+		FVector Cocked = Head - Fwd * 16.0f + Right * 6.0f + Up * 24.0f;  // drawn bow: above & behind the head
+
 		// Reach for the REAL ball height, not the 110cm-clamped contact point:
 		// the FBIK saturates at full extension so over-asking costs nothing,
 		// while under-asking left the strike hand ~40cm below the ball at the
@@ -193,7 +233,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 			if (RB != nullptr && RB.bInPlay) BallZRaw = RB.Position.Z;
 		}
 		float StrikeUp = Math::Clamp(BallZRaw - ShR.Z, 35.0f, 125.0f);
-		FVector Strike = ShR + Up * StrikeUp + Fwd * 22.0f + Right * 6.0f; // above & front of R shoulder
+		FVector Strike = ShR + Up * StrikeUp + Fwd * 24.0f + Right * 6.0f;  // above & front of R shoulder
+		FVector Finish = ShR - Up * 42.0f + Fwd * 6.0f - Right * 32.0f;     // snap down & across to far hip
 
 		float SwingPhase = Blend;
 		{
@@ -206,34 +247,55 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 			}
 		}
 
-		// Left arm: point at the ball, then tuck hard as the swing comes through.
+		// --- Right (hitting) arm --------------------------------------------
+		if (Swing > 0.001f)
+		{
+			// Contact has happened: whip through from the strike to the finish.
+			ContactR = Strike + (Finish - Strike) * Swing;
+			PoleR = ContactR + Up * 12.0f - Fwd * 4.0f + Right * 8.0f;      // elbow drops & leads the snap
+		}
+		else if (SwingPhase < 0.4f)
+		{
+			// Backswing -> cocked: draw the bow as the body rises.
+			ContactR = BackSw + (Cocked - BackSw) * (SwingPhase / 0.4f);
+			PoleR = ContactR + Up * 22.0f - Fwd * 26.0f + Right * 12.0f;    // elbow high & back
+		}
+		else
+		{
+			// Cocked -> strike: the forward whip as the ball drops in. The elbow
+			// travels forward and down, leading the hand over the top.
+			float T = (SwingPhase - 0.4f) / 0.6f;
+			ContactR = Cocked + (Strike - Cocked) * T;
+			PoleR = ContactR + Up * (22.0f - 8.0f * T) - Fwd * (26.0f - 40.0f * T) + Right * 10.0f;
+		}
+		// Palm rolls from facing up/back (cocked) to down along the aim (strike +
+		// follow-through, over the top of the ball).
+		float PalmT = Math::Clamp(Math::Max((SwingPhase - 0.4f) / 0.6f, Swing), 0.0f, 1.0f);
+		PalmR = (AimFlat * 0.5f + Up * (1.0f - PalmT) - Up * 0.6f * PalmT).GetSafeNormal().Rotation();
+
+		// --- Left (timing / counter-rotation) arm ---------------------------
+		// Points at the ball through the windup, then PULLS DOWN to the ribs as
+		// the right whips over — the counter-rotation every real hitter uses for
+		// power. A left arm that keeps pointing through contact is the tell of a
+		// video-game spike. The pull tracks the strike (SwingPhase) and stays
+		// tucked through the follow-through (Swing).
 		FVector ToBallL = (BallContact - ShL);
 		float ReachL = 95.0f;
 		if (ToBallL.Size() > ReachL) ToBallL = ToBallL.GetSafeNormal() * ReachL;
 		FVector PointL = ShL + ToBallL;
 		FVector TuckL  = ShL - Up * 28.0f + Fwd * 12.0f;   // elbow-down tuck at the ribs
-		if (SwingPhase < 0.55f)
+		float LeftPull = Math::Clamp(Math::Max((SwingPhase - 0.5f) / 0.4f, Swing), 0.0f, 1.0f);
+		ContactL = PointL + (TuckL - PointL) * LeftPull;
+		if (LeftPull < 0.5f)
 		{
-			ContactL = PointL;
 			PoleL = ShL + ToBallL * 0.4f - Up * 15.0f;     // elbow softly under the aim line
 			PalmL = ToBallL.GetSafeNormal().Rotation();
 		}
 		else
 		{
-			float Pull = (SwingPhase - 0.55f) / 0.45f;
-			ContactL = PointL + (TuckL - PointL) * Pull;
 			PoleL = ShL - Up * 20.0f - Fwd * 10.0f;        // elbow folds down/back
 			PalmL = (-Up).Rotation();
 		}
-
-		if (SwingPhase < 0.45f)
-			ContactR = BackSw + (Cheek - BackSw) * (SwingPhase / 0.45f);
-		else
-			ContactR = Cheek + (Strike - Cheek) * ((SwingPhase - 0.45f) / 0.55f);
-		// Elbow stays high and back early, leading the hand on the swing.
-		PoleR = ContactR + Up * 25.0f - Fwd * 30.0f + Right * 10.0f;
-		// Palm faces the aim/down as it comes over the top.
-		PalmR = (AimFlat * 0.5f + Up * (1.0f - SwingPhase) - Up * 0.3f * SwingPhase).GetSafeNormal().Rotation();
 		Crouch = 0.0f;
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Block)
@@ -341,9 +403,13 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		WantHandR = ReadyR + (ContactR - ReadyR) * Blend;
 		WantHandL = ReadyL + (ContactL - ReadyL) * Blend;
 	}
-	// Pose crouch plus whatever extra the AI asked for this frame (ready stance,
-	// split step, dive) — the deepest request wins, capped at full crouch.
-	float WantCrouch = Math::Clamp(Crouch * Blend + Self.ExtraCrouch, 0.0f, 1.0f);
+	// Pose crouch plus whatever extra was requested — the deepest of the two
+	// extra channels wins (held AI stance vs frame-rate transient), added on top
+	// of the pose crouch, capped at full crouch. Max (not sum) between the extra
+	// channels: a 0.45 planted stance and a 0.5 split-step dip are the SAME
+	// lowering of the hips, not 0.95 of stacked bend.
+	float ExtraC = Math::Max(Self.ExtraCrouch, Self.HeldCrouch);
+	float WantCrouch = Math::Clamp(Crouch * Blend + ExtraC, 0.0f, 1.0f);
 	Self.DbgPoseCrouch = Crouch * Blend;
 	Self.DbgWantCrouch = WantCrouch;
 
