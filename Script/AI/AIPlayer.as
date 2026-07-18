@@ -475,11 +475,14 @@ class AAIPlayer : AVolleyballPlayer
 			RequestCrouch(Intend == EHitType::Hit_Bump ? 0.45f : 0.25f);
 		}
 
-		// The HITTER always faces the ball. Conditional facing (travel vs ball)
-		// oscillated at the gate boundary every AI tick, whipping the chest-
-		// anchored IK targets around so the arms never converged — hands ended up
-		// 80-115cm from their targets at contact. Travel-facing is only for
-		// players who are NOT about to play the ball (support/defense).
+		// The HITTER requests ball-facing. Conditional facing decided HERE (travel
+		// vs ball, re-judged every AI tick) oscillated at the gate boundary,
+		// whipping the chest-anchored IK targets around so the arms never
+		// converged — hands ended up 80-115cm from their targets at contact. The
+		// single rotation authority (UpdatePlayer) may still override this with
+		// travel-facing during a genuine hurried run away from the facing
+		// (turn-and-run, hysteretic, suspended once the reach gesture is live) —
+		// one central, flicker-proof decision instead of many per-caller ones.
 		FaceBall();
 
 		// Wind up when the budget says the hand clock has started — no distance

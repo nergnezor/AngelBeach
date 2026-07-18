@@ -256,8 +256,15 @@ class AVolleyballPlayer : APawn
 		else
 			FacingHoldTimer -= DeltaTime;
 
+		UpdateTurnRun();
+
 		FVector Want = FVector::ZeroVector;
-		if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
+		if (bTurnRun)
+			// Face the commanded travel (the intent), not the lagging velocity:
+			// the turn starts the same frame the run does. Demand ≥ 0.35 while
+			// engaged, so this is never a degenerate direction.
+			Want = FVector(MoveInput.X, MoveInput.Y, 0);
+		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
 			Want = FVector(FacingDir.X, FacingDir.Y, 0);
 		else if (HSpeed2 > 30.0f)
 			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
@@ -304,6 +311,13 @@ class AVolleyballPlayer : APawn
 		Anim.Speed         = HSpeed;
 		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
 		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
+		// Travel-vs-facing angle for an orientation-aware blendspace. Only updated
+		// while actually moving: recomputing it from near-zero velocity sprayed
+		// noise, and holding the last heading keeps the blend continuous through
+		// stops. With the turn-and-run override this stays near 0 during real
+		// runs; the residual backpedal/shuffle band is what the ABP can now blend.
+		if (HSpeed > 30.0f)
+			Anim.MoveDirAngle = Math::Atan2(Anim.StrafeSpeed, Anim.ForwardSpeed) * (180.0f / PI);
 		// HYSTERESIS: a single threshold made bIsMoving flip every frame when
 		// the speed hovered at the boundary (deceleration, hold drift), and the
 		// Anim BP popped between the idle and locomotion poses at frame rate.
@@ -1085,6 +1099,58 @@ class AVolleyballPlayer : APawn
 
 	// Desired input this frame (unit length or less). Consumed by UpdatePlayer.
 	private FVector2D MoveInput = FVector2D::ZeroVector;
+
+	// --- TURN-AND-RUN (first principles) -----------------------------------
+	// Nobody runs backward across a court: backpedal/shuffle exist only for
+	// short, slow adjustment steps. A player who has real ground to cover
+	// TURNS, runs facing the travel, and squares back up to the ball while
+	// decelerating into the spot (the head look-at keeps the eyes on the ball
+	// the whole way — exactly how a receiver tracks over the shoulder). So a
+	// ball-facing request is OVERRIDDEN by travel-facing while the commanded
+	// movement is both brisk and clearly against that facing. Judged on the
+	// INTENT (MoveInput demand), not the lagging velocity, so the body turns
+	// as the run starts, not after it. Hysteresis on both gates — demand and
+	// alignment bands don't overlap — so the choice cannot flicker at a
+	// boundary (per-frame conditional facing is exactly what caused the old
+	// two-pose shimmer this replaces). Never while a gesture is live: contact
+	// needs the squared-up chest the IK targets anchor to.
+	private bool bTurnRun = false;
+
+	private void UpdateTurnRun()
+	{
+		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
+		bool bGestureLive = bReaching || CurrentPose > 0.15f || IsDiving();
+		if (!bWantFacing || bGestureLive || !bIsGrounded)
+		{
+			bTurnRun = false;
+			return;
+		}
+
+		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
+		float Demand = InDir.Size();               // 0..1 commanded speed fraction
+		if (Demand < 0.05f) { bTurnRun = false; return; }
+		float Align = InDir.GetSafeNormal()
+			.DotProduct(FVector(FacingDir.X, FacingDir.Y, 0).GetSafeNormal());
+
+		if (bTurnRun)
+		{
+			// Release when the run winds down (MoveToward2D's arrival taper drops
+			// the demand ~50cm out — the body swings back to the ball through the
+			// deceleration, inside the planner's settle window) or when the travel
+			// no longer fights the facing (ball ahead again: the two agree anyway).
+			if (Demand < 0.35f || Align > 0.55f)
+				bTurnRun = false;
+		}
+		else
+		{
+			// Engage only for a genuine hurried run well off the facing (>70°):
+			// beyond what a shuffle/backpedal covers with the eyes still useful.
+			// The spike approach's open-shoulder facing (~22° off travel) stays
+			// far inside the gate.
+			if (Demand > 0.55f && Align < 0.35f)
+				bTurnRun = true;
+		}
+	}
 
 	// Horizontal acceleration rates (cm/s²). Ground values give a sprinter-like
 	// first step (0→full in ~0.2s) and a decisive plant (full→0 in ~0.13s, sliding

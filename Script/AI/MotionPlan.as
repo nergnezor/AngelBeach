@@ -184,8 +184,10 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 
 		// ANISOTROPIC TOP SPEED: the body is fastest driving along its facing;
 		// backpedaling is slower. First-order model: the facing at decision
-		// time (the hitter holds ball-facing throughout, so this is exact for
-		// the player it matters most for).
+		// time. The turn-and-run override can rotate the body into the travel
+		// mid-run, raising the real top speed toward MoveSpeed — so this budget
+		// is CONSERVATIVE (books the slow-facing worst case; the body can only
+		// arrive earlier than promised, never later).
 		FVector ToContact = FVector(Pos.X - MyPos.X, Pos.Y - MyPos.Y, 0);
 		float EffVMax = MyMoveSpeed * Self.MoveDirSpeedScale(ToContact);
 
