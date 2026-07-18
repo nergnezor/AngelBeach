@@ -177,13 +177,25 @@ jobs:
                  "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
                  "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
+          # APK size choices:
+          #  -cookflavor=ASTC   one texture format instead of Multi (DXT+ETC2+ASTC
+          #                     all packed into the same .ucas); ASTC covers every
+          #                     Vulkan/GLES3.2-era device (~2016+)
+          #  -clientconfig=Shipping  Development libUnreal.so was 271 MB and pulled
+          #                     in the 24 MB Vulkan validation layer + profiling
+          #                     libs; note Shipping has no UE_LOG in adb logcat
+          #  -compressed        Oodle-compress cooked content; the embedded OBB is
+          #                     stored uncompressed in the APK (UE names it .png
+          #                     precisely so the APK zip won't touch it), so without
+          #                     this the full cooked size hits the APK 1:1
           "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
-            -cookflavor=Multi \
-            -clientconfig=Development \
+            -cookflavor=ASTC \
+            -clientconfig=Shipping \
             -cook -build -stage -pak -package -archive \
+            -compressed \
             -nozenstore \
             -nodebuginfo \
             -archivedirectory="$OUTPUT_DIR"
