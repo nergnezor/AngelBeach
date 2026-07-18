@@ -71,7 +71,7 @@ sudo apt-get install -y --no-install-recommends \
     mono-complete \
     libssl-dev zlib1g-dev \
     xdg-user-dirs xdg-utils \
-    python3 curl ca-certificates wget unzip \
+    python3 python3-pip curl ca-certificates wget unzip \
     openjdk-17-jdk \
     tmux
 ok "System packages installed"
