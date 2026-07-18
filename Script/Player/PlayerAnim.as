@@ -29,6 +29,11 @@ class UVolleyballAnimInstance : UAnimInstance
 	UPROPERTY(BlueprintReadWrite) float Speed = 0.0f;        // horizontal speed (cm/s)
 	UPROPERTY(BlueprintReadWrite) float ForwardSpeed = 0.0f; // signed, for fwd/bwd blend
 	UPROPERTY(BlueprintReadWrite) float StrafeSpeed = 0.0f;  // signed, for left/right blend
+	// Signed travel direction relative to the facing, in degrees (0 = running the
+	// way we face, ±180 = backpedal, ±90 = strafe). The standard "Direction" input
+	// for an orientation-aware locomotion blendspace in the ABP; holds its last
+	// value while idle so the blend doesn't snap when speed crosses zero.
+	UPROPERTY(BlueprintReadWrite) float MoveDirAngle = 0.0f;
 	UPROPERTY(BlueprintReadWrite) bool  bIsMoving = false;
 
 	// Air state
