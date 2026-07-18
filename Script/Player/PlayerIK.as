@@ -142,11 +142,15 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{
-		// Fingerpass/set: hands form a CUP under/around the ball above the brow,
-		// elbows forward. At contact the arms EXTEND fully through the ball toward
-		// the aim (the wrist/elbow extension is what a set's power comes from).
-		// Same park-at-the-meet-point trick as the bump: the cup waits where the
-		// ball will cross brow height instead of chasing it down.
+		// Fingerpass/set from first principles — the overhead "window" set:
+		//  - hands form a triangle window ABOVE THE FOREHEAD, elbows OUT and
+		//    forward, palms up toward the ball (the finger pads take it);
+		//  - at contact the wrists/elbows GIVE a touch to load (the cushion),
+		//  - then the whole body EXTENDS through the ball toward the aim — legs,
+		//    elbows and wrists straightening together. A set with no cushion and
+		//    no leg drive reads as a stiff tap.
+		// Same park-at-the-meet-point trick as the bump: the window waits where
+		// the ball will cross brow height instead of chasing it down.
 		FVector CupBall = BallContact;
 		{
 			ABall SB2 = Self.GetWorldBall();
@@ -159,17 +163,37 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 					: Self.PredictedMeetHigh;
 			}
 		}
-		FVector Cup = CupBall - Up * 6.0f;                   // hands just under the ball
+		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
 		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();
-		FVector Extend = Push * (6.0f * Blend + 26.0f * Swing);
-		ContactR = Cup - Right * 11.0f + Extend;
-		ContactL = Cup + Right * 11.0f + Extend;
-		// Elbows point FORWARD (and slightly out) — the set's signature shape.
-		PoleR = ShR + Fwd * 40.0f - Right * 10.0f;
-		PoleL = ShL + Fwd * 40.0f + Right * 10.0f;
+
+		// Offset along the push axis: CUSHION (give) then DRIVE through. Swing is
+		// 0 until the real contact fires TriggerHit, so pre-contact the window
+		// just holds under the ball; the give+extend is the follow-through.
+		float Along;
+		if (Swing <= 0.0f)
+			Along = 6.0f * Blend;                             // window formed, waiting
+		else if (Swing < 0.2f)
+			Along = 6.0f - 14.0f * (Swing / 0.2f);           // CUSHION: give down to -8 (load)
+		else
+			Along = -8.0f + 42.0f * ((Swing - 0.2f) / 0.8f); // EXTEND: drive up & through
+		FVector Extend = Push * Along;
+
+		// Hands ~20cm apart, UNCROSSED (right hand right, left hand left). The old
+		// pose crossed them — inherited from the bump's symmetric ±Right split,
+		// where the joined platform makes the side irrelevant, but here it
+		// X-crossed the forearms over the head.
+		ContactR = Cup + Right * 10.0f + Extend;
+		ContactL = Cup - Right * 10.0f + Extend;
+		// Elbows OUT to the sides and forward — the open triangle window. (The old
+		// poles pulled the elbows INWARD, cramping the shape into a pancake.)
+		PoleR = ShR + Fwd * 30.0f + Right * 18.0f + Up * 4.0f;
+		PoleL = ShL + Fwd * 30.0f - Right * 18.0f + Up * 4.0f;
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
-		Crouch = 0.2f;
+		// Legs load through the cushion and EXTEND through the drive — a set's
+		// power is a full-body push, not just the arms. Single-direction in Swing
+		// so it can't oscillate (the crouch-jitter class we just closed).
+		Crouch = 0.22f - 0.22f * Math::Clamp((Swing - 0.2f) / 0.5f, 0.0f, 1.0f);
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Spike)
 	{
