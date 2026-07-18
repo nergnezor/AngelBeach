@@ -940,6 +940,15 @@ class AVolleyballPlayer : APawn
 
 		float HeadZ = GetActorLocation().Z + PlayerHeight;
 		bool bHigh = BallPos.Z > HeadZ;
+		// A fingerpass is taken at the FOREHEAD, not above the crown. The setter
+		// aims to contact at PlayerHeight*0.9 (ContactHeightFor(Hit_Set)); keying
+		// the set/bump split off HeadZ (PlayerHeight*1.0) meant a perfectly-placed
+		// overhead ball at 171cm classified as a BUMP because it sat below the
+		// 180cm crown — so nobody ever fingerpassed. Use a forehead threshold a
+		// hair below the setter's own target so the intended contact reliably
+		// reads as a set. (Kept below the target, not at it, for prediction slack.)
+		float SetMinContactZ = GetActorLocation().Z + PlayerHeight * 0.82f;
+		bool bOverhead = BallPos.Z > SetMinContactZ;
 		// An active block gesture at the net keeps its identity — the protocol
 		// would otherwise re-type a stuff block as a "reception" and float a
 		// point-blank spike gently to the setter zone.
@@ -951,7 +960,7 @@ class AVolleyballPlayer : APawn
 		else if (MyTouches == 0)
 			Type = EHitType::Hit_Bump;                                   // reception: always bagger
 		else if (MyTouches == 1)
-			Type = (bHigh && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			Type = (bOverhead && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump;
 		else
 			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
 			     : (bHigh ? EHitType::Hit_Set : EHitType::Hit_Bump);     // grounded attack = shot
