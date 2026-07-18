@@ -789,6 +789,12 @@ class AVolleyballPlayer : APawn
 	FVector DesiredAim = FVector::ZeroVector;
 	bool bHasAim = false;
 
+	// PLAN vs ACTUAL: the AI hitter records the budget's promise (slack, speed)
+	// and how long it has stood planted; the contact grades them (PLANVA line).
+	float PlanSlackLog = -1.0f;
+	float PlanSpeedFracLog = -1.0f;
+	float PlantedFor = 0.0f;
+
 	// Whether this player is allowed to touch the ball right now. Overridden by
 	// AI so a player who made the team's last touch is "transparent" until a
 	// different player (teammate or opponent) touches it — no double contacts.
@@ -930,6 +936,29 @@ class AVolleyballPlayer : APawn
 		else
 			Target = FVector(-Own * 500.0f, (BallPos.Y > 0.0f) ? -180.0f : 180.0f, 15.0f);
 
+		// CONTACT QUALITY (first principles): control degrades with everything
+		// the body still has going on at contact — residual locomotion (a
+		// moving platform aims worse; quadratic, so a settling drift barely
+		// matters while a sprint scatters badly) and unconverged hands (strike
+		// hand vs its IK target). This is what makes the planner's "arrive
+		// planted and early" measurably worth paying for.
+		float BodySpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+		float HandErr = 0.0f;
+		if (Mesh != nullptr && Anim != nullptr)
+			HandErr = (Mesh.GetBoneTransform(n"hand_r").Location - Anim.HandTargetR).Size();
+		float AimErrCm = 0.0f;
+		if (!bBlockContact)
+		{
+			float SpeedFrac = Math::Clamp(BodySpd / MoveSpeed, 0.0f, 1.5f);
+			AimErrCm = 140.0f * SpeedFrac * SpeedFrac + 0.5f * Math::Min(HandErr, 120.0f);
+			if (AimErrCm > 2.0f)
+			{
+				float Ang = Math::RandRange(0.0f, 2.0f * PI);
+				Target += FVector(Math::Cos(Ang), Math::Sin(Ang), 0)
+					* (Math::RandRange(0.35f, 1.0f) * AimErrCm);
+			}
+		}
+
 		// Physical reflection (arms as a surface) — the flavor component.
 		FVector GeoNormal = (BallPos - Center).GetSafeNormal();
 		if (GeoNormal.SizeSquared() < 0.01f) GeoNormal = FVector(0, 0, 1);
@@ -984,6 +1013,21 @@ class AVolleyballPlayer : APawn
 			if (CrossesNetPlane(BallPos, OutVel))
 				OutVel = Pure;
 		}
+
+		// PLAN vs ACTUAL: grade the budget's promise at the moment of truth.
+		// slack/speedFrac are what the plan booked (×100), settle is how long
+		// the body was planted before this contact, bodySpd/handErr/aimErr are
+		// what the contact actually paid.
+		Log("PLANVA touch=" + MyTouches + " type=" + int(Type)
+			+ " slack=" + int(PlanSlackLog * 100.0f)
+			+ " speedFrac=" + int(PlanSpeedFracLog * 100.0f)
+			+ " settle=" + int(PlantedFor * 100.0f)
+			+ " bodySpd=" + int(BodySpd)
+			+ " handErr=" + int(HandErr)
+			+ " aimErr=" + int(AimErrCm)
+			+ " grounded=" + bIsGrounded);
+		PlanSlackLog = -1.0f;
+		PlanSpeedFracLog = -1.0f;
 
 		TriggerHit(Type, OutVel.GetSafeNormal());
 		RegisterHit(GetWorldBall());
@@ -1045,6 +1089,22 @@ class AVolleyballPlayer : APawn
 	// Horizontal acceleration rates (cm/s²). Ground values give a sprinter-like
 	// first step (0→full in ~0.2s) and a decisive plant (full→0 in ~0.13s, sliding
 	// ~30cm — matches the AI's 40cm plant radius). Air rate is weak on purpose.
+	// ANISOTROPIC LOCOMOTION (first principles): legs drive hardest along the
+	// facing — backpedaling keeps the eyes on the ball at ~62% of forward
+	// speed, shuffling sideways ~81%. The MotionPlan planner reads the same
+	// scale, so its time budgets and the sim can never disagree about how
+	// fast a facing-locked hitter really closes.
+	const float BackpedalScale = 0.62f;
+	float MoveDirSpeedScale(FVector Dir) const
+	{
+		FVector F = GetActorForwardVector();
+		FVector D = FVector(Dir.X, Dir.Y, 0.0f);   // params are const in AS
+		F.Z = 0.0f;
+		if (F.SizeSquared() < 0.01f || D.SizeSquared() < 0.01f) return 1.0f;
+		float Dot = F.GetSafeNormal().DotProduct(D.GetSafeNormal());
+		return Math::Lerp(BackpedalScale, 1.0f, (Dot + 1.0f) * 0.5f);
+	}
+
 	float GroundAccel = 2400.0f;
 	float GroundDecel = 3400.0f;
 	float AirAccel = 350.0f;
@@ -1053,7 +1113,11 @@ class AVolleyballPlayer : APawn
 	private void ApplyMoveInput(float DeltaTime)
 	{
 		FVector Cur = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
-		FVector Target = FVector(MoveInput.X, MoveInput.Y, 0) * MoveSpeed;
+		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
+		// Anisotropic: top speed scales with travel-vs-facing (see
+		// MoveDirSpeedScale). Applied at the input level so the AI planner and
+		// any future gamepad input obey the same body.
+		FVector Target = InDir * (MoveSpeed * MoveDirSpeedScale(InDir));
 
 		float Rate;
 		if (!bIsGrounded)

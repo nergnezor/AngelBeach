@@ -54,6 +54,18 @@ const float MB_DiveMinDist = 130.0f;
 const float MB_DiveMaxDist = 400.0f;
 const float MB_DiveMaxTau  = 0.8f;
 
+// Expected drift of a contact estimate, per second of remaining flight (cm/s):
+// models perception/judgement error shrinking as the ball closes. The planner
+// STAGES (holds the expectation point) while remaining slack exceeds what the
+// drift costs to correct — "leave as late as safely possible" is both the
+// robust play (less error when you decide) and the reason real players hold
+// their spot instead of chasing early reads.
+const float MB_PredErrRate = 30.0f;
+
+// Extra time buffer demanded before staging is allowed (covers ~2 AI reaction
+// ticks so the go-decision can't arrive after the budget needed it).
+const float MB_StageBuffer = 0.30f;
+
 struct FInterceptPlan
 {
 	bool bReachable = false;    // some contact is playable on foot
@@ -63,8 +75,9 @@ struct FInterceptPlan
 	float BodyTime = 0.0f;      // locomotion time there (incl. first-step lag)
 	float HandTime = 0.0f;      // non-overlappable share of hand convergence
 	float Slack = 0.0f;         // τ - (BodyTime + HandTime): comfort margin
-	float SpeedFraction = 1.0f; // run at exactly this fraction of MoveSpeed
+	float SpeedFraction = 1.0f; // run at exactly this fraction of top speed
 	bool bStartGesture = false; // the reach must begin NOW to converge in time
+	bool bStage = false;        // slack-rich: hold the expectation point, go later
 }
 
 // Ball flight time to the next DOWNWARD crossing of TargetZ. Same 20ms Euler
@@ -98,16 +111,45 @@ bool MB_BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutT
 	return false;
 }
 
-// Acceleration-limited locomotion time over Dist at VMax/Accel, plus the
-// physical first-step lag. (Ramp to VMax costs VMax²/2a of distance.)
+// Braking deceleration — MUST mirror GroundDecel on the player (measured
+// property of the sim, not a tuning knob here).
+const float MB_Brake = 3400.0f;
+
+// TRAPEZOID PROFILE: every approach both accelerates AND brakes to a stop —
+// a contact demands a planted body, so "travel time" that ignores braking
+// lies exactly when it matters (the old model let the budget book arrivals
+// the legs couldn't cash). Time over Dist arriving STOPPED, cruising at
+// most at VMax: accel ramp (v/a) + brake ramp (v/b) + cruise of whatever
+// distance the ramps don't cover. Plus the physical first-step lag.
 float MB_BodyTravelTimeRaw(float Dist, float VMax, float Accel)
 {
 	if (Dist <= 1.0f) return 0.0f;
-	float RampDist = (VMax * VMax) / (2.0f * Accel);
-	float T = (Dist <= RampDist)
-		? Math::Sqrt(2.0f * Dist / Accel)
-		: (VMax / Accel) + (Dist - RampDist) / VMax;
+	float InvSum = 1.0f / Accel + 1.0f / MB_Brake;
+	float RampDist = 0.5f * VMax * VMax * InvSum;
+	float T;
+	if (Dist <= RampDist)
+	{
+		// Triangle: never reaches VMax. Peak speed from D = v²/2·(1/a+1/b).
+		float Peak = Math::Sqrt(2.0f * Dist / InvSum);
+		T = Peak * InvSum;
+	}
+	else
+		T = Dist / VMax + 0.5f * VMax * InvSum;
 	return MB_FirstStepLag + T;
+}
+
+// The inverse: the exact cruise speed that covers Dist in TAvail and arrives
+// stopped. From TAvail = D/v + v·(1/a+1/b)/2 — a quadratic in v; the smaller
+// root is the efficient one (the larger wastes speed and brakes longer).
+// Returns VMax when even the optimal profile can't arrive stopped in time.
+float MB_RequiredCruiseSpeed(float Dist, float TAvail, float VMax, float Accel)
+{
+	if (Dist <= 1.0f) return 0.0f;
+	if (TAvail <= 0.05f) return VMax;
+	float InvSum = 1.0f / Accel + 1.0f / MB_Brake;
+	float Disc = TAvail * TAvail - 2.0f * InvSum * Dist;
+	if (Disc <= 0.0f) return VMax;
+	return Math::Clamp((TAvail - Math::Sqrt(Disc)) / InvSum, 0.0f, VMax);
 }
 
 // The player's own body-time to cover Dist (mixin: cross-file script
@@ -140,8 +182,15 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 		float Tau = 0.0f;
 		if (!MB_BallTimeToHeight(Ball, Z, Pos, Tau)) continue;
 
-		float Dist = (MyPos - FVector(Pos.X, Pos.Y, MyPos.Z)).Size2D();
-		float BodyT = MB_BodyTravelTimeRaw(Dist, MyMoveSpeed, MyAccel);
+		// ANISOTROPIC TOP SPEED: the body is fastest driving along its facing;
+		// backpedaling is slower. First-order model: the facing at decision
+		// time (the hitter holds ball-facing throughout, so this is exact for
+		// the player it matters most for).
+		FVector ToContact = FVector(Pos.X - MyPos.X, Pos.Y - MyPos.Y, 0);
+		float EffVMax = MyMoveSpeed * Self.MoveDirSpeedScale(ToContact);
+
+		float Dist = ToContact.Size2D();
+		float BodyT = MB_BodyTravelTimeRaw(Dist, EffVMax, MyAccel);
 		if (Tau < BodyT + HandT + MB_Margin) continue;   // not playable this high
 
 		Plan.bReachable = true;
@@ -152,12 +201,22 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 		Plan.Slack = Tau - BodyT - HandT;
 
 		// EFFICIENCY: run exactly as fast as the budget demands — where the
-		// demand is to be PLANTED a settle-time before contact, not to skid in
-		// at the buzzer. Headroom absorbs prediction drift; the floor keeps a
-		// purposeful stride. Slack-rich balls are still walked under.
+		// demand is to arrive STOPPED (trapezoid: accel + cruise + brake) a
+		// settle-time before contact, not to skid in at the buzzer. The exact
+		// cruise speed comes from the profile inverse; headroom absorbs
+		// prediction drift; the floor keeps a purposeful stride.
 		float Avail = Math::Max(Tau - MB_SettleTime - MB_FirstStepLag, 0.05f);
-		float NeedSpeed = Dist / Avail;
-		Plan.SpeedFraction = Math::Clamp((NeedSpeed / MyMoveSpeed) * 1.25f, 0.5f, 1.0f);
+		float NeedSpeed = MB_RequiredCruiseSpeed(Dist, Avail, EffVMax, MyAccel);
+		Plan.SpeedFraction = Math::Clamp((NeedSpeed / EffVMax) * 1.15f, 0.35f, 1.0f);
+
+		// UNCERTAINTY: while the slack left AFTER the run and settle exceeds
+		// the time the expected estimate drift costs to correct (plus a buffer
+		// covering the decision cadence), HOLD the expectation point instead
+		// of chasing the current read. τ shrinks monotonically, so the stage →
+		// go transition happens exactly once — it cannot flicker.
+		float TimeSlack = Tau - BodyT - MB_SettleTime;
+		float UncertTime = (MB_PredErrRate * Tau) / Math::Max(EffVMax, 100.0f);
+		Plan.bStage = (TimeSlack > UncertTime + MB_StageBuffer);
 
 		// The reach must start MB_GestureLead before contact regardless of
 		// where the body is — a late receive is saved by arms extending
@@ -171,8 +230,10 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 	FVector DivePos;
 	float DiveTau = 0.0f;
 	MB_BallTimeToHeight(Ball, FallbackZ, DivePos, DiveTau);
-	float DiveDist = (MyPos - FVector(DivePos.X, DivePos.Y, MyPos.Z)).Size2D();
-	float BodyT = MB_BodyTravelTimeRaw(DiveDist, MyMoveSpeed, MyAccel);
+	FVector ToDive = FVector(DivePos.X - MyPos.X, DivePos.Y - MyPos.Y, 0);
+	float DiveDist = ToDive.Size2D();
+	float BodyT = MB_BodyTravelTimeRaw(DiveDist,
+		MyMoveSpeed * Self.MoveDirSpeedScale(ToDive), MyAccel);
 	Plan.Contact = DivePos;
 	Plan.BallTime = DiveTau;
 	Plan.BodyTime = BodyT;
