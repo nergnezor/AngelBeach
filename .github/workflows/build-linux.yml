@@ -11,24 +11,32 @@ jobs:
     timeout-minutes: 120
 
     env:
-      ENGINE_DIR: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Linux
-      # Persistent DDC outside workspace — survives between runs
-      UE_DERIEDDATACACHE_ROOT: ${{ vars.ENGINE_DIR || '/opt/UnrealEngine-Angelscript' }}/Engine/DerivedDataCache
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Content/Characters/ (Manny mesh/skeleton/anims) is tracked via Git LFS —
+          # without lfs: true, checkout only pulls the small pointer files, and cook
+          # sees corrupt/unreadable .uasset files instead of the real binary content.
+          lfs: true
 
-      - name: Verify engine
+      - name: Resolve Unreal Engine
+        shell: bash
         run: |
-          test -x "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" || {
-            echo "ERROR: engine not found at $ENGINE_DIR"
-            echo "Install the engine on the runner and set ENGINE_DIR if needed."
-            exit 1
-          }
-          echo "Engine OK: $ENGINE_DIR"
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "UE_DERIVEDDATACACHE_ROOT=$candidate/Engine/DerivedDataCache" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
 
       - name: Build C++ module
         run: |

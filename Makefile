@@ -170,6 +170,10 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 	@test -d "$(ANDROID_NDK_HOME)" || { \
 		echo "ERROR: ANDROID_NDK_HOME not found: $(ANDROID_NDK_HOME)"; \
 		exit 1; }
+	@echo ">> Removing stale Android cook, stage, and archive output..."
+	rm -rf "$(PROJECT_DIR)/Saved/Cooked/Android"* \
+		"$(PROJECT_DIR)/Saved/StagedBuilds/Android"* \
+		"$(OUTPUT_DIR)/Android"
 	@mkdir -p "$(OUTPUT_DIR)/Android"
 	ANDROID_HOME="$(ANDROID_HOME)" \
 	ANDROID_SDK_ROOT="$(ANDROID_HOME)" \
@@ -183,7 +187,7 @@ package-android: check ## Package a Development APK for Android (output: $(OUTPU
 		-platform=Android \
 		-cookflavor=Multi \
 		-clientconfig=Development \
-		-cook -build -stage -pak -archive \
+		-cook -build -stage -pak -package -archive \
 		-nozenstore \
 		-archivedirectory="$(OUTPUT_DIR)/Android"
 	@echo ">> Android package ready at $(OUTPUT_DIR)/Android"
