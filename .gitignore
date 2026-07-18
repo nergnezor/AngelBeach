@@ -7,11 +7,8 @@ PackagedBuilds/
 
 # Editor metadata
 .vscode/
-Content/Collections/
-Content/Developers/
 
-# Binary assets (keep sources in engine plugins, not git)
-Content/Characters/
+# Binary assets not tracked via Git LFS
 Content/Collections/
 Content/Developers/
 Content/*.uasset
@@ -29,3 +26,4 @@ Content/*.umap
 *.xcworkspace
 *.xcodeproj
 Config/DefaultEditor.ini
+Script/Binds.Cache*

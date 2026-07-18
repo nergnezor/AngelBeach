@@ -81,8 +81,35 @@ class AAIPlayer : AVolleyballPlayer
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
 			bIMadeLastTouch = false;
+			PlanSlackLog = -1.0f;   // an unconsumed promise must not leak into the next rally
+			bHitterPlanted = false; // ...nor a stale plant (PLANVA settle counts from it)
+			PlantedFor = 0.0f;
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
+			return;
+		}
+
+		// PLAN vs ACTUAL bookkeeping: how long the hitter has stood planted
+		// (read by OnBallContact's PLANVA telemetry line).
+		PlantedFor = bHitterPlanted ? PlantedFor + DeltaTime : 0.0f;
+
+		// PERCEPTION LATENCY (first principles): a ball EVENT — any touch, the
+		// serve going live — is not seen instantly. The previous action keeps
+		// running for a visual-reaction beat before any re-planning; stored
+		// move input and the facing hold carry the old intent through the gap.
+		// The split step is exempt above: it is anticipatory, not a reaction.
+		ABeachVolleyballGameState PGS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		int PerceptStamp = (PGS != nullptr)
+			? int(PGS.LastTouchTeam) * 100 + PGS.TouchesThisRally + (Ball.bInPlay ? 1000 : 0)
+			: -1;
+		if (PerceptStamp != PrevPerceptStamp)
+		{
+			PrevPerceptStamp = PerceptStamp;
+			PerceptionTimer = PerceptionLatency;
+		}
+		if (PerceptionTimer > 0.0f)
+		{
+			PerceptionTimer -= DeltaTime;
 			return;
 		}
 
@@ -92,6 +119,12 @@ class AAIPlayer : AVolleyballPlayer
 
 		UpdateAI(DeltaTime);
 	}
+
+	// Human visual reaction to an unanticipated event (~0.16s). Separate from
+	// ReactionDelay (the decision cadence): this one fires per EVENT.
+	const float PerceptionLatency = 0.16f;
+	private float PerceptionTimer = 0.0f;
+	private int PrevPerceptStamp = -12345;
 
 	// Formation spot to occupy while the ball is dead, depending on whether our
 	// team is serving or receiving:
@@ -116,9 +149,20 @@ class AAIPlayer : AVolleyballPlayer
 				return FVector(Sign * 130.0f, 0.0f, Z);     // partner up at the net
 		}
 
-		// Receiving: spread to mid-court, one on each Y half.
-		float Y = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
-		return FVector(Sign * 450.0f, Y, Z);                 // mid-depth, half each
+		return HomePosition();
+	}
+
+	// Stable base position for each role. This is where a player resets while
+	// the opponent constructs its play and when supporting a teammate: do not
+	// chase a ball that is not ours. The front/back depth keeps two useful
+	// options while the small Y split covers the court without both players
+	// wandering toward every lateral ball movement.
+	private FVector HomePosition() const
+	{
+		float Sign = MySign();
+		float X = (Role == EPlayerRole::Role_Front) ? 250.0f : 560.0f;
+		float Y = (Role == EPlayerRole::Role_Front) ? -120.0f : 120.0f;
+		return FVector(Sign * X, Y, FloorZ + PlayerHeight);
 	}
 
 	// ---------------------------------------------------------------
@@ -281,14 +325,14 @@ class AAIPlayer : AVolleyballPlayer
 	// Role assignment — deterministic so the two players never swap
 	// mid-rally and end up chasing the same ball.
 	// ---------------------------------------------------------------
-	private bool AmIHitter(FVector Landing) const
+	private bool AmIHitter(FVector Landing)
 	{
 		if (Teammate == nullptr) return true;
 
 		// I never take two contacts in a row — if I made the last touch, it's
 		// my teammate's turn now. This guarantees digger != setter != attacker.
-		if (bIMadeLastTouch) return false;
-		if (Teammate.bIMadeLastTouch) return true;
+		if (bIMadeLastTouch)          { bWasHitter = false; return false; }
+		if (Teammate.bIMadeLastTouch) { bWasHitter = true;  return true;  }
 
 		// Fresh ball coming over (no team touches yet): closest player digs,
 		// with the back player favored for deep balls (typical serve receive).
@@ -296,11 +340,23 @@ class AAIPlayer : AVolleyballPlayer
 		float TheirDist = (Teammate.GetActorLocation() - Landing).Size2D();
 
 		bool bDeep = IsDeep(Landing.X);
-		if (bDeep && Role == EPlayerRole::Role_Back)  return true;
-		if (bDeep && Role == EPlayerRole::Role_Front) return false;
+		if (bDeep && Role == EPlayerRole::Role_Back)  { bWasHitter = true;  return true;  }
+		if (bDeep && Role == EPlayerRole::Role_Front) { bWasHitter = false; return false; }
 
-		return MyDist <= TheirDist;
+		// STICKY ROLE: with a bare closest-player rule, two nearly equidistant
+		// teammates swapped hitter/support every AI tick and both shuttled
+		// between two goals. The incumbent keeps the ball unless the partner
+		// is CLEARLY closer.
+		float Margin = bWasHitter ? 60.0f : -60.0f;
+		bWasHitter = MyDist <= TheirDist + Margin;
+		return bWasHitter;
 	}
+
+	// Hysteresis state for AmIHitter (who owns the current ball).
+	private bool bWasHitter = false;
+
+	// Hysteresis state for the hitter's plant (see PlayHitter).
+	private bool bHitterPlanted = false;
 
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
@@ -326,37 +382,34 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else
 		{
+			// A fingerpass demands being comfortably UNDER the ball at forehead
+			// height — in budget terms: that contact is playable with slack to
+			// spare. The old check was a fixed radius; the budget knows better
+			// (a slow floaty ball 3m away IS settable, a fast one 1m away isn't).
 			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			// Where the ball will be when it drops to forehead height.
-			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
-			float DistToSetSpot = (GetActorLocation() - FVector(SetSpot.X, SetSpot.Y, 0)).Size2D();
-			// Will the ball actually descend to forehead height (i.e. is it high
-			// enough to set), and can we get under that spot in time?
-			bool bBallSettable = SetSpot.Z >= ForeheadZ - 20.0f;
-			bool bCanGetUnder = DistToSetSpot < UnderBallRadius;
-			Intend = (bBallSettable && bCanGetUnder) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			FInterceptPlan SetPlan = this.PlanIntercept(ForeheadZ, ForeheadZ);
+			Intend = (SetPlan.bReachable && SetPlan.Slack >= 0.0f)
+				? EHitType::Hit_Set : EHitType::Hit_Bump;
 		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
-		if (Intend == EHitType::Hit_Bump) DoDig();
-		else                              DoSet();
+		// The reception pops to the setter zone; the SECOND ball is always
+		// PLACED at the pin (see DoSet) no matter which stroke plays it.
+		if (Touches == 0) DoDig();
+		else              DoSet();
 
-		// Desperate ball: it will drop to play height before we can run there —
-		// launch a dive at it instead of jogging hopelessly and watching it land.
-		if (CanDive())
+		// ONE budget decides everything below (MotionPlan.as): the highest
+		// playable contact given ball time vs body time vs hand time, the
+		// exact run speed the budget demands, when the reach must start, and
+		// whether the ball is only reachable by diving.
+		FInterceptPlan Plan = this.PlanIntercept(ContactHeightFor(Intend), FloorZ + 112.0f);
+
+		// Desperate ball: nothing playable on foot but the dive window is open.
+		if (Plan.bDive && CanDive())
 		{
-			FVector DiveSpot;
-			float TauC = PredictBallTimeToHeight(ContactHeight(), DiveSpot);
-			if (TauC > 0.0f)
-			{
-				float DDist = (GetActorLocation() - FVector(DiveSpot.X, DiveSpot.Y, GetActorLocation().Z)).Size2D();
-				float TMe = DDist / MoveSpeed + 0.12f;   // includes first-step lag
-				if (TMe > TauC + 0.05f && TauC < 0.8f && DDist > 130.0f && DDist < 400.0f)
-				{
-					StartDive(DiveSpot - GetActorLocation());
-					if (bDebugAI) Log(DebugTag() + " DIVE dist=" + int(DDist) + " tau=" + int(TauC * 100));
-				}
-			}
+			StartDive(Plan.Contact - GetActorLocation());
+			if (bDebugAI) Log(DebugTag() + " DIVE tau=" + int(Plan.BallTime * 100)
+				+ " bodyT=" + int(Plan.BodyTime * 100));
 		}
 		if (IsDiving())
 		{
@@ -365,16 +418,32 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		// Stand where the ball will be when it drops to PLAY height — MINUS a
-		// standoff along the ball's flight, so the contact happens IN FRONT of
-		// the chest where the platform/cup is, never on top of the head. This is
-		// the core of physical ball control: body behind the ball, facing it,
-		// meeting it in front.
-		FVector PlaySpot;
-		float TauC = PredictBallTimeToHeight(ContactHeightFor(Intend), PlaySpot);
-		// Standoff along the flight CHORD (ball -> predicted spot): stable, unlike
-		// the live velocity which swings during the rally and made the goal churn.
-		// Only applied while the ball is actually inbound toward the spot.
+		// PLAN vs ACTUAL: record the FIRST promise the budget made for this
+		// contact (later ticks re-plan with shrinking τ and always converge to
+		// slack≈0 — the informative number is what was booked at commitment).
+		if (PlanSlackLog < 0.0f)
+		{
+			PlanSlackLog = Plan.Slack;
+			PlanSpeedFracLog = Plan.SpeedFraction;
+		}
+
+		// UNCERTAINTY BUDGET: slack-rich ball — hold my expectation point (the
+		// pin approach spot) in a ready stance instead of chasing the current
+		// read; commit when remaining slack no longer buys the drift back.
+		// τ only shrinks, so stage → go crosses exactly once — no flicker.
+		if (Plan.bReachable && Plan.bStage)
+		{
+			MoveToHold(MyPinApproachStart(), DeltaTime, 0.6f);
+			RequestCrouch(0.25f);
+			FaceBall();
+			return;
+		}
+
+		// Stand where the plan meets the ball — MINUS a standoff along the
+		// flight chord, so the contact happens IN FRONT of the chest where the
+		// platform/cup is, never on top of the head. (Chord, not live velocity:
+		// the live velocity swings during the rally and churned the goal.)
+		FVector PlaySpot = Plan.Contact;
 		FVector Chord = FVector(PlaySpot.X - Ball.Position.X, PlaySpot.Y - Ball.Position.Y, 0);
 		FVector Vel2D = FVector(Ball.BallVel.X, Ball.BallVel.Y, 0);
 		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 35.0f;
@@ -384,20 +453,20 @@ class AAIPlayer : AVolleyballPlayer
 		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0) + Back * Standoff);
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
-		// Move with URGENCY MATCHED TO TIME: hustle only as fast as the ball
-		// demands. A pro with three seconds of hang time walks under the ball; one
-		// with under a second SPRINTS, no arithmetic. The reserve accounts for
-		// reaction lag + acceleration, which the naive dist/time math ignored —
-		// that starved serve receives and they dove hopelessly at landing balls.
-		float SpeedCap = 1.0f;
-		if (TauC > 0.9f)
+		// Plant state with HYSTERESIS: the goal recomputes every tick with a
+		// few cm of prediction noise, and a bare radius check flip-flopped
+		// planted <-> running at tick rate — the crouch request alternated
+		// with it and the knees vibrated (the jitter monitor's residual
+		// crouchFlips after the chest-feedback fix).
+		if (bHitterPlanted)
 		{
-			float NeedSpeed = DistToGoal / (TauC - 0.35f);    // reserve: react + accelerate
-			SpeedCap = Math::Clamp((NeedSpeed / MoveSpeed) * 1.25f, 0.5f, 1.0f);
+			if (DistToGoal > PlantRadius + 35.0f) bHitterPlanted = false;
 		}
+		else if (DistToGoal <= PlantRadius)
+			bHitterPlanted = true;
 
-		if (DistToGoal > PlantRadius)
-			MoveToward2D(Goal, DeltaTime, false, SpeedCap);
+		if (!bHitterPlanted)
+			MoveToward2D(Goal, DeltaTime, false, Plan.SpeedFraction);
 		else
 		{
 			MovePlayer(FVector2D::ZeroVector);
@@ -413,14 +482,9 @@ class AAIPlayer : AVolleyballPlayer
 		// players who are NOT about to play the ball (support/defense).
 		FaceBall();
 
-		// Wind up when MY contact is imminent in TIME — no distance condition. I'm
-		// the designated hitter: if I'm still moving when the ball is close in
-		// time, the arms must extend WHILE closing (that reach is what saves a
-		// late receive — the platform intercepts even when the body is a step
-		// short). 1.15s lead because the ABP's FBIK effectors chase their targets
-		// with limited speed: arms started at 0.9s were still converging at
-		// contact (handVsTarget 50-110cm in the miss autopsies).
-		if (TauC >= 0.0f && TauC < 1.15f)
+		// Wind up when the budget says the hand clock has started — no distance
+		// condition: a late receive is saved by arms extending WHILE closing.
+		if (Plan.bStartGesture)
 			Reach(Intend);
 	}
 
@@ -520,7 +584,6 @@ class AAIPlayer : AVolleyballPlayer
 	private void PlaySupport(FVector Landing, float DeltaTime)
 	{
 		int Touches = TeamTouches();
-		float Sign = MySign();
 		FVector Target;
 
 		if (Touches == 1)
@@ -531,36 +594,33 @@ class AAIPlayer : AVolleyballPlayer
 			// fingerpass instead of arriving late and scrambling a bagger. Fall back
 			// to the setter zone only before the receive has been hit (no useful
 			// prediction yet).
-			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			FVector SetSpot = PredictBallAtHeight(ForeheadZ);
-			bool bUsefulPredict = SetSpot.Z >= ForeheadZ - 20.0f
-				&& (TeamSide == ETeam::Team_A ? SetSpot.X <= 0.0f : SetSpot.X >= 0.0f);
-			Target = bUsefulPredict
-				? FVector(SetSpot.X, SetSpot.Y, FloorZ + PlayerHeight)
-				: SetterZone();
+			// (Handled fully in the branch below — see Touches == 1 early-out.)
+			Target = HomePosition();
 		}
 		else if (Touches == 2)
 		{
 			// Our set is up and my TEAMMATE attacks (I just set it — AmIHitter
-			// never gives me two touches in a row). COVER the attack: drop to
-			// mid-court behind the hitter for the block rebound. Running to the
-			// net with them just crowded the attack lane with two bodies.
-			Target = FVector(Sign * 480.0f, Landing.Y * 0.5f, FloorZ + PlayerHeight);
+			// never gives me two touches in a row). Reset behind the hitter at the
+			// role's home rather than following their approach or the ball's Y. This
+			// is the stable cover point for a block rebound without needless motion.
+			Target = HomePosition();
 		}
 		else
 		{
-			Target = SupportPos(Landing);
+			// First contact is somebody else's receive. Stay in the middle of the
+			// assigned zone until the touch happens; only the designated hitter
+			// travels to the incoming ball.
+			Target = HomePosition();
 		}
 
-		// The setter (Touches==1) is tracking a moving target — the spot the ball is
-		// dropping to — so chase it directly and arrive under it early. Holding with
-		// hysteresis there would leave us planted a half-metre off the descending ball.
-		// Support/cover roles still HOLD their spot to avoid constant shuffling.
-		if (Touches == 1)
+		// During OUR possession the supporter never ball-chases: they wait at
+		// the approach start behind their OWN-half pin, because that is where
+		// the next pass is coming (every pass targets the partner's pin). At
+		// Touches==0 I'm the upcoming setter; at Touches==1 I'm the attacker
+		// loading the approach — same spot either way.
+		if (Touches == 0 || Touches == 1)
 		{
-			// The upcoming setter is the NEXT hitter — same rule: always face the
-			// ball so the cup/platform targets stay stable while closing in.
-			MoveToward2D(ClampToCourt(Target), DeltaTime);
+			MoveToward2D(MyPinApproachStart(), DeltaTime, false, 1.0f);
 			FaceBall();
 			return;
 		}
@@ -623,19 +683,29 @@ class AAIPlayer : AVolleyballPlayer
 	// height. Momentum now carries through the jump (no air steering), which is
 	// exactly how a real approach converts run speed into attack reach.
 	// ---------------------------------------------------------------
-	// Contact height for the jump attack: hands top out ~424cm at the jump apex
-	// (chest ~329 + arm ~95), so we strike where the DESCENDING ball is slow and
-	// still inside that envelope. 380 was tuned for floatier sets; with the
-	// faster ones it put the ball 75cm above the hands at apex.
-	const float SpikeStrikeZ = 410.0f;
+	// Contact height for the jump attack: with the loaded jump (~115cm rise at
+	// the heavy player gravity) the hands top out ~355cm at apex — strike
+	// where the descending ball is slow and still inside that envelope. These
+	// are real beach volleyball numbers (net 243, contact ~350).
+	// Strike height DERIVED from jump physics: actor base + the loaded jump's
+	// ballistic rise (v²/2g) + the rig's raised-hand reach above the actor
+	// centre (the one measured constant). Retuning jump speed or gravity
+	// re-derives the strike zone automatically instead of stranding a magic
+	// 350 that silently stops matching the body. (Sanity: 112 + 115 + 123 ≈ 350.)
+	const float StrikeReachAboveCenter = 123.0f;
+	float SpikeStrikeZ() const
+	{
+		float Rise = (LoadedJumpVelocity * LoadedJumpVelocity) / (2.0f * Math::Abs(Gravity));
+		return FloorZ + PlayerHeight + Rise + StrikeReachAboveCenter;
+	}
 	const float ApproachBack = 200.0f;  // run-up starts this far behind the plant
 
 	private void ApproachForSpike(float DeltaTime)
 	{
-		float TimeToApex = JumpVelocity / 980.0f;   // ≈ 0.61s
+		float TimeToApex = LoadedJumpVelocity / Math::Abs(Gravity);   // ≈ 0.35s (loaded jump)
 
 		FVector Strike;
-		float Tau = PredictBallTimeToHeight(SpikeStrikeZ, Strike);
+		float Tau = PredictBallTimeToHeight(SpikeStrikeZ(), Strike);
 
 		if (Tau < 0.0f)
 		{
@@ -654,7 +724,8 @@ class AAIPlayer : AVolleyballPlayer
 		// the hitting shoulder, not on top of the head.
 		FVector Plant = ClampToCourt(FVector(Strike.X + MySign() * 35.0f, Strike.Y, 0));
 		float DistToPlant = (GetActorLocation() - Plant).Size2D();
-		float SprintTime = DistToPlant / MoveSpeed + 0.15f;   // + first-step lag
+		// Same body-time model as the intercept budget (accel-limited + lag).
+		float SprintTime = this.BodyTravelTime(DistToPlant);
 
 		bool bGo = false;
 		if (bIsGrounded)
@@ -698,19 +769,20 @@ class AAIPlayer : AVolleyballPlayer
 				// contacts at +0.18); a LATE jump meets the ball a touch lower but
 				// still inside the envelope. Keep the margin tiny so AI tick
 				// jitter lands on the late (reachable) side.
-				if (DistToPlant < 90.0f && Tau <= TimeToApex + 0.04f)
+				// The gather (JumpLoadDuration) happens BEFORE takeoff, so the
+				// decision fires one load earlier. StartLoadedJump does the
+				// plant (momentum brake — full-speed jumps drifted 3-4m past
+				// the strike point) and the deep full-body sink.
+				// Window sized to the decision cadence (this gate is examined
+				// every ReactionDelay) but capped LATE-biased: an early jump
+				// tops out above the ball and whiffs, a late one still meets
+				// it inside the envelope (stats2 autopsy).
+				float JumpEps = Math::Clamp(ReactionDelay * 0.4f, 0.02f, 0.05f);
+				if (DistToPlant < 90.0f && Tau <= TimeToApex + JumpLoadDuration + JumpEps)
 				{
 					MovePlayer(FVector2D::ZeroVector);
-					// PLANT: the penultimate-step brake every real approach has.
-					// Keeping full sprint momentum carried the hitter 3-4m PAST
-					// the strike point in the air (bodyHoriz 300-500 in the whiff
-					// autopsies) — the jump must convert run into HEIGHT. The 25%
-					// residue is the natural forward drift that closes the last
-					// ~90cm to the ball during the ascent.
-					PlayerVelocity.X *= 0.25f;
-					PlayerVelocity.Y *= 0.25f;
-					Jump();
-					if (bDebugAI) Log(DebugTag() + " SPIKE JUMP tau=" + int(Tau * 100) + " dist=" + int(DistToPlant));
+					StartLoadedJump();
+					if (bDebugAI && IsJumpLoading()) Log(DebugTag() + " SPIKE JUMP tau=" + int(Tau * 100) + " dist=" + int(DistToPlant));
 				}
 			}
 		}
@@ -749,34 +821,48 @@ class AAIPlayer : AVolleyballPlayer
 	}
 	const float SetterZoneX = 280.0f;
 
+	// PLACEMENT RULE (Erik): every pass goes to one metre inside the antenna
+	// on the PARTNER's half, and every player EXPECTS passes at the pin on
+	// their OWN half. The halves are static per role (Front owns -Y, Back
+	// owns +Y — matching HomePosition), which closes the system: the left
+	// player receives toward the right pin where the partner already waits,
+	// that partner plays the second ball there and passes back to the left
+	// pin where the receiver-turned-attacker is loading their approach.
+	// Nobody ball-chases; everyone anticipates.
+	private float MyHalfPinY() const
+	{
+		float HalfMax = (Role == EPlayerRole::Role_Front) ? CourtMinY : CourtMaxY;
+		return (HalfMax < 0.0f) ? HalfMax + 100.0f : HalfMax - 100.0f;
+	}
+
+	private FVector PartnerPinTarget() const
+	{
+		// Aim point = the FLOOR at the partner's pin: the ballistic target is
+		// where the arc comes DOWN, so an air target let an unattacked pass
+		// sail on and land ~2m out of court. Grounding it keeps the ball in
+		// play if nobody touches it; the partner intercepts the same arc at
+		// their contact height on its way down.
+		float PartnerHalfMax = (Role == EPlayerRole::Role_Front) ? CourtMaxY : CourtMinY;
+		float AimY = (PartnerHalfMax < 0.0f) ? PartnerHalfMax + 100.0f : PartnerHalfMax - 100.0f;
+		return FVector(MySign() * 50.0f, AimY, 20.0f);
+	}
+
+	// Where I WAIT for the pass I'm expecting: the approach start behind my
+	// own-half pin, ready to run in and attack or set whatever arrives.
+	protected FVector MyPinApproachStart() const
+	{
+		return ClampToCourt(FVector(
+			MySign() * (50.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
+	}
+
 	private void DoDig()
 	{
-		// Receive: pop the ball UP and OVER THE MIDDLE to the setter zone. The
-		// contact is ballistic (BallisticVelocity in OnBallContact): the aim point
-		// is where the arc comes DOWN — chest height in the setter zone, centre
-		// court (Y=0) so the 2nd-ball attack can go either direction.
-		FVector Zone = SetterZone();
-		AimAt(FVector(Zone.X, Zone.Y, 150.0f));
+		AimAt(PartnerPinTarget());
 	}
 
 	private void DoSet()
 	{
-		// Set: a HIGH float the attacker can take a full jump attack on. Ballistic
-		// contact: aim at the attack spot, arc apex ~4m up — the ball crosses
-		// strike height (~SpikeStrikeZ) descending right over the plant point.
-		//
-		// SET TO YOUR PARTNER: the next hitter is always the player who did NOT
-		// just touch (the roles guarantee it) — usually the RECEIVER, still deep
-		// after the pass. Aiming at "the front player's Y" put the ball where the
-		// attacker wasn't and the third touch never happened (the ball dropped
-		// untouched on the attack spot). Aim at the partner's actual Y so their
-		// approach is a straight run-in.
-		float Sign = MySign();
-		float SetX = Sign * 250.0f;
-		float SetY = (Teammate != nullptr)
-			? Math::Clamp(Teammate.GetActorLocation().Y, CourtMinY + 120.0f, CourtMaxY - 120.0f)
-			: Ball.Position.Y * 0.4f;
-		AimAt(FVector(SetX, SetY, 170.0f));
+		AimAt(PartnerPinTarget());
 	}
 
 	private void DoSpike()
@@ -853,8 +939,6 @@ class AAIPlayer : AVolleyballPlayer
 			// fast-descending ball at the net as fallback). Arms go up only once
 			// we're airborne; the IK reaches the hands to the ball.
 			float NetX = MySign() * 55.0f;   // right up at the net on our side
-			float BlockY = Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f);
-			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
 
 			// Aim the block at the middle of the opponent's court so a stuffed ball
 			// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
@@ -865,6 +949,13 @@ class AAIPlayer : AVolleyballPlayer
 			bool bBallNearNet = Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f;
 			bool bSpikeIncoming = (bAttackerAirborne && bBallNearNet)
 				|| (bBallNearNet && Ball.BallVel.Z < -250.0f);   // already smashed/dropping fast
+			// Hold the middle of the net while the opponent is still building. Track
+			// laterally only after the attack cue; following every set's small Y
+			// drift was visually busy and gave up the centre for no benefit.
+			float BlockY = bSpikeIncoming
+				? Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f)
+				: HomePosition().Y;
+			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
 
 			if (bIsGrounded)
 			{
@@ -873,10 +964,12 @@ class AAIPlayer : AVolleyballPlayer
 				{
 					// Kill the drive FIRST so the block jump is vertical — momentum
 					// carries in the air, and drifting into the net is a fault.
+					// Blocks load too: the same full-body gather, matching the
+					// attacker's own load delay.
 					MovePlayer(FVector2D::ZeroVector);
 					float HSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
 					if (HSpd < 90.0f)
-						Jump();
+						StartLoadedJump();
 				}
 				else
 				{
@@ -897,23 +990,22 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else if (Role == EPlayerRole::Role_Back && bAttackable)
 		{
-			// Back defender covers deep behind the block, toward the open court the
-			// blocker isn't taking away.
-			float DeepX = MySign() * 600.0f;
-			float CoverY = (Attacker != nullptr)
-				? Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f, CourtMinY + 80.0f, CourtMaxY - 80.0f)
-				: 0.0f;
-			Goal = FVector(DeepX, CoverY, FloorZ + PlayerHeight);
+			// Back defender starts from the centre of the deep zone. Do not mirror
+			// the opponent's lateral setup; move toward that line only when the
+			// attacker has actually committed to the spike.
+			Goal = HomePosition();
+			bool bSpikeIncoming = (Attacker != nullptr && !Attacker.bIsGrounded
+				&& Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f)
+				|| (Math::Abs(Ball.Position.X) < 350.0f && Ball.BallVel.Z < -250.0f);
+			if (bSpikeIncoming && Attacker != nullptr)
+				Goal.Y = Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f,
+					CourtMinY + 80.0f, CourtMaxY - 80.0f);
 		}
 		else
 		{
-			// Pass was poor / no attack coming — drop off the block and split the
-			// court so each defender owns a Y half at a FIXED defensive spot. No
-			// per-frame leaning toward the ball: that caused constant shuffling.
-			// Stand still on your half and react only when the ball comes over.
-			float Depth = (Role == EPlayerRole::Role_Front) ? MySign() * 250.0f : MySign() * 560.0f;
-			float HalfCenter = (Role == EPlayerRole::Role_Front) ? -200.0f : 200.0f;
-			Goal = FVector(Depth, HalfCenter, FloorZ + PlayerHeight);
+			// No actual attack cue: return to the fixed base, then react when the
+			// ball crosses. This replaces continuous pre-emptive roaming.
+			Goal = HomePosition();
 		}
 
 		if (bDebugAI) Log(DebugTag() + " DEFEND " + (bAttackable ? "BLOCK/COVER" : "SPLIT")
