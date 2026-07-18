@@ -3,7 +3,18 @@ name: Build – Linux
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/runner-setup.yml"
+      - "scripts/setup-runner.sh"
   workflow_dispatch:
+
+# One runner serves all jobs — cancel superseded builds of the same branch
+# instead of queueing 40-minute runs behind each other.
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -23,6 +34,20 @@ jobs:
           # without lfs: true, checkout only pulls the small pointer files, and cook
           # sees corrupt/unreadable .uasset files instead of the real binary content.
           lfs: true
+          # The default clean runs `git clean -ffdx`, which deletes Intermediate/
+          # and Binaries/ and forces a ~30 min full C++ recompile of the monolithic
+          # game target on every run. We clean selectively below instead.
+          clean: false
+
+      - name: Clean workspace (keep build caches)
+        run: |
+          git clean -ffdx \
+            -e Binaries/ \
+            -e Intermediate/ \
+            -e Saved/ \
+            -e DerivedDataCache/ \
+            -e Build/ \
+            -e "Script/Binds.Cache*"
 
       - name: Resolve Unreal Engine
         shell: bash
@@ -55,6 +80,7 @@ jobs:
             -clientconfig=Development \
             -cook -build -stage -pak -archive \
             -nozenstore \
+            -nodebuginfo \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Upload artifact

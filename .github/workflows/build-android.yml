@@ -3,7 +3,18 @@ name: Build – Android
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/runner-setup.yml"
+      - "scripts/setup-runner.sh"
   workflow_dispatch:
+
+# One runner serves all jobs — cancel superseded builds of the same branch
+# instead of queueing 40-minute runs behind each other.
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -33,6 +44,20 @@ jobs:
           # without lfs: true, checkout only pulls the small pointer files, and cook
           # sees corrupt/unreadable .uasset files instead of the real binary content.
           lfs: true
+          # The default clean runs `git clean -ffdx`, which deletes Intermediate/
+          # and Binaries/ and forces a ~20 min full C++ recompile of the Android
+          # client on every run. We clean selectively below instead.
+          clean: false
+
+      - name: Clean workspace (keep build caches)
+        run: |
+          git clean -ffdx \
+            -e Binaries/ \
+            -e Intermediate/ \
+            -e Saved/ \
+            -e DerivedDataCache/ \
+            -e Build/ \
+            -e "Script/Binds.Cache*"
 
       - name: Resolve Unreal Engine
         shell: bash
@@ -109,12 +134,10 @@ jobs:
             echo "Zen server started."
           fi
 
-      - name: Build C++ module (Android)
-        run: |
-          "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
-            ${PROJECT_NAME} Android Shipping \
-            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
-            -progress
+      # NOTE: no separate Build.sh step here. Packaging below passes -build with
+      # -clientconfig=Development, so UAT compiles the exact binaries it stages;
+      # a separate Shipping pre-build spent ~17 min producing a .so that was
+      # never packaged.
 
       - name: Prepare Android signing (from secrets)
         run: |
@@ -162,6 +185,7 @@ jobs:
             -clientconfig=Development \
             -cook -build -stage -pak -package -archive \
             -nozenstore \
+            -nodebuginfo \
             -archivedirectory="$OUTPUT_DIR"
 
       - name: Collect APK + AAB
@@ -188,6 +212,7 @@ jobs:
           ls -lh "$APK_DIR" "$AAB_DIR" 2>/dev/null
 
       # The APK as its own dedicated artifact (for direct sideload installs).
+      # APKs are already zip-compressed — recompressing wastes time for ~0 gain.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -195,6 +220,7 @@ jobs:
           path: Artifacts/apk/*.apk
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
 
       # The AAB as its own artifact (for Play Console upload).
       - name: Upload AAB artifact
@@ -204,15 +230,7 @@ jobs:
           path: Artifacts/aab/*.aab
           if-no-files-found: warn
           retention-days: 14
-
-      # Full staged build (loose files) kept as a separate artifact.
-      - name: Upload staged build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-staged-${{ github.sha }}
-          path: Saved/StagedBuilds/Android/
-          if-no-files-found: warn
-          retention-days: 14
+          compression-level: 0
 
   # ── Play Internal Testing ──────────────────────────────────────────────────
   # Only on main/master: a broken experimental branch shouldn't push a bad
