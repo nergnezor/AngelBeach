@@ -524,6 +524,12 @@ class AVolleyballPlayer : APawn
 	// Written by UpdateIKTargets each frame so CFLIP can attribute the source.
 	float DbgPoseCrouch = 0.0f;
 	float DbgWantCrouch = 0.0f;
+	// The sink's legitimate speed ceiling this frame (swing boost included) —
+	// written by UpdateIKTargets so the teleport check tracks the same limit.
+	float SinkBoostLog = 1.0f;
+	// Rolling peak of the hand-target speed (cm/s), decaying — logged by
+	// TriggerHit as the SWING line so whip speeds are measurable per stroke.
+	float PeakHandSpd = 0.0f;
 
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
@@ -560,9 +566,13 @@ class AVolleyballPlayer : APawn
 			MonYawFlips++;
 		if (Math::Abs(YawRate) > 20.0f) MonPrevYawDelta = YawRate;
 
-		// 3) Crouch flapping: knee direction alternates at a real rate.
+		// 3) Crouch flapping: knee direction alternates at a real rate. The
+		// threshold must catch ASYMMETRIC oscillation too: the proportional
+		// sink rises at gain 3, so the up-leg of a ±0.3 square wave moves at
+		// ~0.9/s — a 1.0 threshold declared the visible set/bump pose bob
+		// "no jitter" while Erik watched it. 0.6 catches both legs.
 		float CrouchRate = (CrouchNow - MonPrevCrouch) / DeltaTime;
-		if (Math::Abs(CrouchRate) > 1.0f && Math::Abs(MonPrevCrouchDelta) > 1.0f
+		if (Math::Abs(CrouchRate) > 0.6f && Math::Abs(MonPrevCrouchDelta) > 0.6f
 			&& CrouchRate * MonPrevCrouchDelta < 0.0f)
 		{
 			MonCrouchFlips++;
@@ -582,8 +592,12 @@ class AVolleyballPlayer : APawn
 
 		// 4) IK-sink violation: the hand target moved faster than the sink's
 		// speed limit allows — something writes past the anti-flicker sink.
-		if ((HandR - MonPrevHandR).Size() > 900.0f * DeltaTime * 1.6f + 2.0f)
+		// The ceiling follows SinkBoostLog: a swing legitimately opens it.
+		float HandStep = (HandR - MonPrevHandR).Size();
+		if (HandStep > 900.0f * SinkBoostLog * DeltaTime * 1.6f + 2.0f)
 			MonIKTeleports++;
+		// Rolling hand-speed peak for the SWING telemetry (decays ~0.5s).
+		PeakHandSpd = Math::Max(HandStep / DeltaTime, PeakHandSpd - 4000.0f * DeltaTime);
 
 		MonPrevVel = PlayerVelocity;
 		MonPrevYaw = Yaw;
@@ -938,17 +952,16 @@ class AVolleyballPlayer : APawn
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		int MyTouches = (GS != nullptr && GS.LastTouchTeam == TeamSide) ? GS.TouchesThisRally : 0;
 
-		float HeadZ = GetActorLocation().Z + PlayerHeight;
-		bool bHigh = BallPos.Z > HeadZ;
 		// A fingerpass is taken at the FOREHEAD, not above the crown. The setter
 		// aims to contact at PlayerHeight*0.9 (ContactHeightFor(Hit_Set)); keying
-		// the set/bump split off HeadZ (PlayerHeight*1.0) meant a perfectly-placed
-		// overhead ball at 171cm classified as a BUMP because it sat below the
-		// 180cm crown — so nobody ever fingerpassed. Use a forehead threshold a
-		// hair below the setter's own target so the intended contact reliably
-		// reads as a set. (Kept below the target, not at it, for prediction slack.)
+		// the set/bump split off the OLD full-head threshold (PlayerHeight*1.0)
+		// meant a perfectly-placed overhead ball at 171cm classified as a BUMP
+		// because it sat below the 180cm crown — so nobody ever fingerpassed.
+		// Use a forehead threshold a hair below the setter's own target so the
+		// intended contact reliably reads as a set. (Kept below the target, not
+		// at it, for prediction slack.)
 		float SetMinContactZ = GetActorLocation().Z + PlayerHeight * 0.82f;
-		bool bOverhead = BallPos.Z > SetMinContactZ;
+		bool bHigh = BallPos.Z > SetMinContactZ;
 		// An active block gesture at the net keeps its identity — the protocol
 		// would otherwise re-type a stuff block as a "reception" and float a
 		// point-blank spike gently to the setter zone.
@@ -960,11 +973,16 @@ class AVolleyballPlayer : APawn
 		else if (MyTouches == 0)
 			Type = EHitType::Hit_Bump;                                   // reception: always bagger
 		else if (MyTouches == 1)
-			Type = (bOverhead && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			// ATTACK ON TWO is legal: a perfect reception hangs through the
+			// strike zone and the second toucher may choose to jump on it —
+			// an airborne high contact here IS that choice, made physical.
+			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
+			     : ((bHigh && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump);
 		else
 			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
 			     : (bHigh ? EHitType::Hit_Set : EHitType::Hit_Bump);     // grounded attack = shot
-		bool bAttackTouch = !bBlockContact && MyTouches >= 2;
+		bool bAttackTouch = !bBlockContact
+			&& (MyTouches >= 2 || Type == EHitType::Hit_Spike);
 
 		// Where we're sending it. The AI aims continuously; if no aim is active
 		// (scramble), fall back to the protocol's natural target: pop receptions
@@ -1048,13 +1066,19 @@ class AVolleyballPlayer : APawn
 			// hot serves feeling physical — but if it would carry the ball over
 			// the net (protocol break: only touch 3 crosses), drop it and keep
 			// the pure ballistic, which by construction stays on our side.
-			// Arc by TOUCH NUMBER, not stroke: the SECOND ball is the pass the
+			// Arc by TOUCH NUMBER and QUALITY. The SECOND ball is the pass the
 			// attacker jumps on — with the floor target at the pin its arc must
 			// peak ~490 to hang through the 350 strike zone (apex counts above
 			// the higher endpoint, so grounding the target lowered every peak
-			// by ~3m and the jump attack vanished). The reception keeps a
-			// flatter arc for control.
-			float Apex = (MyTouches == 1) ? 340.0f : 260.0f;
+			// by ~3m and the jump attack vanished). The RECEPTION's height is
+			// EARNED by contact quality: a planted, converged dig floats the
+			// same attackable arc (and the partner may then spike on 2 or
+			// hand-set), while a scrambled one only manages the flat
+			// defensive pop. Quality gating the arc means "perfect reception
+			// = options" falls out of the physics instead of a rule.
+			float Apex = (MyTouches == 1)
+				? 340.0f
+				: Math::Lerp(340.0f, 260.0f, Math::Clamp(AimErrCm / 50.0f, 0.0f, 1.0f));
 			FVector Pure = BallisticVelocity(BallPos, Target, Apex);
 			OutVel = Pure + Reflected * 0.15f;
 			if (CrossesNetPlane(BallPos, OutVel))
@@ -1104,6 +1128,10 @@ class AVolleyballPlayer : APawn
 		CurrentHit = Type;      // a real contact is an event — no dwell gate
 		GestureAge = 0.0f;
 		HitAnimTimer = HitAnimDuration;
+		// Whip telemetry: rolling peak of hand-target speed entering this
+		// contact (cm/s). A real spike/serve whip should read 1500-2300; a
+		// bump platform a few hundred.
+		Log("SWING type=" + int(Type) + " peakHand=" + int(PeakHandSpd));
 		if (bDebugHit)
 		{
 			FString Cls = (Anim != nullptr) ? "" + Anim.GetClass().GetName() : "NULL";

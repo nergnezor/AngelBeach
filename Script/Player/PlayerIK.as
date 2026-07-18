@@ -58,6 +58,9 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	FVector PoleR;
 	FVector PoleL;
 	float Crouch = 0.0f;
+	// How far past the anti-flicker sink's base speed limit this frame's pose
+	// may legitimately move (deliberate swings are FAST — see the sink).
+	float SinkBoost = 1.0f;
 
 	// 0 -> 1 over the contact swing (TriggerHit envelope): lets poses swing
 	// THROUGH the ball along the aim at contact instead of freezing on it.
@@ -97,7 +100,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector PlatEnd = ChestMid + PlatDir * Ext;
 		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
 		// a bagger is a controlled swing from the shoulders, not a held tray.
-		PlatEnd += (AimFlat * 26.0f + Up * 18.0f) * Swing;
+		// EaseOut: the through-swing starts at contact speed and bleeds off.
+		PlatEnd += (AimFlat * 26.0f + Up * 18.0f) * EaseOut(Swing);
 		ContactR = PlatEnd - Right * 5.0f;
 		ContactL = PlatEnd + Right * 5.0f;
 		// Elbow hints sit ON the shoulder->hand line, nudged down/in, so the IK
@@ -168,10 +172,11 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 
 		// Offset along the push axis: CUSHION (give) then DRIVE through. Swing is
 		// 0 until the real contact fires TriggerHit, so pre-contact the window
-		// just holds under the ball; the give+extend is the follow-through.
+		// just holds under the ball; the give+extend is the follow-through. MinJerk
+		// on the approach: the window SETTLES under the ball, not snaps to it.
 		float Along;
 		if (Swing <= 0.0f)
-			Along = 6.0f * Blend;                             // window formed, waiting
+			Along = 6.0f * MinJerk(Blend);                   // window forming, waiting
 		else if (Swing < 0.2f)
 			Along = 6.0f - 14.0f * (Swing / 0.2f);           // CUSHION: give down to -8 (load)
 		else
@@ -248,26 +253,35 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		}
 
 		// --- Right (hitting) arm --------------------------------------------
+		// Each phase gets the time profile (and shoulder-centred ARC, not a
+		// straight line) that matches what it physically is: the backswing
+		// SETTLES into the cocked position (MinJerk), the whip must hit the
+		// ball at PEAK speed rather than decelerate into it (EaseIn), the
+		// follow-through starts at strike speed and bleeds off (EaseOut).
 		if (Swing > 0.001f)
 		{
 			// Contact has happened: whip through from the strike to the finish.
-			ContactR = Strike + (Finish - Strike) * Swing;
+			ContactR = ArcAround(ShR, Strike, Finish, EaseOut(Swing));
 			PoleR = ContactR + Up * 12.0f - Fwd * 4.0f + Right * 8.0f;      // elbow drops & leads the snap
 		}
 		else if (SwingPhase < 0.4f)
 		{
 			// Backswing -> cocked: draw the bow as the body rises.
-			ContactR = BackSw + (Cocked - BackSw) * (SwingPhase / 0.4f);
+			ContactR = ArcAround(ShR, BackSw, Cocked, MinJerk(SwingPhase / 0.4f));
 			PoleR = ContactR + Up * 22.0f - Fwd * 26.0f + Right * 12.0f;    // elbow high & back
 		}
 		else
 		{
 			// Cocked -> strike: the forward whip as the ball drops in. The elbow
 			// travels forward and down, leading the hand over the top.
-			float T = (SwingPhase - 0.4f) / 0.6f;
-			ContactR = Cocked + (Strike - Cocked) * T;
+			float T = EaseIn((SwingPhase - 0.4f) / 0.6f);
+			ContactR = ArcAround(ShR, Cocked, Strike, T);
 			PoleR = ContactR + Up * (22.0f - 8.0f * T) - Fwd * (26.0f - 40.0f * T) + Right * 10.0f;
 		}
+		// The whip is a deliberate ballistic motion — open the anti-flicker
+		// sink for it (build-up AND the post-contact snap), so the strike
+		// isn't capped at the same speed as ordinary repositioning.
+		SinkBoost = 1.0f + 1.6f * Math::Max(SwingPhase, Swing);
 		// Palm rolls from facing up/back (cocked) to down along the aim (strike +
 		// follow-through, over the top of the ball).
 		float PalmT = Math::Clamp(Math::Max((SwingPhase - 0.4f) / 0.6f, Swing), 0.0f, 1.0f);
@@ -338,14 +352,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		if (P < 0.6f)
 		{
 			float T = P / 0.6f;
-			ContactL = TossStart + (TossHand - TossStart) * (T * T * (3.0f - 2.0f * T)); // smoothstep lift
+			ContactL = TossStart + (TossHand - TossStart) * MinJerk(T);  // bell-velocity lift
 			PoleL = ShL + Fwd * 35.0f - Up * 4.0f;
 			PalmL = Up.Rotation();                    // palm up, carrying the ball
 		}
 		else
 		{
 			float T = (P - 0.6f) / 0.4f;
-			ContactL = TossHand + (TuckL - TossHand) * T;
+			ContactL = TossHand + (TuckL - TossHand) * MinJerk(T);
 			PoleL = ShL - Up * 18.0f - Fwd * 8.0f;
 			PalmL = (-Up).Rotation();
 		}
@@ -359,21 +373,27 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// the old 0.85 breakpoint had the ball leaving mid-whip.
 		if (P < 0.55f)
 		{
+			// Draw: a MinJerk reach that SETTLES into the cocked position.
 			float T = P / 0.55f;
-			ContactR = RestR + (DrawR - RestR) * (T * T);
+			ContactR = ArcAround(ShR, RestR, DrawR, MinJerk(T));
 			PoleR = ContactR + Up * 20.0f - Fwd * 25.0f + Right * 12.0f;
 		}
 		else if (P < 0.78f)
 		{
+			// Whip: EaseIn on an arc — peak hand speed AT the strike (phase
+			// 0.78, where the ball physically launches). Open the sink for it.
 			float T = (P - 0.55f) / 0.23f;
-			ContactR = DrawR + (StrikeR - DrawR) * T;
+			ContactR = ArcAround(ShR, DrawR, StrikeR, EaseIn(T));
 			PoleR = ContactR + Up * 18.0f - Fwd * 20.0f + Right * 10.0f;
+			SinkBoost = 1.0f + 1.4f * T;
 		}
 		else
 		{
+			// Follow-through: starts at strike speed, bleeds off along the arc.
 			float T = (P - 0.78f) / 0.22f;
-			ContactR = StrikeR + (FollowR - StrikeR) * T;
+			ContactR = ArcAround(ShR, StrikeR, FollowR, EaseOut(T));
 			PoleR = ContactR + Up * 10.0f + Right * 12.0f;
+			SinkBoost = 1.0f + 1.4f * (1.0f - T);
 		}
 		PalmR = (AimFlat * 0.7f - Up * 0.3f).GetSafeNormal().Rotation();
 
@@ -400,9 +420,17 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	}
 	else
 	{
-		WantHandR = ReadyR + (ContactR - ReadyR) * Blend;
-		WantHandL = ReadyL + (ContactL - ReadyL) * Blend;
+		// MinJerk on the gesture ramp: the reach leaves ready slowly, peaks
+		// mid-travel and settles onto the platform/cup — constant-speed
+		// interpolation here read as mechanical.
+		float Ramp = MinJerk(Blend);
+		WantHandR = ReadyR + (ContactR - ReadyR) * Ramp;
+		WantHandL = ReadyL + (ContactL - ReadyL) * Ramp;
 	}
+	// A triggered through-swing (any stroke, not just the spike) is deliberate
+	// ballistic motion: open the sink while it is fast, close it as it bleeds off.
+	if (Swing > 0.0f)
+		SinkBoost = Math::Max(SinkBoost, 1.0f + 1.2f * (1.0f - Swing));
 	// Pose crouch plus whatever extra was requested — the deepest of the two
 	// extra channels wins (held AI stance vs frame-rate transient), added on top
 	// of the pose crouch, capped at full crouch. Max (not sum) between the extra
@@ -428,12 +456,20 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		Self.SmRotR  = PalmR;     Self.SmRotL  = PalmL;
 		Self.SmCrouch = WantCrouch;
 	}
-	float MaxStep = 900.0f * Dt;
+	// Base limit covers held poses and repositioning; SinkBoost opens it for
+	// deliberate swings (a real spike hand peaks 15-20+ m/s — capping the whip
+	// at the anti-flicker limit was robbing every strike of its snap). The
+	// motion monitor reads SinkBoostLog so its teleport check tracks the
+	// same ceiling.
+	float MaxStep = 900.0f * SinkBoost * Dt;
+	Self.SinkBoostLog = SinkBoost;
 	Self.SmHandR = MoveTowardClamped(Self.SmHandR, WantHandR, MaxStep);
 	Self.SmHandL = MoveTowardClamped(Self.SmHandL, WantHandL, MaxStep);
 	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
 	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);
-	float RotAlpha = Math::Clamp(14.0f * Dt, 0.0f, 1.0f);
+	// Wrist keeps pace with the hand: the palm SNAPS through contact at swing
+	// speed (kinetic chain: the wrist is the last, fastest link).
+	float RotAlpha = Math::Clamp(14.0f * SinkBoost * Dt, 0.0f, 1.0f);
 	Self.SmRotR = Math::LerpShortestPath(Self.SmRotR, PalmR, RotAlpha);
 	Self.SmRotL = Math::LerpShortestPath(Self.SmRotL, PalmL, RotAlpha);
 	// PROPORTIONAL rate (exponential approach), NOT a rate clamp: the old
@@ -457,6 +493,45 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	Self.Anim.HandRotR     = Self.SmRotR;
 	Self.Anim.HandRotL     = Self.SmRotL;
 	Self.Anim.CrouchAmount = Self.SmCrouch;
+}
+
+// --- FIRST-PRINCIPLES MOTION SHAPING ---------------------------------------
+// Real limb motion is never constant-speed. Three time profiles cover every
+// gesture segment, chosen by what the segment IS:
+//  - MinJerk: a self-contained reach (cock, toss, platform set-up) — the
+//    minimum-jerk law (Flash & Hogan): bell velocity, slow-fast-slow.
+//  - EaseIn: a segment ENDING at contact — the hand must pass through the
+//    ball at PEAK speed (a whip), never decelerating into it.
+//  - EaseOut: follow-through — starts at strike speed, bleeds off naturally.
+float MinJerk(float T)
+{
+	float C = Math::Clamp(T, 0.0f, 1.0f);
+	return C * C * C * (10.0f + C * (6.0f * C - 15.0f));
+}
+float EaseIn(float T)
+{
+	float C = Math::Clamp(T, 0.0f, 1.0f);
+	return C * C;
+}
+float EaseOut(float T)
+{
+	float C = Math::Clamp(T, 0.0f, 1.0f);
+	return 1.0f - (1.0f - C) * (1.0f - C);
+}
+
+// Hands sweep ARCS around the shoulder, not chords between waypoints: nlerp
+// the direction from the pivot and lerp the radius. A straight-line hand
+// path is the giveaway of keyframe interpolation; the arc is what a hinged
+// arm physically does.
+FVector ArcAround(FVector Pivot, FVector A, FVector B, float T)
+{
+	FVector DA = A - Pivot;
+	FVector DB = B - Pivot;
+	float RA = DA.Size();
+	float RB = DB.Size();
+	if (RA < 1.0f || RB < 1.0f) return A + (B - A) * T;
+	FVector Dir = (DA / RA + (DB / RB - DA / RA) * T).GetSafeNormal();
+	return Pivot + Dir * (RA + (RB - RA) * T);
 }
 
 // Move From toward To by at most MaxStep (cm) — the sink's speed limiter.
