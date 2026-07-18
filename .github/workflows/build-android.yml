@@ -127,8 +127,9 @@ jobs:
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
+            -cookflavor=Multi \
             -clientconfig=Development \
-            -cook -build -stage -package -archive \
+            -cook -build -stage -pak -package -archive \
             -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
 
