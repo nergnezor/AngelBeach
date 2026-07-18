@@ -207,10 +207,14 @@ jobs:
           mkdir -p "$APK_DIR" "$AAB_DIR"
           found_apk=0
           found_aab=0
+          # Only the universal APK is self-contained (content embedded via
+          # bPackageDataInsideApk). Shipping packaging also emits a content-less
+          # arm64 APK and an AFS companion APK — neither is installable on its
+          # own, so don't ship them in the artifact.
           while IFS= read -r f; do
             echo "Found APK: $f"; cp -f "$f" "$APK_DIR/"; found_apk=1
           done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
-                     -name '*.apk' 2>/dev/null)
+                     -name '*_universal.apk' 2>/dev/null)
           while IFS= read -r f; do
             echo "Found AAB: $f"; cp -f "$f" "$AAB_DIR/"; found_aab=1
           done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
