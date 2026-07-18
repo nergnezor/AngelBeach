@@ -1234,11 +1234,23 @@ class AAIPlayer : AVolleyballPlayer
 			SplitStepTimer = SplitStepDuration;
 		bPrevBallInPlay = Ball.bInPlay;
 
-		// Opponent contact: their touch team/count just changed.
+		// Opponent contact: their touch team/count just changed. But a defender
+		// split-steps ONCE, on the ATTACKER'S swing — not on every touch of their
+		// possession. Firing on their receive AND set AND attack stacked three
+		// dips in a row and read as the body shaking up and down before we ever
+		// dug the ball. The attack is the touch that DRIVES THE BALL TOWARD US;
+		// their own-side receive/set keep it on their court (X small or away), so
+		// gate on the post-contact velocity heading to our side. The serve above
+		// is the serve-phase equivalent of that same read.
 		int Stamp = int(GS.LastTouchTeam) * 100 + GS.TouchesThisRally;
 		if (Stamp != PrevTouchStamp)
 		{
-			if (GS.LastTouchTeam != TeamSide && GS.LastTouchTeam != ETeam::Team_None && Ball.bInPlay)
+			bool bOpponentHit = GS.LastTouchTeam != TeamSide
+				&& GS.LastTouchTeam != ETeam::Team_None && Ball.bInPlay;
+			// Ball now driving to our side (their attack), not along their own.
+			bool bDrivenAtUs = (TeamSide == ETeam::Team_A)
+				? Ball.BallVel.X < -150.0f : Ball.BallVel.X > 150.0f;
+			if (bOpponentHit && bDrivenAtUs)
 				SplitStepTimer = SplitStepDuration;
 			PrevTouchStamp = Stamp;
 		}
