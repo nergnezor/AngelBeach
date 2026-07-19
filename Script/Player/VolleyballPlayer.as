@@ -29,6 +29,17 @@ class AVolleyballPlayer : APawn
 	FVector FacingDir = FVector(1, 0, 0);
 	bool bHasFacing = false;
 	private float FacingHoldTimer = 0.0f;   // facing requests lapse on this
+	// Rate-limited FacingDir: the raw target the AI recomputes wholesale every
+	// reaction tick (a close/fast ball can swing its bearing through a wide
+	// angle in one tick); this is what the rotation and turn-run alignment
+	// actually track, so the body is never asked to reverse turn direction
+	// instantaneously when the raw target crosses to the other side.
+	private FVector SmFacingDir = FVector(1, 0, 0);
+	const float FacingDirMaxTurnRate = 300.0f;   // deg/s
+	// Committed turn direction (signed degrees, last frame's Delta) — breaks
+	// the near-180° shortest-path tie deterministically instead of by float
+	// noise. See the rotation block in UpdatePlayer.
+	private float RotDirBias = 0.0f;
 
 	ETeam TeamSide = ETeam::Team_A;
 	bool bCanHit = true;
@@ -265,13 +276,33 @@ class AVolleyballPlayer : APawn
 		// the AI only re-asserts every reaction tick (~0.1s), and clearing the
 		// request per frame made the rotation target alternate ball-facing on
 		// tick frames / travel-facing between them — a visible two-pose shimmer.
+		//
+		// FacingDir ITSELF is rate-limited before use (SmFacingDir): the AI
+		// recomputes it whole-cloth from the live ball bearing every reaction
+		// tick, and a close/fast ball can swing that bearing through a large
+		// angle in one tick. The body's lerp toward Want is already smooth,
+		// but a smooth chase of a TARGET that itself teleports still reverses
+		// the output turn direction the instant the target crosses to the
+		// other side — the exact yaw-rate-sign-flip the motion monitor was
+		// still catching after every source-side (bTurnRun) dwell fix. Rate-
+		// limiting the target directly removes the reversal at its root
+		// instead of chasing which system supplied it.
+		if (FacingDir.SizeSquared() > 0.01f)
+		{
+			float CurYaw = SmFacingDir.Rotation().Yaw;
+			float TargetYaw = FacingDir.Rotation().Yaw;
+			float Step = Math::Clamp(Math::FindDeltaAngleDegrees(CurYaw, TargetYaw),
+				-FacingDirMaxTurnRate * DeltaTime, FacingDirMaxTurnRate * DeltaTime);
+			SmFacingDir = FRotator(0.0f, CurYaw + Step, 0.0f).Vector();
+		}
+
 		float HSpeed2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
 		if (bHasFacing)
 			FacingHoldTimer = 0.2f;
 		else
 			FacingHoldTimer -= DeltaTime;
 
-		UpdateTurnRun();
+		UpdateTurnRun(DeltaTime);
 
 		FVector Want = FVector::ZeroVector;
 		if (bTurnRun)
@@ -280,16 +311,39 @@ class AVolleyballPlayer : APawn
 			// engaged, so this is never a degenerate direction.
 			Want = FVector(MoveInput.X, MoveInput.Y, 0);
 		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
-			Want = FVector(FacingDir.X, FacingDir.Y, 0);
+			Want = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
 		else if (HSpeed2 > 30.0f)
 			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
 
 		if (Want.SizeSquared() > 0.01f)
 		{
+			// Manual yaw step instead of a fresh LerpShortestPath every frame.
+			// CONFIRMED (YFLIP telemetry, dt rock-steady ~1ms — not a frame-
+			// pacing artifact): near an exact 180° turn, "shortest path" is
+			// numerically DEGENERATE — clockwise and counter-clockwise are
+			// equally short, so a fraction of a degree of float noise in Cur
+			// or Want flips which way LerpShortestPath picks, reversing the
+			// output rotation direction between two adjacent frames at full
+			// rate. Once a turn is committed to a direction, keep going that
+			// way through the ambiguous zone (RotDirBias) instead of letting
+			// each frame re-decide "shortest" from scratch.
 			FRotator Cur = GetActorRotation();
+			float TargetYaw = Want.Rotation().Yaw;
+			float Delta = Math::FindDeltaAngleDegrees(Cur.Yaw, TargetYaw);
+			bool bDeltaPos = Delta >= 0.0f;
+			bool bBiasPos = RotDirBias >= 0.0f;
+			if (Math::Abs(RotDirBias) > 1.0f && Math::Abs(Math::Abs(Delta) - 180.0f) < 15.0f
+				&& bDeltaPos != bBiasPos)
+				Delta = bDeltaPos ? Delta - 360.0f : Delta + 360.0f;
+			if (Math::Abs(Delta) > 1.0f) RotDirBias = Delta;
+
 			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
-			SetActorRotation(Math::LerpShortestPath(Cur, Want.Rotation(), Alpha));
+			SetActorRotation(FRotator(Cur.Pitch, Cur.Yaw + Delta * Alpha, Cur.Roll));
 		}
+		// Debug attribution for YFLIP (see UpdateMotionMonitor): which source
+		// picked this frame's facing target, and what it pointed at.
+		DbgFacingSrc = bTurnRun ? 2 : ((FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f) ? 1 : 0);
+		DbgWantYaw = (Want.SizeSquared() > 0.01f) ? Want.Rotation().Yaw : DbgWantYaw;
 		bHasFacing = false;   // requests lapse via FacingHoldTimer above
 
 		UpdatePredictedMeet();
@@ -530,6 +584,13 @@ class AVolleyballPlayer : APawn
 	// Rolling peak of the hand-target speed (cm/s), decaying — logged by
 	// TriggerHit as the SWING line so whip speeds are measurable per stroke.
 	float PeakHandSpd = 0.0f;
+	// Facing attribution written each frame (see the rotation block in
+	// UpdatePlayer) so a YFLIP log can attribute WHICH source's target
+	// reversed: 0=travel-velocity, 1=held facing request, 2=turn-and-run.
+	int DbgFacingSrc = -1;
+	float DbgWantYaw = 0.0f;
+	private int MonYFlipLogs = 0;
+	private float MonPrevDt = 0.0f;   // testing whether YFLIP correlates with erratic frame pacing
 
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
@@ -563,8 +624,22 @@ class AVolleyballPlayer : APawn
 		float YawRate = YawDelta / DeltaTime;
 		if (Math::Abs(YawRate) > 60.0f && Math::Abs(MonPrevYawDelta) > 60.0f
 			&& YawRate * MonPrevYawDelta < 0.0f)
+		{
 			MonYawFlips++;
+			if (MonYFlipLogs < 60)
+			{
+				MonYFlipLogs++;
+				FVector V2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+				Log("YFLIP rate=" + int(YawRate) + " prevRate=" + int(MonPrevYawDelta)
+					+ " yaw=" + int(Yaw) + " src=" + DbgFacingSrc + " wantYaw=" + int(DbgWantYaw)
+					+ " dt=" + DeltaTime + " prevDt=" + MonPrevDt
+					+ " moveIn=(" + int(MoveInput.X * 100.0f) + "," + int(MoveInput.Y * 100.0f) + ")"
+					+ " velDir=(" + int(V2.X) + "," + int(V2.Y) + ") speed=" + int(V2.Size())
+					+ " hit=" + int(CurrentHit) + " grounded=" + bIsGrounded);
+			}
+		}
 		if (Math::Abs(YawRate) > 20.0f) MonPrevYawDelta = YawRate;
+		MonPrevDt = DeltaTime;
 
 		// 3) Crouch flapping: knee direction alternates at a real rate. The
 		// threshold must catch ASYMMETRIC oscillation too: the proportional
@@ -1176,40 +1251,72 @@ class AVolleyballPlayer : APawn
 	// two-pose shimmer this replaces). Never while a gesture is live: contact
 	// needs the squared-up chest the IK targets anchor to.
 	private bool bTurnRun = false;
+	// Minimum time bTurnRun must hold a state before it may flip again. The
+	// Demand/Align hysteresis bands don't overlap, which stops FLICKER from a
+	// signal drifting slowly across a boundary — but FacingDir is the AI's raw
+	// ball-direction request, re-asserted whole-cloth every reaction tick
+	// (~10Hz): it can JUMP 20-40° in one tick near the ball, clearing BOTH
+	// bands in a single step and re-deciding engage/release every tick (a
+	// travel/turn-run source shimmer, same family as the old gesture/crouch
+	// flicker bugs). A dwell timer — the same fix used everywhere else in this
+	// file — gives the noisy comparison time to settle before re-deciding.
+	private float TurnRunDwellTimer = 0.0f;
+	const float TurnRunMinDwell = 0.3f;
 
-	private void UpdateTurnRun()
+	private void UpdateTurnRun(float DeltaTime)
 	{
+		if (TurnRunDwellTimer > 0.0f) TurnRunDwellTimer -= DeltaTime;
+
+		// Compute the DESIRED state first, decide whether to apply it LAST —
+		// every path (including the early-out ones) must cross the same dwell
+		// gate. The previous version force-applied bTurnRun=false from the
+		// early-outs without checking the timer at all, so it never actually
+		// stopped a state that was flapping because bWantFacing itself was
+		// flapping (FacingHoldTimer lapsing between AI ticks) — exactly the
+		// residual src=0<->1<->2 churn the YFLIP telemetry kept showing.
 		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
 		bool bGestureLive = bReaching || CurrentPose > 0.15f || IsDiving();
+		bool bDesired = bTurnRun;
+
 		if (!bWantFacing || bGestureLive || !bIsGrounded)
 		{
-			bTurnRun = false;
-			return;
-		}
-
-		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
-		float Demand = InDir.Size();               // 0..1 commanded speed fraction
-		if (Demand < 0.05f) { bTurnRun = false; return; }
-		float Align = InDir.GetSafeNormal()
-			.DotProduct(FVector(FacingDir.X, FacingDir.Y, 0).GetSafeNormal());
-
-		if (bTurnRun)
-		{
-			// Release when the run winds down (MoveToward2D's arrival taper drops
-			// the demand ~50cm out — the body swings back to the ball through the
-			// deceleration, inside the planner's settle window) or when the travel
-			// no longer fights the facing (ball ahead again: the two agree anyway).
-			if (Demand < 0.35f || Align > 0.55f)
-				bTurnRun = false;
+			bDesired = false;
 		}
 		else
 		{
-			// Engage only for a genuine hurried run well off the facing (>70°):
-			// beyond what a shuffle/backpedal covers with the eyes still useful.
-			// The spike approach's open-shoulder facing (~22° off travel) stays
-			// far inside the gate.
-			if (Demand > 0.55f && Align < 0.35f)
-				bTurnRun = true;
+			FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
+			float Demand = InDir.Size();               // 0..1 commanded speed fraction
+			if (Demand < 0.05f)
+			{
+				bDesired = false;
+			}
+			else
+			{
+				float Align = InDir.GetSafeNormal()
+					.DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal());
+				if (bTurnRun)
+				{
+					// Release when the run winds down (MoveToward2D's arrival taper
+					// drops the demand ~50cm out) or the travel no longer fights the
+					// facing (ball ahead again: the two agree anyway).
+					if (Demand < 0.35f || Align > 0.55f) bDesired = false;
+				}
+				else
+				{
+					// Engage only for a genuine hurried run well off the facing
+					// (>70°) — beyond what a shuffle/backpedal covers with the eyes
+					// still useful. The spike approach's open-shoulder facing
+					// (~22° off travel) stays far inside the gate.
+					if (Demand > 0.55f && Align < 0.35f) bDesired = true;
+				}
+			}
+		}
+
+		if (bDesired != bTurnRun)
+		{
+			if (TurnRunDwellTimer > 0.0f) return;   // switched too recently: hold
+			bTurnRun = bDesired;
+			TurnRunDwellTimer = TurnRunMinDwell;
 		}
 	}
 
