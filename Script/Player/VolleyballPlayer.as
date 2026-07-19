@@ -152,11 +152,30 @@ class AVolleyballPlayer : APawn
 	private void ApplyTeamMaterial()
 	{
 		if (Mesh == nullptr) return;
-		UMaterialInterface BaseMat = Mesh.GetMaterial(0);
+		// M_Mannequin (the mesh's own material) renders correctly on desktop but
+		// comes out flat/untextured on Android in every build tested (CI and fully
+		// local, cook clean, zero errors/warnings) — almost certainly a Quality/
+		// Feature-Level Switch node whose mobile branch was never wired up when the
+		// template asset was resaved 5.6 -> 5.7. Until that's fixed in the Material
+		// Editor, fall back to the engine's own universal default material — the one
+		// UE itself substitutes whenever ANY material fails, so unlike
+		// /Engine/BasicShapes/BasicShapeMaterial (tried first: rejected at runtime
+		// with "missing bUsedWithSkeletalMesh=True! Default Material will be used in
+		// game" since that material is static-mesh-only) it is guaranteed valid on
+		// every vertex factory, including skinned meshes.
+		UMaterialInterface BaseMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
 		if (BaseMat == nullptr) return;
-		UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(0, BaseMat);
-		if (MID != nullptr)
-			MID.SetVectorParameterValue(n"Tint", TeamColor());
+		// Slot 0 alone left the body fully textured in the reference screenshots —
+		// SKM_Manny_Simple's visible body surface isn't on element 0. Cover every
+		// slot instead of guessing which index is which.
+		int NumSlots = Mesh.GetNumMaterials();
+		for (int i = 0; i < NumSlots; i++)
+		{
+			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, BaseMat);
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Color", TeamColor());
+		}
 	}
 
 	void UpdatePlayer(float DeltaTime)
