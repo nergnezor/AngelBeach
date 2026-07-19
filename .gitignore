@@ -28,9 +28,10 @@ Content/*.umap
 Config/DefaultEditor.ini
 Script/Binds.Cache*
 
-# Android signing — generated at CI time from GitHub Secrets, never committed.
+# Android signing material — never committed. NOTE: Config/Android/AndroidEngine.ini
+# itself IS tracked (it also carries the mobile SkyAtmosphere override from
+# c4b3094) — CI appends the signing block to it rather than overwriting it.
 # (Build/ above already covers Build/Android/*.keystore; these are belt-and-suspenders.)
-Config/Android/AndroidEngine.ini
 *.keystore
 *.jks
 
