@@ -150,9 +150,13 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/Build/Android/release.keystore"
 
           # UE layers Config/Android/AndroidEngine.ini on top of DefaultEngine.ini for
-          # Android builds. Generated here from secrets, gitignored, never committed.
+          # Android builds. This file is tracked in git (it also carries the mobile
+          # SkyAtmosphere override from c4b3094) — APPEND the signing block instead
+          # of overwriting, or every CI build silently drops that override and ships
+          # the desktop atmosphere config on mobile (no dedicated sky mesh there).
           mkdir -p "$GITHUB_WORKSPACE/Config/Android"
-          cat > "$GITHUB_WORKSPACE/Config/Android/AndroidEngine.ini" << EOF
+          cat >> "$GITHUB_WORKSPACE/Config/Android/AndroidEngine.ini" << EOF
+
           [/Script/AndroidRuntimeSettings.AndroidRuntimeSettings]
           KeyStore=release.keystore
           KeyAlias=$ANDROID_KEY_ALIAS
