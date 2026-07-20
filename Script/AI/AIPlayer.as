@@ -84,6 +84,10 @@ class AAIPlayer : AVolleyballPlayer
 			PlanSlackLog = -1.0f;   // an unconsumed promise must not leak into the next rally
 			bHitterPlanted = false; // ...nor a stale plant (PLANVA settle counts from it)
 			PlantedFor = 0.0f;
+			bOnTwoDecided = false;  // per-ball decisions die with the ball
+			bChoseOnTwo = false;
+			bIntendSet = false;
+			bOnTwoLoggedNotViable = false;
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
 			return;
@@ -292,6 +296,10 @@ class AAIPlayer : AVolleyballPlayer
 		if (!IsBallComingToMySide())
 		{
 			bIMadeLastTouch = false;
+			bOnTwoDecided = false;
+			bChoseOnTwo = false;
+			bIntendSet = false;
+			bOnTwoLoggedNotViable = false;
 			PlayDefense(DeltaTime);
 			return;
 		}
@@ -355,6 +363,16 @@ class AAIPlayer : AVolleyballPlayer
 	// Hysteresis state for AmIHitter (who owns the current ball).
 	private bool bWasHitter = false;
 
+	// Attack-on-two decision, made once per second ball (see PlayHitter).
+	private bool bOnTwoDecided = false;
+	private bool bChoseOnTwo = false;
+
+	// Sticky set-vs-bump intention for the second touch (hysteresis ±0.15s
+	// of slack — see PlayHitter).
+	private bool bIntendSet = false;
+	private bool bOnTwoLoggedNotViable = false;
+	private int SetIntentLogs = 0;
+
 	// Hysteresis state for the hitter's plant (see PlayHitter).
 	private bool bHitterPlanted = false;
 
@@ -368,6 +386,51 @@ class AAIPlayer : AVolleyballPlayer
 			// ATTACK: get under a high ball, jump, and spike at the peak
 			ApproachForSpike(DeltaTime);
 			return;
+		}
+
+		// ATTACK ON TWO: a perfect reception hangs through the strike zone, and
+		// the second toucher then holds BOTH options — jump on it, or pass to
+		// the partner — committing as late as the physics allow. Viability is
+		// re-proven every tick against the jump budget; the moment it collapses
+		// (ball dropped, plant unreachable) we fall through to the set below,
+		// so the pass option stays open until just before contact. The choice
+		// itself is made ONCE per ball (sticky — a flip-flopping intention is
+		// exactly what the anti-flicker work exists to prevent).
+		if (Touches == 1)
+		{
+			FVector Strike2;
+			float Tau2 = PredictBallTimeToHeight(SpikeStrikeZ(), Strike2);
+			bool bViable = false;
+			if (Tau2 > 0.0f)
+			{
+				float TimeToApex2 = LoadedJumpVelocity / Math::Abs(Gravity);
+				FVector Plant2 = ClampToCourt(FVector(Strike2.X + MySign() * 35.0f, Strike2.Y, 0));
+				float Sprint2 = this.BodyTravelTime((GetActorLocation() - Plant2).Size2D());
+				bViable = (Tau2 - (TimeToApex2 + JumpLoadDuration)) > Sprint2 - 0.10f;
+			}
+			if (!bOnTwoDecided && bViable)
+			{
+				bOnTwoDecided = true;
+				// Surprise attack more often at higher difficulty; a blocked-in
+				// lane would be checked here if blockers keyed on-2 (they key
+				// the third ball, which is what makes this a surprise).
+				bChoseOnTwo = Math::RandRange(0.0f, 1.0f) < 0.45f + 0.35f * Difficulty;
+				Log("ONTWO decided chose=" + bChoseOnTwo + " tau=" + int(Tau2 * 100));
+			}
+			else if (!bOnTwoDecided && !bOnTwoLoggedNotViable)
+			{
+				// Not viable (yet): leave undecided so a rising ball can still
+				// qualify, but log why ONCE for the telemetry greps.
+				bOnTwoLoggedNotViable = true;
+				Log("ONTWO notViable tau=" + int(Tau2 * 100));
+			}
+			if (bChoseOnTwo && bViable)
+			{
+				ApproachForSpike(DeltaTime);
+				return;
+			}
+			if (bChoseOnTwo && !bViable)
+				bChoseOnTwo = false;   // late fallback: play the pass instead
 		}
 
 		// Decide our intended contact type. A fingerpass (set) is legal only if we
@@ -386,10 +449,37 @@ class AAIPlayer : AVolleyballPlayer
 			// height — in budget terms: that contact is playable with slack to
 			// spare. The old check was a fixed radius; the budget knows better
 			// (a slow floaty ball 3m away IS settable, a fast one 1m away isn't).
+			// STICKY with hysteresis: re-deciding this from raw slack every AI
+			// tick alternated Set(crouch .2)/Bump(crouch .5+) at the boundary —
+			// a visible up-and-down bob while preparing the pass (which the
+			// jitter monitor missed: the rise leg of the square wave stayed
+			// under its rate threshold). Upgrade to Set only with real slack,
+			// abandon it only when the budget has clearly failed.
 			float ForeheadZ = GetActorLocation().Z + PlayerHeight * 0.9f;
-			FInterceptPlan SetPlan = this.PlanIntercept(ForeheadZ, ForeheadZ);
-			Intend = (SetPlan.bReachable && SetPlan.Slack >= 0.0f)
-				? EHitType::Hit_Set : EHitType::Hit_Bump;
+			bool bPrevIntendSet = bIntendSet;
+			float LogTau = 0.0f;
+			if (bIntendSet)
+			{
+				// RETENTION: already committed — stay Set as long as the ball
+				// still physically crosses forehead height ahead of us. No
+				// re-litigating the travel budget against the spot we're
+				// already standing at (see BallStillCrossesHeight).
+				bIntendSet = this.BallStillCrossesHeight(ForeheadZ, LogTau);
+			}
+			else
+			{
+				// DECISION: full time budget before COMMITTING to a fingerpass.
+				FInterceptPlan SetPlan = this.PlanIntercept(ForeheadZ, ForeheadZ);
+				bIntendSet = SetPlan.bReachable && SetPlan.Slack >= 0.15f;
+				LogTau = SetPlan.BallTime;
+			}
+			Intend = bIntendSet ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			if (SetIntentLogs < 50 && (bPrevIntendSet != bIntendSet || SetIntentLogs < 30))
+			{
+				SetIntentLogs++;
+				Log("SETINTENT tau=" + int(LogTau * 100) + " intendSet=" + bIntendSet
+					+ " wasSet=" + bPrevIntendSet);
+			}
 		}
 
 		// Aim where we want to send it (sets the bounce direction for contact).
@@ -475,11 +565,14 @@ class AAIPlayer : AVolleyballPlayer
 			RequestCrouch(Intend == EHitType::Hit_Bump ? 0.45f : 0.25f);
 		}
 
-		// The HITTER always faces the ball. Conditional facing (travel vs ball)
-		// oscillated at the gate boundary every AI tick, whipping the chest-
-		// anchored IK targets around so the arms never converged — hands ended up
-		// 80-115cm from their targets at contact. Travel-facing is only for
-		// players who are NOT about to play the ball (support/defense).
+		// The HITTER requests ball-facing. Conditional facing decided HERE (travel
+		// vs ball, re-judged every AI tick) oscillated at the gate boundary,
+		// whipping the chest-anchored IK targets around so the arms never
+		// converged — hands ended up 80-115cm from their targets at contact. The
+		// single rotation authority (UpdatePlayer) may still override this with
+		// travel-facing during a genuine hurried run away from the facing
+		// (turn-and-run, hysteretic, suspended once the reach gesture is live) —
+		// one central, flicker-proof decision instead of many per-caller ones.
 		FaceBall();
 
 		// Wind up when the budget says the hand clock has started — no distance
@@ -1204,6 +1297,16 @@ class AAIPlayer : AVolleyballPlayer
 
 	protected void UpdateSplitStep(float Dt)
 	{
+		// The split step is the anticipatory READ load — it belongs BEFORE the
+		// approach, not on top of a committed contact. Once we're actively
+		// reaching for this ball the reach/RequestCrouch stance owns the hips;
+		// letting the dip's rise phase overlap the dig produced a fast up-down
+		// bob right at the meet on quick balls (the read hadn't finished before
+		// contact). Cancel it the moment we commit — a real player who has no
+		// time to gather simply skips the hop.
+		if (bReaching)
+			SplitStepTimer = 0.0f;
+
 		if (SplitStepTimer > 0.0f)
 		{
 			SplitStepTimer -= Dt;
@@ -1221,11 +1324,23 @@ class AAIPlayer : AVolleyballPlayer
 			SplitStepTimer = SplitStepDuration;
 		bPrevBallInPlay = Ball.bInPlay;
 
-		// Opponent contact: their touch team/count just changed.
+		// Opponent contact: their touch team/count just changed. But a defender
+		// split-steps ONCE, on the ATTACKER'S swing — not on every touch of their
+		// possession. Firing on their receive AND set AND attack stacked three
+		// dips in a row and read as the body shaking up and down before we ever
+		// dug the ball. The attack is the touch that DRIVES THE BALL TOWARD US;
+		// their own-side receive/set keep it on their court (X small or away), so
+		// gate on the post-contact velocity heading to our side. The serve above
+		// is the serve-phase equivalent of that same read.
 		int Stamp = int(GS.LastTouchTeam) * 100 + GS.TouchesThisRally;
 		if (Stamp != PrevTouchStamp)
 		{
-			if (GS.LastTouchTeam != TeamSide && GS.LastTouchTeam != ETeam::Team_None && Ball.bInPlay)
+			bool bOpponentHit = GS.LastTouchTeam != TeamSide
+				&& GS.LastTouchTeam != ETeam::Team_None && Ball.bInPlay;
+			// Ball now driving to our side (their attack), not along their own.
+			bool bDrivenAtUs = (TeamSide == ETeam::Team_A)
+				? Ball.BallVel.X < -150.0f : Ball.BallVel.X > 150.0f;
+			if (bOpponentHit && bDrivenAtUs)
 				SplitStepTimer = SplitStepDuration;
 			PrevTouchStamp = Stamp;
 		}

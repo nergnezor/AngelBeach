@@ -29,6 +29,17 @@ class AVolleyballPlayer : APawn
 	FVector FacingDir = FVector(1, 0, 0);
 	bool bHasFacing = false;
 	private float FacingHoldTimer = 0.0f;   // facing requests lapse on this
+	// Rate-limited FacingDir: the raw target the AI recomputes wholesale every
+	// reaction tick (a close/fast ball can swing its bearing through a wide
+	// angle in one tick); this is what the rotation and turn-run alignment
+	// actually track, so the body is never asked to reverse turn direction
+	// instantaneously when the raw target crosses to the other side.
+	private FVector SmFacingDir = FVector(1, 0, 0);
+	const float FacingDirMaxTurnRate = 300.0f;   // deg/s
+	// Committed turn direction (signed degrees, last frame's Delta) — breaks
+	// the near-180° shortest-path tie deterministically instead of by float
+	// noise. See the rotation block in UpdatePlayer.
+	private float RotDirBias = 0.0f;
 
 	ETeam TeamSide = ETeam::Team_A;
 	bool bCanHit = true;
@@ -141,11 +152,30 @@ class AVolleyballPlayer : APawn
 	private void ApplyTeamMaterial()
 	{
 		if (Mesh == nullptr) return;
-		UMaterialInterface BaseMat = Mesh.GetMaterial(0);
+		// M_Mannequin (the mesh's own material) renders correctly on desktop but
+		// comes out flat/untextured on Android in every build tested (CI and fully
+		// local, cook clean, zero errors/warnings) — almost certainly a Quality/
+		// Feature-Level Switch node whose mobile branch was never wired up when the
+		// template asset was resaved 5.6 -> 5.7. Until that's fixed in the Material
+		// Editor, fall back to the engine's own universal default material — the one
+		// UE itself substitutes whenever ANY material fails, so unlike
+		// /Engine/BasicShapes/BasicShapeMaterial (tried first: rejected at runtime
+		// with "missing bUsedWithSkeletalMesh=True! Default Material will be used in
+		// game" since that material is static-mesh-only) it is guaranteed valid on
+		// every vertex factory, including skinned meshes.
+		UMaterialInterface BaseMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
 		if (BaseMat == nullptr) return;
-		UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(0, BaseMat);
-		if (MID != nullptr)
-			MID.SetVectorParameterValue(n"Tint", TeamColor());
+		// Slot 0 alone left the body fully textured in the reference screenshots —
+		// SKM_Manny_Simple's visible body surface isn't on element 0. Cover every
+		// slot instead of guessing which index is which.
+		int NumSlots = Mesh.GetNumMaterials();
+		for (int i = 0; i < NumSlots; i++)
+		{
+			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, BaseMat);
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Color", TeamColor());
+		}
 	}
 
 	void UpdatePlayer(float DeltaTime)
@@ -155,9 +185,24 @@ class AVolleyballPlayer : APawn
 		// just asserted and ExtraCrouch sawtoothed ±0.04 at frame rate — the
 		// universal residual the jitter monitor kept catching. Decay first,
 		// writers last, the final value each frame is the writer's.
+		//
+		// TWO CHANNELS with different lifetimes (see the declarations):
+		//  - ExtraCrouch (frame-rate transients: split step, dive, jump load,
+		//    land absorb, air tuck) decays EVERY frame. Its writers run every
+		//    frame while active, so decay-then-rewrite reproduces the envelope
+		//    exactly and the value falls the instant the envelope stops.
+		//  - HeldCrouch (tick-rate AI stance via RequestCrouch) is HELD across
+		//    the reaction-tick gap and only decays once the hold lapses.
+		// The old single channel gave the transients the HELD lifetime too: a
+		// split-step peak Max()-ed in while a stance hold was live could not
+		// decay until the hold gap — and the gaps land on ball events — so the
+		// knee stuck deep through the approach and popped up at the meet. The
+		// two are re-combined by Max at the read site, so the deepest legitimate
+		// request still wins; only the STUCK residual is gone.
+		ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
 		CrouchHoldTimer -= DeltaTime;
 		if (CrouchHoldTimer <= 0.0f)
-			ExtraCrouch = Math::Max(0.0f, ExtraCrouch - 2.5f * DeltaTime);
+			HeldCrouch = Math::Max(0.0f, HeldCrouch - 2.5f * DeltaTime);
 
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
@@ -250,24 +295,74 @@ class AVolleyballPlayer : APawn
 		// the AI only re-asserts every reaction tick (~0.1s), and clearing the
 		// request per frame made the rotation target alternate ball-facing on
 		// tick frames / travel-facing between them — a visible two-pose shimmer.
+		//
+		// FacingDir ITSELF is rate-limited before use (SmFacingDir): the AI
+		// recomputes it whole-cloth from the live ball bearing every reaction
+		// tick, and a close/fast ball can swing that bearing through a large
+		// angle in one tick. The body's lerp toward Want is already smooth,
+		// but a smooth chase of a TARGET that itself teleports still reverses
+		// the output turn direction the instant the target crosses to the
+		// other side — the exact yaw-rate-sign-flip the motion monitor was
+		// still catching after every source-side (bTurnRun) dwell fix. Rate-
+		// limiting the target directly removes the reversal at its root
+		// instead of chasing which system supplied it.
+		if (FacingDir.SizeSquared() > 0.01f)
+		{
+			float CurYaw = SmFacingDir.Rotation().Yaw;
+			float TargetYaw = FacingDir.Rotation().Yaw;
+			float Step = Math::Clamp(Math::FindDeltaAngleDegrees(CurYaw, TargetYaw),
+				-FacingDirMaxTurnRate * DeltaTime, FacingDirMaxTurnRate * DeltaTime);
+			SmFacingDir = FRotator(0.0f, CurYaw + Step, 0.0f).Vector();
+		}
+
 		float HSpeed2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
 		if (bHasFacing)
 			FacingHoldTimer = 0.2f;
 		else
 			FacingHoldTimer -= DeltaTime;
 
+		UpdateTurnRun(DeltaTime);
+
 		FVector Want = FVector::ZeroVector;
-		if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
-			Want = FVector(FacingDir.X, FacingDir.Y, 0);
+		if (bTurnRun)
+			// Face the commanded travel (the intent), not the lagging velocity:
+			// the turn starts the same frame the run does. Demand ≥ 0.35 while
+			// engaged, so this is never a degenerate direction.
+			Want = FVector(MoveInput.X, MoveInput.Y, 0);
+		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
+			Want = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
 		else if (HSpeed2 > 30.0f)
 			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
 
 		if (Want.SizeSquared() > 0.01f)
 		{
+			// Manual yaw step instead of a fresh LerpShortestPath every frame.
+			// CONFIRMED (YFLIP telemetry, dt rock-steady ~1ms — not a frame-
+			// pacing artifact): near an exact 180° turn, "shortest path" is
+			// numerically DEGENERATE — clockwise and counter-clockwise are
+			// equally short, so a fraction of a degree of float noise in Cur
+			// or Want flips which way LerpShortestPath picks, reversing the
+			// output rotation direction between two adjacent frames at full
+			// rate. Once a turn is committed to a direction, keep going that
+			// way through the ambiguous zone (RotDirBias) instead of letting
+			// each frame re-decide "shortest" from scratch.
 			FRotator Cur = GetActorRotation();
+			float TargetYaw = Want.Rotation().Yaw;
+			float Delta = Math::FindDeltaAngleDegrees(Cur.Yaw, TargetYaw);
+			bool bDeltaPos = Delta >= 0.0f;
+			bool bBiasPos = RotDirBias >= 0.0f;
+			if (Math::Abs(RotDirBias) > 1.0f && Math::Abs(Math::Abs(Delta) - 180.0f) < 15.0f
+				&& bDeltaPos != bBiasPos)
+				Delta = bDeltaPos ? Delta - 360.0f : Delta + 360.0f;
+			if (Math::Abs(Delta) > 1.0f) RotDirBias = Delta;
+
 			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
-			SetActorRotation(Math::LerpShortestPath(Cur, Want.Rotation(), Alpha));
+			SetActorRotation(FRotator(Cur.Pitch, Cur.Yaw + Delta * Alpha, Cur.Roll));
 		}
+		// Debug attribution for YFLIP (see UpdateMotionMonitor): which source
+		// picked this frame's facing target, and what it pointed at.
+		DbgFacingSrc = bTurnRun ? 2 : ((FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f) ? 1 : 0);
+		DbgWantYaw = (Want.SizeSquared() > 0.01f) ? Want.Rotation().Yaw : DbgWantYaw;
 		bHasFacing = false;   // requests lapse via FacingHoldTimer above
 
 		UpdatePredictedMeet();
@@ -304,6 +399,13 @@ class AVolleyballPlayer : APawn
 		Anim.Speed         = HSpeed;
 		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
 		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
+		// Travel-vs-facing angle for an orientation-aware blendspace. Only updated
+		// while actually moving: recomputing it from near-zero velocity sprayed
+		// noise, and holding the last heading keeps the blend continuous through
+		// stops. With the turn-and-run override this stays near 0 during real
+		// runs; the residual backpedal/shuffle band is what the ABP can now blend.
+		if (HSpeed > 30.0f)
+			Anim.MoveDirAngle = Math::Atan2(Anim.StrafeSpeed, Anim.ForwardSpeed) * (180.0f / PI);
 		// HYSTERESIS: a single threshold made bIsMoving flip every frame when
 		// the speed hovered at the boundary (deceleration, hold drift), and the
 		// Anim BP popped between the idle and locomotion poses at frame rate.
@@ -495,6 +597,19 @@ class AVolleyballPlayer : APawn
 	// Written by UpdateIKTargets each frame so CFLIP can attribute the source.
 	float DbgPoseCrouch = 0.0f;
 	float DbgWantCrouch = 0.0f;
+	// The sink's legitimate speed ceiling this frame (swing boost included) —
+	// written by UpdateIKTargets so the teleport check tracks the same limit.
+	float SinkBoostLog = 1.0f;
+	// Rolling peak of the hand-target speed (cm/s), decaying — logged by
+	// TriggerHit as the SWING line so whip speeds are measurable per stroke.
+	float PeakHandSpd = 0.0f;
+	// Facing attribution written each frame (see the rotation block in
+	// UpdatePlayer) so a YFLIP log can attribute WHICH source's target
+	// reversed: 0=travel-velocity, 1=held facing request, 2=turn-and-run.
+	int DbgFacingSrc = -1;
+	float DbgWantYaw = 0.0f;
+	private int MonYFlipLogs = 0;
+	private float MonPrevDt = 0.0f;   // testing whether YFLIP correlates with erratic frame pacing
 
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
@@ -528,12 +643,30 @@ class AVolleyballPlayer : APawn
 		float YawRate = YawDelta / DeltaTime;
 		if (Math::Abs(YawRate) > 60.0f && Math::Abs(MonPrevYawDelta) > 60.0f
 			&& YawRate * MonPrevYawDelta < 0.0f)
+		{
 			MonYawFlips++;
+			if (MonYFlipLogs < 60)
+			{
+				MonYFlipLogs++;
+				FVector V2 = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+				Log("YFLIP rate=" + int(YawRate) + " prevRate=" + int(MonPrevYawDelta)
+					+ " yaw=" + int(Yaw) + " src=" + DbgFacingSrc + " wantYaw=" + int(DbgWantYaw)
+					+ " dt=" + DeltaTime + " prevDt=" + MonPrevDt
+					+ " moveIn=(" + int(MoveInput.X * 100.0f) + "," + int(MoveInput.Y * 100.0f) + ")"
+					+ " velDir=(" + int(V2.X) + "," + int(V2.Y) + ") speed=" + int(V2.Size())
+					+ " hit=" + int(CurrentHit) + " grounded=" + bIsGrounded);
+			}
+		}
 		if (Math::Abs(YawRate) > 20.0f) MonPrevYawDelta = YawRate;
+		MonPrevDt = DeltaTime;
 
-		// 3) Crouch flapping: knee direction alternates at a real rate.
+		// 3) Crouch flapping: knee direction alternates at a real rate. The
+		// threshold must catch ASYMMETRIC oscillation too: the proportional
+		// sink rises at gain 3, so the up-leg of a ±0.3 square wave moves at
+		// ~0.9/s — a 1.0 threshold declared the visible set/bump pose bob
+		// "no jitter" while Erik watched it. 0.6 catches both legs.
 		float CrouchRate = (CrouchNow - MonPrevCrouch) / DeltaTime;
-		if (Math::Abs(CrouchRate) > 1.0f && Math::Abs(MonPrevCrouchDelta) > 1.0f
+		if (Math::Abs(CrouchRate) > 0.6f && Math::Abs(MonPrevCrouchDelta) > 0.6f
 			&& CrouchRate * MonPrevCrouchDelta < 0.0f)
 		{
 			MonCrouchFlips++;
@@ -544,7 +677,7 @@ class AVolleyballPlayer : APawn
 				MonCFlipLogs++;
 				Log("CFLIP rate=" + CrouchRate + " prevRate=" + MonPrevCrouchDelta
 					+ " sm=" + CrouchNow + " want=" + DbgWantCrouch
-					+ " pose=" + DbgPoseCrouch + " extra=" + ExtraCrouch
+					+ " pose=" + DbgPoseCrouch + " extra=" + ExtraCrouch + " held=" + HeldCrouch
 					+ " dt=" + DeltaTime + " hit=" + int(CurrentHit)
 					+ " speed=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size()));
 			}
@@ -553,8 +686,12 @@ class AVolleyballPlayer : APawn
 
 		// 4) IK-sink violation: the hand target moved faster than the sink's
 		// speed limit allows — something writes past the anti-flicker sink.
-		if ((HandR - MonPrevHandR).Size() > 900.0f * DeltaTime * 1.6f + 2.0f)
+		// The ceiling follows SinkBoostLog: a swing legitimately opens it.
+		float HandStep = (HandR - MonPrevHandR).Size();
+		if (HandStep > 900.0f * SinkBoostLog * DeltaTime * 1.6f + 2.0f)
 			MonIKTeleports++;
+		// Rolling hand-speed peak for the SWING telemetry (decays ~0.5s).
+		PeakHandSpd = Math::Max(HandStep / DeltaTime, PeakHandSpd - 4000.0f * DeltaTime);
 
 		MonPrevVel = PlayerVelocity;
 		MonPrevYaw = Yaw;
@@ -594,10 +731,18 @@ class AVolleyballPlayer : APawn
 	float SmCrouch = 0.0f;
 	bool bSmInit = false;
 
-	// Extra crouch (0..1) requested for THIS frame by AI/dive: athletic ready
-	// stance, split step dip, dive recovery. Added on top of the pose crouch in
-	// UpdateIKTargets, then cleared each frame (same lapse pattern as bReaching).
+	// Extra crouch (0..1) from FRAME-RATE transient envelopes (split step, dive,
+	// jump load, landing absorb, air tuck). Written by Max every frame while the
+	// envelope is active; decays every frame (top of UpdatePlayer) so it releases
+	// the instant the envelope ends. Combined with HeldCrouch by Max in the IK.
 	float ExtraCrouch = 0.0f;
+
+	// Extra crouch (0..1) from the AI's TICK-RATE stance requests (RequestCrouch:
+	// ready stance, planted wait, block track, defensive base). The AI only
+	// re-asserts every ReactionDelay, so this is HELD across the gap (CrouchHoldTimer)
+	// and only decays once the AI stops asking — separate lifetime from the
+	// per-frame transients so a transient peak can't get frozen at the held rate.
+	float HeldCrouch = 0.0f;
 
 	// Landing absorption state (knees flex on touchdown, see UpdatePlayer).
 	private float LandAbsorbTimer = 0.0f;
@@ -633,10 +778,11 @@ class AVolleyballPlayer : APawn
 	const float MinGestureDwell = 0.15f;
 
 	// Crouch request that survives between AI reaction ticks (ready stance etc.).
-	// Per-frame writers (split step, dive) can set ExtraCrouch directly instead.
+	// Per-frame writers (split step, dive) set ExtraCrouch directly instead — this
+	// channel is HELD across the tick gap; theirs decays every frame.
 	void RequestCrouch(float Amount)
 	{
-		ExtraCrouch = Math::Max(ExtraCrouch, Amount);
+		HeldCrouch = Math::Max(HeldCrouch, Amount);
 		CrouchHoldTimer = 0.25f;
 	}
 
@@ -900,8 +1046,16 @@ class AVolleyballPlayer : APawn
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		int MyTouches = (GS != nullptr && GS.LastTouchTeam == TeamSide) ? GS.TouchesThisRally : 0;
 
-		float HeadZ = GetActorLocation().Z + PlayerHeight;
-		bool bHigh = BallPos.Z > HeadZ;
+		// A fingerpass is taken at the FOREHEAD, not above the crown. The setter
+		// aims to contact at PlayerHeight*0.9 (ContactHeightFor(Hit_Set)); keying
+		// the set/bump split off the OLD full-head threshold (PlayerHeight*1.0)
+		// meant a perfectly-placed overhead ball at 171cm classified as a BUMP
+		// because it sat below the 180cm crown — so nobody ever fingerpassed.
+		// Use a forehead threshold a hair below the setter's own target so the
+		// intended contact reliably reads as a set. (Kept below the target, not
+		// at it, for prediction slack.)
+		float SetMinContactZ = GetActorLocation().Z + PlayerHeight * 0.82f;
+		bool bHigh = BallPos.Z > SetMinContactZ;
 		// An active block gesture at the net keeps its identity — the protocol
 		// would otherwise re-type a stuff block as a "reception" and float a
 		// point-blank spike gently to the setter zone.
@@ -913,11 +1067,16 @@ class AVolleyballPlayer : APawn
 		else if (MyTouches == 0)
 			Type = EHitType::Hit_Bump;                                   // reception: always bagger
 		else if (MyTouches == 1)
-			Type = (bHigh && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump;
+			// ATTACK ON TWO is legal: a perfect reception hangs through the
+			// strike zone and the second toucher may choose to jump on it —
+			// an airborne high contact here IS that choice, made physical.
+			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
+			     : ((bHigh && bIsGrounded) ? EHitType::Hit_Set : EHitType::Hit_Bump);
 		else
 			Type = (!bIsGrounded && bHigh) ? EHitType::Hit_Spike
 			     : (bHigh ? EHitType::Hit_Set : EHitType::Hit_Bump);     // grounded attack = shot
-		bool bAttackTouch = !bBlockContact && MyTouches >= 2;
+		bool bAttackTouch = !bBlockContact
+			&& (MyTouches >= 2 || Type == EHitType::Hit_Spike);
 
 		// Where we're sending it. The AI aims continuously; if no aim is active
 		// (scramble), fall back to the protocol's natural target: pop receptions
@@ -1001,13 +1160,19 @@ class AVolleyballPlayer : APawn
 			// hot serves feeling physical — but if it would carry the ball over
 			// the net (protocol break: only touch 3 crosses), drop it and keep
 			// the pure ballistic, which by construction stays on our side.
-			// Arc by TOUCH NUMBER, not stroke: the SECOND ball is the pass the
+			// Arc by TOUCH NUMBER and QUALITY. The SECOND ball is the pass the
 			// attacker jumps on — with the floor target at the pin its arc must
 			// peak ~490 to hang through the 350 strike zone (apex counts above
 			// the higher endpoint, so grounding the target lowered every peak
-			// by ~3m and the jump attack vanished). The reception keeps a
-			// flatter arc for control.
-			float Apex = (MyTouches == 1) ? 340.0f : 260.0f;
+			// by ~3m and the jump attack vanished). The RECEPTION's height is
+			// EARNED by contact quality: a planted, converged dig floats the
+			// same attackable arc (and the partner may then spike on 2 or
+			// hand-set), while a scrambled one only manages the flat
+			// defensive pop. Quality gating the arc means "perfect reception
+			// = options" falls out of the physics instead of a rule.
+			float Apex = (MyTouches == 1)
+				? 340.0f
+				: Math::Lerp(340.0f, 260.0f, Math::Clamp(AimErrCm / 50.0f, 0.0f, 1.0f));
 			FVector Pure = BallisticVelocity(BallPos, Target, Apex);
 			OutVel = Pure + Reflected * 0.15f;
 			if (CrossesNetPlane(BallPos, OutVel))
@@ -1057,6 +1222,10 @@ class AVolleyballPlayer : APawn
 		CurrentHit = Type;      // a real contact is an event — no dwell gate
 		GestureAge = 0.0f;
 		HitAnimTimer = HitAnimDuration;
+		// Whip telemetry: rolling peak of hand-target speed entering this
+		// contact (cm/s). A real spike/serve whip should read 1500-2300; a
+		// bump platform a few hundred.
+		Log("SWING type=" + int(Type) + " peakHand=" + int(PeakHandSpd));
 		if (bDebugHit)
 		{
 			FString Cls = (Anim != nullptr) ? "" + Anim.GetClass().GetName() : "NULL";
@@ -1085,6 +1254,90 @@ class AVolleyballPlayer : APawn
 
 	// Desired input this frame (unit length or less). Consumed by UpdatePlayer.
 	private FVector2D MoveInput = FVector2D::ZeroVector;
+
+	// --- TURN-AND-RUN (first principles) -----------------------------------
+	// Nobody runs backward across a court: backpedal/shuffle exist only for
+	// short, slow adjustment steps. A player who has real ground to cover
+	// TURNS, runs facing the travel, and squares back up to the ball while
+	// decelerating into the spot (the head look-at keeps the eyes on the ball
+	// the whole way — exactly how a receiver tracks over the shoulder). So a
+	// ball-facing request is OVERRIDDEN by travel-facing while the commanded
+	// movement is both brisk and clearly against that facing. Judged on the
+	// INTENT (MoveInput demand), not the lagging velocity, so the body turns
+	// as the run starts, not after it. Hysteresis on both gates — demand and
+	// alignment bands don't overlap — so the choice cannot flicker at a
+	// boundary (per-frame conditional facing is exactly what caused the old
+	// two-pose shimmer this replaces). Never while a gesture is live: contact
+	// needs the squared-up chest the IK targets anchor to.
+	private bool bTurnRun = false;
+	// Minimum time bTurnRun must hold a state before it may flip again. The
+	// Demand/Align hysteresis bands don't overlap, which stops FLICKER from a
+	// signal drifting slowly across a boundary — but FacingDir is the AI's raw
+	// ball-direction request, re-asserted whole-cloth every reaction tick
+	// (~10Hz): it can JUMP 20-40° in one tick near the ball, clearing BOTH
+	// bands in a single step and re-deciding engage/release every tick (a
+	// travel/turn-run source shimmer, same family as the old gesture/crouch
+	// flicker bugs). A dwell timer — the same fix used everywhere else in this
+	// file — gives the noisy comparison time to settle before re-deciding.
+	private float TurnRunDwellTimer = 0.0f;
+	const float TurnRunMinDwell = 0.3f;
+
+	private void UpdateTurnRun(float DeltaTime)
+	{
+		if (TurnRunDwellTimer > 0.0f) TurnRunDwellTimer -= DeltaTime;
+
+		// Compute the DESIRED state first, decide whether to apply it LAST —
+		// every path (including the early-out ones) must cross the same dwell
+		// gate. The previous version force-applied bTurnRun=false from the
+		// early-outs without checking the timer at all, so it never actually
+		// stopped a state that was flapping because bWantFacing itself was
+		// flapping (FacingHoldTimer lapsing between AI ticks) — exactly the
+		// residual src=0<->1<->2 churn the YFLIP telemetry kept showing.
+		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
+		bool bGestureLive = bReaching || CurrentPose > 0.15f || IsDiving();
+		bool bDesired = bTurnRun;
+
+		if (!bWantFacing || bGestureLive || !bIsGrounded)
+		{
+			bDesired = false;
+		}
+		else
+		{
+			FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
+			float Demand = InDir.Size();               // 0..1 commanded speed fraction
+			if (Demand < 0.05f)
+			{
+				bDesired = false;
+			}
+			else
+			{
+				float Align = InDir.GetSafeNormal()
+					.DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal());
+				if (bTurnRun)
+				{
+					// Release when the run winds down (MoveToward2D's arrival taper
+					// drops the demand ~50cm out) or the travel no longer fights the
+					// facing (ball ahead again: the two agree anyway).
+					if (Demand < 0.35f || Align > 0.55f) bDesired = false;
+				}
+				else
+				{
+					// Engage only for a genuine hurried run well off the facing
+					// (>70°) — beyond what a shuffle/backpedal covers with the eyes
+					// still useful. The spike approach's open-shoulder facing
+					// (~22° off travel) stays far inside the gate.
+					if (Demand > 0.55f && Align < 0.35f) bDesired = true;
+				}
+			}
+		}
+
+		if (bDesired != bTurnRun)
+		{
+			if (TurnRunDwellTimer > 0.0f) return;   // switched too recently: hold
+			bTurnRun = bDesired;
+			TurnRunDwellTimer = TurnRunMinDwell;
+		}
+	}
 
 	// Horizontal acceleration rates (cm/s²). Ground values give a sprinter-like
 	// first step (0→full in ~0.2s) and a decisive plant (full→0 in ~0.13s, sliding
