@@ -1,0 +1,187 @@
+name: Verify – Movement (PhotoBooth + MatchFilmer)
+
+# Headless, no-human-at-the-editor verification described in CLAUDE.md:
+# PhotoBoothGameMode photographs every hit pose from 3 angles; MatchFilmerGameMode
+# films real rallies. Both emit grep-able telemetry (BOOTH/FILM/RALLY/JITTER/CFLIP/
+# PLANVA lines) so pose and motion-quality regressions are machine-checkable, not
+# just "looks right in the editor".
+#
+# Manually dispatched: this drives the self-hosted UE runner, so it runs only when
+# asked, not on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      match_shots:
+        description: "MatchFilmer: number of HighResShots before it quits"
+        required: false
+        default: "120"
+        type: string
+
+jobs:
+  verify:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 60
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
+      PROJECT_NAME: BeachVolleyball
+      MATCH_SHOTS: ${{ inputs.match_shots }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Content/Characters/ (Manny mesh/skeleton/anims) is tracked via Git LFS —
+          # without lfs: true, the headless run loads corrupt/unreadable .uasset
+          # pointer files instead of the real binary content.
+          lfs: true
+
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "UE_DERIVEDDATACACHE_ROOT=$candidate/Engine/DerivedDataCache" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
+
+      - name: Build C++ module
+        run: |
+          "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
+            ${PROJECT_NAME}Editor Linux Development \
+            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            -progress
+
+      - name: Run PhotoBooth (every hit pose, 3 angles)
+        id: photobooth
+        shell: bash
+        run: |
+          LOG="$GITHUB_WORKSPACE/Saved/Logs/PhotoBooth.log"
+          mkdir -p "$(dirname "$LOG")"
+          set +e
+          # -asdebugport=59999: without it, any Angelscript debugger listening on the
+          # default port auto-attaches to the headless run and can pause it forever
+          # (CLAUDE.md). Wrapped in timeout -k 15: a script compile error opens a
+          # dialog that blocks frame 0 forever even with -unattended.
+          timeout -k 15 300 \
+            "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" \
+            "$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            "/Game/CourtLevel?game=/Script/Angelscript.PhotoBoothGameMode" \
+            -game -RenderOffscreen -resx=1280 -resy=720 -nosplash -unattended \
+            -asdebugport=59999 -abslog="$LOG"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if grep -q "Angelscript: Error" "$LOG" 2>/dev/null; then
+            echo "::error::Angelscript compile error during PhotoBooth run:"
+            grep "Angelscript: Error" "$LOG"
+            exit 1
+          fi
+          if ! grep -q "BOOTH done" "$LOG" 2>/dev/null; then
+            echo "::error::PhotoBooth never reached 'BOOTH done' (exit=$CODE) — likely stuck at frame 0 or timed out."
+            tail -n 100 "$LOG" || true
+            exit 1
+          fi
+
+      - name: Run MatchFilmer (real rallies)
+        id: matchfilmer
+        shell: bash
+        run: |
+          LOG="$GITHUB_WORKSPACE/Saved/Logs/MatchFilmer.log"
+          mkdir -p "$(dirname "$LOG")"
+          set +e
+          timeout -k 15 600 \
+            "$ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor" \
+            "$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
+            "/Game/CourtLevel?game=/Script/Angelscript.MatchFilmerGameMode" \
+            -game -RenderOffscreen -resx=1280 -resy=720 -nosplash -unattended \
+            -asdebugport=59999 -abslog="$LOG"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if grep -q "Angelscript: Error" "$LOG" 2>/dev/null; then
+            echo "::error::Angelscript compile error during MatchFilmer run:"
+            grep "Angelscript: Error" "$LOG"
+            exit 1
+          fi
+          if ! grep -q "FILM done" "$LOG" 2>/dev/null; then
+            echo "::error::MatchFilmer never reached 'FILM done' (exit=$CODE) — likely stuck at frame 0 or timed out."
+            tail -n 100 "$LOG" || true
+            exit 1
+          fi
+
+      - name: Analyze telemetry
+        if: always()
+        shell: bash
+        run: |
+          BOOTH_LOG="$GITHUB_WORKSPACE/Saved/Logs/PhotoBooth.log"
+          FILM_LOG="$GITHUB_WORKSPACE/Saved/Logs/MatchFilmer.log"
+          SUMMARY="$GITHUB_STEP_SUMMARY"
+
+          echo "## Movement verification" >> "$SUMMARY"
+
+          if [ -f "$BOOTH_LOG" ]; then
+            echo "" >> "$SUMMARY"
+            echo "### PhotoBooth" >> "$SUMMARY"
+            SHOTS=$(grep -c "^BOOTH shot=" "$BOOTH_LOG" || true)
+            echo "- Shots logged: $SHOTS" >> "$SUMMARY"
+            echo '```' >> "$SUMMARY"
+            grep "^BOOTH shot=" "$BOOTH_LOG" >> "$SUMMARY" || true
+            echo '```' >> "$SUMMARY"
+          fi
+
+          if [ -f "$FILM_LOG" ]; then
+            echo "" >> "$SUMMARY"
+            echo "### MatchFilmer — rally sequences (what stroke each touch used)" >> "$SUMMARY"
+            RALLIES=$(grep -c "^RALLY end" "$FILM_LOG" || true)
+            SET_TOUCHES=$(grep -o "[0-9]:Set" "$FILM_LOG" | wc -l || true)
+            echo "- Rallies completed: $RALLIES" >> "$SUMMARY"
+            echo "- Fingerpass (Set) touches across the run: $SET_TOUCHES" >> "$SUMMARY"
+            echo '```' >> "$SUMMARY"
+            grep "^RALLY end" "$FILM_LOG" >> "$SUMMARY" || true
+            echo '```' >> "$SUMMARY"
+
+            echo "" >> "$SUMMARY"
+            echo "### MatchFilmer — motion-quality monitor" >> "$SUMMARY"
+            JITTER=$(grep -c "^JITTER" "$FILM_LOG" || true)
+            CFLIP=$(grep -c "^CFLIP" "$FILM_LOG" || true)
+            echo "- JITTER events (locomotion/yaw/crouch flip windows): $JITTER" >> "$SUMMARY"
+            echo "- CFLIP events (crouch-rate reversals): $CFLIP" >> "$SUMMARY"
+            if [ "$JITTER" != "0" ]; then
+              echo '```' >> "$SUMMARY"
+              grep "^JITTER" "$FILM_LOG" | head -n 40 >> "$SUMMARY" || true
+              echo '```' >> "$SUMMARY"
+            fi
+
+            echo "" >> "$SUMMARY"
+            echo "### MatchFilmer — split-step / attempt telemetry" >> "$SUMMARY"
+            echo '```' >> "$SUMMARY"
+            grep "^ATTEMPT" "$FILM_LOG" | tail -n 60 >> "$SUMMARY" || true
+            echo '```' >> "$SUMMARY"
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movement-logs-${{ github.sha }}
+          path: |
+            Saved/Logs/PhotoBooth.log
+            Saved/Logs/MatchFilmer.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movement-screenshots-${{ github.sha }}
+          path: Saved/Screenshots/LinuxEditor/
+          retention-days: 14
+          if-no-files-found: warn
