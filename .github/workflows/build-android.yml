@@ -154,12 +154,21 @@ jobs:
                  "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
                  "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
+          # -distribution is what makes UE/Gradle apply the release signing config
+          # (our KeyStore/KeyAlias/*Password from Config/Android/AndroidEngine.ini)
+          # to the packaged APK/AAB. Without it, the "release" Gradle build type has
+          # no signingConfig at all and the .aab comes out genuinely unsigned — which
+          # is exactly the "Alla uppladdade paket måste signeras" error Play Console
+          # gives on upload. -clientconfig must match the Shipping binaries built
+          # above; Development here would target the (auto debug-signed, not
+          # Play-eligible) debug Gradle variant instead.
           "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
             -cookflavor=Multi \
-            -clientconfig=Development \
+            -clientconfig=Shipping \
+            -distribution \
             -cook -build -stage -pak -package -archive \
             -nozenstore \
             -archivedirectory="$OUTPUT_DIR"
