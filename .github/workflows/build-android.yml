@@ -10,11 +10,17 @@ on:
       - "scripts/setup-runner.sh"
   workflow_dispatch:
 
-# One runner serves all jobs — cancel superseded builds of the same branch
-# instead of queueing 40-minute runs behind each other.
+# One runner serves all jobs. cancel-in-progress:true livelocked this
+# workflow once pushes to main landed faster than a full Package step
+# (~15-40 min): every run got killed mid-cook before ever finishing, so
+# no build ever completed (see run history around 2026-07-30). With
+# cancel-in-progress:false, GitHub only ever holds ONE run queued behind
+# the current one — a burst of pushes does not pile up an unbounded
+# backlog, it just guarantees the currently running build finishes, then
+# the next run picks up whatever is latest at that point.
 concurrency:
   group: build-android-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
