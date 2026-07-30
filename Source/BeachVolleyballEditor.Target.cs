@@ -9,5 +9,10 @@ public class BeachVolleyballEditorTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
 		ExtraModuleNames.Add("BeachVolleyball");
+
+		// No debugger is used against these builds — skip generating debug info
+		// entirely rather than just skipping its (slow) post-link compression.
+		DebugInfo = DebugInfoMode.None;
+		bCompressDebugFile = false;
 	}
 }
