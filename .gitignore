@@ -27,3 +27,14 @@ Content/*.umap
 *.xcodeproj
 Config/DefaultEditor.ini
 Script/Binds.Cache*
+
+# Android signing material — never committed. NOTE: Config/Android/AndroidEngine.ini
+# itself IS tracked (it also carries the mobile SkyAtmosphere override from
+# c4b3094) — CI appends the signing block to it rather than overwriting it.
+# (Build/ above already covers Build/Android/*.keystore; these are belt-and-suspenders.)
+*.keystore
+*.jks
+
+# Python bytecode
+__pycache__/
+*.pyc

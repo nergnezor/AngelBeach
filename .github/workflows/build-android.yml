@@ -3,7 +3,18 @@ name: Build – Android
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - "**.md"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/runner-setup.yml"
+      - "scripts/setup-runner.sh"
   workflow_dispatch:
+
+# One runner serves all jobs — cancel superseded builds of the same branch
+# instead of queueing 40-minute runs behind each other.
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -14,6 +25,9 @@ jobs:
       ENGINE_DIR: ${{ vars.ENGINE_DIR }}
       PROJECT_NAME: BeachVolleyball
       OUTPUT_DIR: ${{ github.workspace }}/PackagedBuilds/Android
+      # Must match Config/DefaultEngine.ini [/Script/AndroidRuntimeSettings...] PackageName
+      # and the app's package name in Play Console.
+      PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME || 'com.angelbeach.beachvolleyball' }}
       # Android SDK root — set as a repository variable or override below.
       ANDROID_HOME: ${{ vars.ANDROID_HOME || '/opt/android-sdk' }}
       JAVA_HOME: ${{ vars.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }}
@@ -30,6 +44,20 @@ jobs:
           # without lfs: true, checkout only pulls the small pointer files, and cook
           # sees corrupt/unreadable .uasset files instead of the real binary content.
           lfs: true
+          # The default clean runs `git clean -ffdx`, which deletes Intermediate/
+          # and Binaries/ and forces a ~20 min full C++ recompile of the Android
+          # client on every run. We clean selectively below instead.
+          clean: false
+
+      - name: Clean workspace (keep build caches)
+        run: |
+          git clean -ffdx \
+            -e Binaries/ \
+            -e Intermediate/ \
+            -e Saved/ \
+            -e DerivedDataCache/ \
+            -e Build/ \
+            -e "Script/Binds.Cache*"
 
       - name: Resolve Unreal Engine
         shell: bash
@@ -106,14 +134,45 @@ jobs:
             echo "Zen server started."
           fi
 
-      - name: Build C++ module (Android)
-        run: |
-          "$ENGINE_DIR/Engine/Build/BatchFiles/Linux/Build.sh" \
-            ${PROJECT_NAME} Android Shipping \
-            -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
-            -progress
+      # NOTE: no separate Build.sh step here. Packaging below passes -build with
+      # -clientconfig=Development, so UAT compiles the exact binaries it stages;
+      # a separate Shipping pre-build spent ~17 min producing a .so that was
+      # never packaged.
 
-      - name: Package for Android (APK)
+      - name: Prepare Android signing (from secrets)
+        run: |
+          for s in ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD; do
+            eval "val=\${$s}"
+            test -n "$val" || { echo "ERROR: secret $s is not set (Settings → Secrets and variables → Actions)"; exit 1; }
+          done
+
+          mkdir -p "$GITHUB_WORKSPACE/Build/Android"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/Build/Android/release.keystore"
+
+          # UE layers Config/Android/AndroidEngine.ini on top of DefaultEngine.ini for
+          # Android builds. This file is tracked in git (it also carries the mobile
+          # SkyAtmosphere override from c4b3094) — APPEND the signing block instead
+          # of overwriting, or every CI build silently drops that override and ships
+          # the desktop atmosphere config on mobile (no dedicated sky mesh there).
+          mkdir -p "$GITHUB_WORKSPACE/Config/Android"
+          cat >> "$GITHUB_WORKSPACE/Config/Android/AndroidEngine.ini" << EOF
+
+          [/Script/AndroidRuntimeSettings.AndroidRuntimeSettings]
+          KeyStore=release.keystore
+          KeyAlias=$ANDROID_KEY_ALIAS
+          KeyStorePassword=$ANDROID_KEYSTORE_PASSWORD
+          KeyPassword=$ANDROID_KEY_PASSWORD
+          ; Play requires versionCode to strictly increase on every upload.
+          StoreVersion=$GITHUB_RUN_NUMBER
+          EOF
+          echo "Signing config + StoreVersion=$GITHUB_RUN_NUMBER prepared."
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Package for Android (APK + AAB)
         run: |
           # Scripts are staged separately from cooked content. Without this targeted
           # cleanup UAT can combine current scripts with an hours-old IoStore container,
@@ -122,35 +181,67 @@ jobs:
                  "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
                  "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
+          # APK size choices:
+          #  -cookflavor=ASTC   one texture format instead of Multi (DXT+ETC2+ASTC
+          #                     all packed into the same .ucas); ASTC covers every
+          #                     Vulkan/GLES3.2-era device (~2016+)
+          #  -clientconfig=Shipping  Development libUnreal.so was 271 MB and pulled
+          #                     in the 24 MB Vulkan validation layer + profiling
+          #                     libs; note Shipping has no UE_LOG in adb logcat
+          #  -compressed        Oodle-compress cooked content; the embedded OBB is
+          #                     stored uncompressed in the APK (UE names it .png
+          #                     precisely so the APK zip won't touch it), so without
+          #                     this the full cooked size hits the APK 1:1
+          #  -distribution      Without this, Gradle's "release" build type gets no
+          #                     signingConfig at all — our KeyStore/KeyAlias/
+          #                     *Password (Config/Android/AndroidEngine.ini, set up
+          #                     above) are silently ignored and the .aab comes out
+          #                     genuinely unsigned. That's the literal cause of
+          #                     Play Console's "Alla uppladdade paket måste
+          #                     signeras" on upload — not a wrong-key mismatch, but
+          #                     zero signature.
           "$ENGINE_DIR/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
             -project="$GITHUB_WORKSPACE/${PROJECT_NAME}.uproject" \
             -noP4 \
             -platform=Android \
-            -cookflavor=Multi \
-            -clientconfig=Development \
+            -cookflavor=ASTC \
+            -clientconfig=Shipping \
+            -distribution \
             -cook -build -stage -pak -package -archive \
+            -compressed \
             -nozenstore \
+            -nodebuginfo \
             -archivedirectory="$OUTPUT_DIR"
 
-      - name: Collect APK
+      - name: Collect APK + AAB
         run: |
           APK_DIR="$GITHUB_WORKSPACE/Artifacts/apk"
-          mkdir -p "$APK_DIR"
-          found=0
-          # The APK lands in the archive dir and/or the staged build tree.
-          while IFS= read -r apk; do
-            echo "Found APK: $apk"
-            cp -f "$apk" "$APK_DIR/"
-            found=1
+          AAB_DIR="$GITHUB_WORKSPACE/Artifacts/aab"
+          mkdir -p "$APK_DIR" "$AAB_DIR"
+          found_apk=0
+          found_aab=0
+          # Only the universal APK is self-contained (content embedded via
+          # bPackageDataInsideApk). Shipping packaging also emits a content-less
+          # arm64 APK and an AFS companion APK — neither is installable on its
+          # own, so don't ship them in the artifact.
+          while IFS= read -r f; do
+            echo "Found APK: $f"; cp -f "$f" "$APK_DIR/"; found_apk=1
           done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
-                     -name '*.apk' 2>/dev/null)
-          if [ "$found" = "0" ]; then
-            echo "ERROR: packaging produced no .apk"
-            exit 1
+                     -name '*_universal.apk' 2>/dev/null)
+          while IFS= read -r f; do
+            echo "Found AAB: $f"; cp -f "$f" "$AAB_DIR/"; found_aab=1
+          done < <(find "$OUTPUT_DIR" "$GITHUB_WORKSPACE/Saved/StagedBuilds/Android" \
+                     -name '*.aab' 2>/dev/null)
+          if [ "$found_apk" = "0" ]; then
+            echo "ERROR: packaging produced no .apk"; exit 1
           fi
-          ls -lh "$APK_DIR"
+          if [ "$found_aab" = "0" ]; then
+            echo "WARNING: packaging produced no .aab (bEnableBundle may need adjusting) — Play upload step will be skipped."
+          fi
+          ls -lh "$APK_DIR" "$AAB_DIR" 2>/dev/null
 
-      # The APK as its own dedicated artifact.
+      # The APK as its own dedicated artifact (for direct sideload installs).
+      # APKs are already zip-compressed — recompressing wastes time for ~0 gain.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -158,12 +249,70 @@ jobs:
           path: Artifacts/apk/*.apk
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
 
-      # Full staged build (loose files) kept as a separate artifact.
-      - name: Upload staged build artifact
+      # The AAB as its own artifact (for Play Console upload).
+      - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-staged-${{ github.sha }}
-          path: Saved/StagedBuilds/Android/
+          name: android-aab-${{ github.sha }}
+          path: Artifacts/aab/*.aab
           if-no-files-found: warn
           retention-days: 14
+          compression-level: 0
+
+  # ── Play Internal Testing ──────────────────────────────────────────────────
+  # Only on main/master: a broken experimental branch shouldn't push a bad
+  # build to testers' phones. Play auto-updates the Play Store app on any
+  # device that has opted into the internal test — no cable, no manual APK.
+  publish-play-internal:
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 15
+
+    env:
+      PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME || 'com.angelbeach.beachvolleyball' }}
+
+    steps:
+      - name: Checkout (for the upload script)
+        uses: actions/checkout@v4
+        with:
+          # This job runs on the same runner and shares the build job's workspace.
+          # The default clean (git clean -ffdx) would wipe the Intermediate/ and
+          # Binaries/ caches the build job just left behind — and the freshly
+          # collected Artifacts/aab/ we upload from below.
+          clean: false
+
+      - name: Write service account key
+        run: |
+          test -n "$PLAY_SERVICE_ACCOUNT_JSON" || {
+            echo "ERROR: secret PLAY_SERVICE_ACCOUNT_JSON is not set."
+            echo "       Play Console → Setup → API access → service account JSON."
+            exit 1
+          }
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+      - name: Install uploader dependencies
+        run: pip install --quiet --user google-api-python-client google-auth
+
+      - name: Upload to Play internal testing track
+        run: |
+          # Single-runner setup: the build job wrote Artifacts/aab/ into this same
+          # workspace, so use it directly instead of round-tripping the AAB through
+          # GitHub artifact storage. If a second runner machine is ever added, this
+          # needs a download-artifact step (name: android-aab-<sha>) again.
+          AAB=$(find "$GITHUB_WORKSPACE/Artifacts/aab" -name '*.aab' 2>/dev/null | head -1)
+          test -n "$AAB" || { echo "ERROR: no .aab found in workspace (built on another machine?)"; exit 1; }
+          python3 scripts/upload_play_internal.py \
+            --package "$PACKAGE_NAME" \
+            --aab "$AAB" \
+            --service-account-json "$RUNNER_TEMP/play-service-account.json" \
+            --track internal \
+            --release-notes "CI build ${{ github.sha }}"
+
+      - name: Clean up service account key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"

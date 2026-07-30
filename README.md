@@ -15,6 +15,21 @@ A beach volleyball game built entirely with AngelScript and procedural mesh gene
 - **Deformable sand** — impacts and footsteps dent craters and footprints that slowly heal
 - **Gamepad support** — full controller bindings alongside keyboard
 
+## Progress
+
+Short clips captured from `MatchFilmerGameMode` (real gameplay, automated
+camera — see `Script/Debug/MatchFilmer.as`) each time a movement milestone is
+verified.
+
+**2026-07-18 — first-principles arm swing + fingerpass fix.** Every gesture
+segment now picked by what it physically is (bell-velocity reach, peak-speed-
+at-contact whip, decelerating follow-through) instead of one constant-speed
+lerp; hands sweep arcs around the shoulder instead of straight lines. Root-
+caused and fixed a decision-logic bug that silently forced every second touch
+into a bagger regardless of ball height — the AI now actually fingerpasses.
+
+![First-principles arm swing and serve](Media/2026-07-18-first-principles-motion.gif)
+
 ## Controls
 
 | Keyboard | Gamepad | Action |
