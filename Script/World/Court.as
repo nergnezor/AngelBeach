@@ -139,6 +139,18 @@ class ACourt : AActor
 		SandMesh.CreateMeshSection_LinearColor(0, SandV, T, SandN, SandUV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			SandColors(), SandTan, true, false);
+
+		// SandMesh never had a material assigned, on any platform — an unassigned
+		// ProceduralMeshComponent section renders with the engine's checkerboard
+		// "no material" placeholder, and SandColors() (the per-vertex sand tint /
+		// crater-darkening feedback from footsteps) was computed but never seen.
+		// VertexColorMaterial is Unlit and reads vertex colour directly, so it
+		// shows the real sand colour without depending on scene lighting — same
+		// material BuildNet() already uses below for the same reason.
+		UMaterialInterface SandMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
+		if (SandMat != nullptr)
+			SandMesh.SetMaterial(0, SandMat);
 	}
 
 	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
