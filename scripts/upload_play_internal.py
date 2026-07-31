@@ -23,6 +23,7 @@ import sys
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 
@@ -52,7 +53,10 @@ def main():
             .upload(
                 editId=edit_id,
                 packageName=args.package,
-                media_body=args.aab,
+                # mimetypes.guess_type() doesn't know the .aab extension, and
+                # media_body as a plain path string relies on that guess —
+                # pass a MediaFileUpload with an explicit mimetype instead.
+                media_body=MediaFileUpload(args.aab, mimetype="application/octet-stream"),
             )
             .execute()
         )
