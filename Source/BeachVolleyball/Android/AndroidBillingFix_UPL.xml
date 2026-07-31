@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Play Console flags this app with "för närvarande används version AIDL av
+  Play Billing Library ... måste uppdateras till minst version 6.0.1" even
+  though this game has no in-app purchases at all. Confirmed root cause:
+  UE's Android packaging always bundles a legacy, AIDL-based OBB
+  downloader/licensing implementation (predating the modern Play Billing
+  Library) that Play's scanner flags regardless of whether it's actually
+  reachable at runtime — see engine investigation notes in git history for
+  BeachVolleyball.Build.cs / this file.
+
+  Removing that legacy code requires patching GameActivity.java (a core,
+  ~5000-line engine template), which is high-risk. Community-documented
+  workaround instead (Epic Developer Community Forums, "Its that time of
+  year again..." thread, 2026): explicitly depend on a current Play Billing
+  Library version. Play's own scanner appears to key off the presence of a
+  modern billingclient dependency being satisfied, not just the absence of
+  the legacy code. Low-risk since it's purely additive — doesn't touch
+  engine source, doesn't remove/gate anything, easy to revert.
+-->
+<root xmlns:android="http://schemas.android.com/apk/res/android">
+  <baseBuildGradleAdditions>
+    <insert>
+      dependencies {
+          implementation 'com.android.billingclient:billing:6.0.1'
+      }
+    </insert>
+  </baseBuildGradleAdditions>
+</root>

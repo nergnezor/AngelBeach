@@ -22,5 +22,14 @@ public class BeachVolleyball : ModuleRules
 			"Slate",
 			"SlateCore"
 		});
+
+		if (Target.Platform == UnrealTargetPlatform.Android)
+		{
+			// Play Console flags an outdated "Play Billing Library version AIDL"
+			// even though this game has no IAP. Community-documented workaround:
+			// depend on a current billingclient version explicitly. See the XML.
+			AdditionalPropertiesForReceipt.Add("AndroidPlugin",
+				System.IO.Path.Combine(ModuleDirectory, "Android", "AndroidBillingFix_UPL.xml"));
+		}
 	}
 }
