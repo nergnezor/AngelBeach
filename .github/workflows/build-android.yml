@@ -83,8 +83,10 @@ jobs:
           test -d "$ANDROID_HOME" || { echo "ERROR: ANDROID_HOME not found: $ANDROID_HOME"; exit 1; }
 
           NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
-          if [ ! -d "$NDK_DIR" ]; then
-            echo ">> NDK $NDK_VERSION not installed; installing via sdkmanager..."
+          PLATFORM35_DIR="$ANDROID_HOME/platforms/android-35"
+          BUILDTOOLS35_DIR="$ANDROID_HOME/build-tools/35.0.0"
+          if [ ! -d "$NDK_DIR" ] || [ ! -d "$PLATFORM35_DIR" ] || [ ! -d "$BUILDTOOLS35_DIR" ]; then
+            echo ">> Missing NDK $NDK_VERSION and/or platform 35 / build-tools 35.0.0; installing via sdkmanager..."
             SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
             [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
             test -n "$SDKMANAGER" || {
@@ -94,10 +96,15 @@ jobs:
             }
             yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
             # NDK plus the SDK bits gradle needs to assemble the APK.
+            # Play now requires targetSdkVersion 35; keep 34 installed too since
+            # some engine tooling still references it.
             "$SDKMANAGER" "ndk;$NDK_VERSION" \
-              "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+              "platform-tools" "platforms;android-35" "platforms;android-34" \
+              "build-tools;35.0.0" "build-tools;34.0.0"
           fi
           test -d "$NDK_DIR" || { echo "ERROR: NDK still missing at $NDK_DIR"; exit 1; }
+          test -d "$PLATFORM35_DIR" || { echo "ERROR: platforms;android-35 still missing"; exit 1; }
+          test -d "$BUILDTOOLS35_DIR" || { echo "ERROR: build-tools;35.0.0 still missing"; exit 1; }
 
           # UnrealBuildTool reads the NDK location from NDKROOT / ANDROID_NDK_ROOT
           # (NOT ANDROID_NDK_HOME). Export all three for subsequent steps.
