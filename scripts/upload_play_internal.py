@@ -21,11 +21,19 @@ subsequent upload (including versionCode bumps) can go through this script.
 import argparse
 import sys
 
+import httplib2
 from google.oauth2 import service_account
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
+# The .aab is ~200MB; a single non-resumable request left the client
+# blocking on the server's response past its read timeout. Resumable
+# (chunked) upload avoids one giant request, and a longer client timeout
+# gives slow chunks room to complete instead of raising TimeoutError.
+CHUNK_SIZE = 8 * 1024 * 1024
+HTTP_TIMEOUT_SECONDS = 300
 
 
 def main():
@@ -40,26 +48,33 @@ def main():
     creds = service_account.Credentials.from_service_account_file(
         args.service_account_json, scopes=SCOPES
     )
-    service = build("androidpublisher", "v3", credentials=creds)
+    authed_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_SECONDS))
+    service = build("androidpublisher", "v3", http=authed_http)
 
     edit = service.edits().insert(body={}, packageName=args.package).execute()
     edit_id = edit["id"]
     print(f"Opened edit {edit_id} for {args.package}")
 
     try:
-        upload = (
-            service.edits()
-            .bundles()
-            .upload(
-                editId=edit_id,
-                packageName=args.package,
-                # mimetypes.guess_type() doesn't know the .aab extension, and
-                # media_body as a plain path string relies on that guess —
-                # pass a MediaFileUpload with an explicit mimetype instead.
-                media_body=MediaFileUpload(args.aab, mimetype="application/octet-stream"),
-            )
-            .execute()
+        # mimetypes.guess_type() doesn't know the .aab extension, so an
+        # explicit mimetype is required either way. resumable=True chunks
+        # the ~200MB upload instead of sending it as one request.
+        media = MediaFileUpload(
+            args.aab,
+            mimetype="application/octet-stream",
+            chunksize=CHUNK_SIZE,
+            resumable=True,
         )
+        request = service.edits().bundles().upload(
+            editId=edit_id,
+            packageName=args.package,
+            media_body=media,
+        )
+        upload = None
+        while upload is None:
+            status, upload = request.next_chunk(num_retries=3)
+            if status:
+                print(f"Uploaded {int(status.progress() * 100)}%")
         version_code = upload["versionCode"]
         print(f"Uploaded bundle, versionCode={version_code}")
 

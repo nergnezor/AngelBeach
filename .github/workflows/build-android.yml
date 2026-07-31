@@ -327,7 +327,7 @@ jobs:
         # Runner's system Python is PEP 668 "externally managed" (Debian/Ubuntu
         # policy on Python 3.11+); --break-system-packages is safe here since
         # this is an ephemeral CI runner step, not a persistent system change.
-        run: pip install --quiet --user --break-system-packages google-api-python-client google-auth
+        run: pip install --quiet --user --break-system-packages google-api-python-client google-auth google-auth-httplib2
 
       - name: Upload to Play internal testing track
         run: |
