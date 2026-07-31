@@ -191,11 +191,20 @@ jobs:
 
       - name: Package for Android (APK + AAB)
         run: |
-          # Scripts are staged separately from cooked content. Without this targeted
-          # cleanup UAT can combine current scripts with an hours-old IoStore container,
-          # making runtime-loaded assets appear missing despite valid force-cook rules.
-          rm -rf "$GITHUB_WORKSPACE"/Saved/Cooked/Android* \
-                 "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
+          # EXPERIMENTAL (2026-08): trying iterative cooking for build speed on this
+          # single-runner setup. Saved/Cooked/Android* now survives between runs so
+          # -iterativecooking below can skip re-cooking unchanged assets. This is a
+          # known risk area: AngelScript sources aren't fully tracked in UE's cook
+          # dependency graph, so a script that references a *new* asset without any
+          # .uasset itself changing could leave that asset uncooked — the same
+          # failure class as the earlier "boxes instead of robots" bug. If content
+          # ever goes missing/wrong on-device after a script change, wipe
+          # Saved/Cooked/Android* once (or drop -iterativecooking) to force a clean
+          # full cook, and consider reverting this.
+          #
+          # Staged output and the archive dir are NOT cook cache — always safe (and
+          # necessary) to wipe so stale scripts can't combine with old staged data.
+          rm -rf "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
                  "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
           # APK size choices:
@@ -224,7 +233,7 @@ jobs:
             -cookflavor=ASTC \
             -clientconfig=Shipping \
             -distribution \
-            -cook -build -stage -pak -package -archive \
+            -cook -iterativecooking -build -stage -pak -package -archive \
             -compressed \
             -nozenstore \
             -nodebuginfo \
