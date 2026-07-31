@@ -193,20 +193,25 @@ jobs:
 
       - name: Package for Android (APK + AAB)
         run: |
-          # EXPERIMENTAL (2026-08): trying iterative cooking for build speed on this
-          # single-runner setup. Saved/Cooked/Android* now survives between runs so
-          # -iterativecooking below can skip re-cooking unchanged assets. This is a
-          # known risk area: AngelScript sources aren't fully tracked in UE's cook
-          # dependency graph, so a script that references a *new* asset without any
-          # .uasset itself changing could leave that asset uncooked — the same
-          # failure class as the earlier "boxes instead of robots" bug. If content
-          # ever goes missing/wrong on-device after a script change, wipe
-          # Saved/Cooked/Android* once (or drop -iterativecooking) to force a clean
-          # full cook, and consider reverting this.
-          #
-          # Staged output and the archive dir are NOT cook cache — always safe (and
-          # necessary) to wipe so stale scripts can't combine with old staged data.
-          rm -rf "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
+          # Reverted the 2026-08 "iterative cooking" speed experiment (fc79e35):
+          # its own risk note came true on the very next script/config change. The
+          # 2026-07-31T22:27 CI run cooked "Packages Cooked: 0, Incrementally
+          # Skipped: 626" in a 15s no-op cook — it silently repackaged the stale
+          # Saved/Cooked/Android_ASTC from before this run's DefaultGame.ini change
+          # (two new AlwaysCookMaps materials), shipping old content under a new
+          # version code. AngelScript's runtime string-LoadObject calls aren't
+          # tracked in UE's cook dependency graph, so legacy-iterative cooking
+          # cannot reliably detect "a script/ini now references a new asset."
+          # Scripts are staged separately from cooked content: without wiping
+          # Saved/Cooked/Android* every run, UAT can combine current scripts with
+          # an hours-old IoStore container, making runtime-loaded assets appear
+          # missing (or stale) despite valid force-cook rules — the same failure
+          # class as the earlier OBB/boxes-instead-of-robots bugs. Full cooks are
+          # slower but correct; revisit iterative cooking only with a cache-
+          # invalidation strategy that accounts for AngelScript/ini-driven asset
+          # references, not just changed .uassets.
+          rm -rf "$GITHUB_WORKSPACE"/Saved/Cooked/Android* \
+                 "$GITHUB_WORKSPACE"/Saved/StagedBuilds/Android* \
                  "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
           # APK size choices:
@@ -235,7 +240,7 @@ jobs:
             -cookflavor=ASTC \
             -clientconfig=Shipping \
             -distribution \
-            -cook -iterativecooking -build -stage -pak -package -archive \
+            -cook -build -stage -pak -package -archive \
             -compressed \
             -nozenstore \
             -nodebuginfo \
