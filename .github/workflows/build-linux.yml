@@ -1,13 +1,18 @@
 name: Build – Linux
 
+# Temporarily disabled: development is Android-only right now, and this
+# workflow shares the single self-hosted runner with build-android.yml —
+# every Linux push-triggered run was extra contention for the same runner
+# slot that Android builds need. Re-enable by restoring the `push:` trigger
+# below (kept commented so this stays a one-line revert).
 on:
-  push:
-    branches: ["**"]
-    paths-ignore:
-      - "**.md"
-      - ".github/workflows/pages.yml"
-      - ".github/workflows/runner-setup.yml"
-      - "scripts/setup-runner.sh"
+  # push:
+  #   branches: ["**"]
+  #   paths-ignore:
+  #     - "**.md"
+  #     - ".github/workflows/pages.yml"
+  #     - ".github/workflows/runner-setup.yml"
+  #     - "scripts/setup-runner.sh"
   workflow_dispatch:
 
 # cancel-in-progress:false — see build-android.yml for why: with :true, a
