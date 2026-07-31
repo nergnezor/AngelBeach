@@ -54,3 +54,12 @@ jobs:
           echo ""
           echo "############ 5. Where AndroidManifest gets the DownloaderActivity/OBBDownloaderService entries added ############"
           grep -rn -B10 -A2 "\.DownloaderActivity\|\.OBBDownloaderService" "$UBT_ANDROID" | grep -i "manifest\|activity\|service" -A2 -B10 | head -150 || echo "(no matches)"
+
+          echo ""
+          echo "############ 6. Every raw occurrence of '.OBBDownloaderService' with generous context ############"
+          echo "############    (the <activity> entry is now guarded; <service> entry — if separate — is not) ############"
+          grep -n "\.OBBDownloaderService" "$UBT_ANDROID/UEDeployAndroid.cs" | while IFS=: read -r lineno rest; do
+            echo "--- match at line $lineno ---"
+            sed -n "$((lineno>15 ? lineno-15 : 1)),$((lineno+5))p" "$UBT_ANDROID/UEDeployAndroid.cs"
+            echo ""
+          done
