@@ -71,6 +71,10 @@ jobs:
           for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
             if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
               echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              # Persists shader/texture derived-data across runs on this same
+              # runner instead of recompiling it every build (build-linux.yml
+              # already did this; Android was missing it).
+              echo "UE_DERIVEDDATACACHE_ROOT=$candidate/Engine/DerivedDataCache" >> "$GITHUB_ENV"
               echo "Engine OK: $candidate"
               exit 0
             fi
