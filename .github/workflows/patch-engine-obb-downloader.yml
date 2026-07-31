@@ -1,0 +1,53 @@
+name: Patch Engine – Android OBB Downloader
+
+# One-off: applies scripts/patch_engine_obb_downloader.py to the engine
+# checkout on the runner. This edits the ENGINE (a private fork checkout on
+# this machine), not this repository — the change is NOT committed anywhere
+# and will be lost if the engine is re-cloned. Idempotent (safe to re-run;
+# no-ops if already patched). Delete this workflow once the investigation
+# is done.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 10
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
+
+    steps:
+      - name: Checkout (for the patch script)
+        uses: actions/checkout@v4
+
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
+
+      - name: Apply patch
+        run: |
+          TARGET="$ENGINE_DIR/Engine/Source/Programs/UnrealBuildTool/Platform/Android/UEDeployAndroid.cs"
+          test -f "$TARGET" || { echo "ERROR: $TARGET not found"; exit 1; }
+          cp "$TARGET" "$TARGET.bak-$(date +%s)"
+          python3 scripts/patch_engine_obb_downloader.py "$TARGET"
+
+      - name: Show the diff
+        run: |
+          TARGET="$ENGINE_DIR/Engine/Source/Programs/UnrealBuildTool/Platform/Android/UEDeployAndroid.cs"
+          BAK=$(ls -t "$TARGET".bak-* 2>/dev/null | head -1)
+          if [ -n "$BAK" ]; then
+            diff -u "$BAK" "$TARGET" || true
+          else
+            echo "(no backup found — patch was already applied previously, no changes made)"
+          fi
