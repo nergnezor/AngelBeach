@@ -48,7 +48,14 @@ def main():
     creds = service_account.Credentials.from_service_account_file(
         args.service_account_json, scopes=SCOPES
     )
-    authed_http = AuthorizedHttp(creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_SECONDS))
+    raw_http = httplib2.Http(timeout=HTTP_TIMEOUT_SECONDS)
+    # Google's resumable upload protocol overloads HTTP 308 to mean "Resume
+    # Incomplete" (a chunk was accepted, send the next one) — it carries no
+    # Location header. httplib2 treats any 3xx in redirect_codes as a normal
+    # redirect and raises RedirectMissingLocation without one. Excluding 308
+    # lets googleapiclient's own next_chunk() logic interpret it correctly.
+    raw_http.redirect_codes = raw_http.redirect_codes - {308}
+    authed_http = AuthorizedHttp(creds, http=raw_http)
     service = build("androidpublisher", "v3", http=authed_http)
 
     edit = service.edits().insert(body={}, packageName=args.package).execute()
