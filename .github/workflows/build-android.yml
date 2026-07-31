@@ -8,6 +8,8 @@ on:
       - ".github/workflows/pages.yml"
       - ".github/workflows/runner-setup.yml"
       - "scripts/setup-runner.sh"
+      - "scripts/runner-watchdog.sh"
+      - "scripts/systemd/**"
   workflow_dispatch:
 
 # One runner serves all jobs. cancel-in-progress:true livelocked this

@@ -1,0 +1,9 @@
+[Unit]
+Description=Angel Beach runner watchdog (restart the GitHub Actions runner if its listener wedges)
+After=actions.runner.nergnezor-AngelBeach.erik-Nitro-N50-640.service
+
+[Service]
+Type=oneshot
+User=erik
+WorkingDirectory=/home/erik/projekt/AngelBeach
+ExecStart=/home/erik/projekt/AngelBeach/scripts/runner-watchdog.sh

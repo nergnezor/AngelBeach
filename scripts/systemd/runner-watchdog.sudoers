@@ -1,0 +1,6 @@
+# Lets the watchdog restart exactly one systemd unit, and nothing else,
+# without a password. Install with:
+#   sudo install -m 440 scripts/systemd/runner-watchdog.sudoers \
+#       /etc/sudoers.d/runner-watchdog
+#   sudo visudo -c
+erik ALL=(root) NOPASSWD: /usr/bin/systemctl restart actions.runner.nergnezor-AngelBeach.erik-Nitro-N50-640.service
