@@ -63,3 +63,11 @@ jobs:
             sed -n "$((lineno>15 ? lineno-15 : 1)),$((lineno+5))p" "$UBT_ANDROID/UEDeployAndroid.cs"
             echo ""
           done
+
+          echo ""
+          echo "############ 7. Every call site of WriteJavaDownloadSupportFiles (the Shim generator) ############"
+          grep -n "WriteJavaDownloadSupportFiles" "$UBT_ANDROID/UEDeployAndroid.cs" | while IFS=: read -r lineno rest; do
+            echo "--- match at line $lineno: $rest ---"
+            sed -n "$((lineno>20 ? lineno-20 : 1)),$((lineno+3))p" "$UBT_ANDROID/UEDeployAndroid.cs"
+            echo ""
+          done
