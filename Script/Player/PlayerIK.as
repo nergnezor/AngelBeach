@@ -205,13 +205,19 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// 0 until the real contact fires TriggerHit, so pre-contact the window
 		// just holds under the ball; the give+extend is the follow-through. MinJerk
 		// on the approach: the window SETTLES under the ball, not snaps to it.
+		// MinJerk (not linear) on both the give and the drive too: a linear give
+		// meeting a linear drive at the Swing=0.2 seam has matching POSITION but a
+		// hard corner in VELOCITY there (give ends at -108cm/s, drive starts at
+		// +81cm/s) — an instant direction reversal that read as a flail. MinJerk
+		// has zero slope at both ends of each segment, so the hands actually pause
+		// at the bottom of the cushion before driving through, like a real catch.
 		float Along;
 		if (Swing <= 0.0f)
-			Along = 6.0f * MinJerk(Blend);                   // window forming, waiting
+			Along = 6.0f * MinJerk(Blend);                              // window forming, waiting
 		else if (Swing < 0.2f)
-			Along = 6.0f - 14.0f * (Swing / 0.2f);           // CUSHION: give down to -8 (load)
+			Along = 6.0f - 14.0f * MinJerk(Swing / 0.2f);               // CUSHION: give down to -8 (load)
 		else
-			Along = -8.0f + 42.0f * ((Swing - 0.2f) / 0.8f); // EXTEND: drive up & through
+			Along = -8.0f + 42.0f * MinJerk((Swing - 0.2f) / 0.8f);     // EXTEND: drive up & through
 		FVector Extend = Push * Along;
 
 		// Hands ~20cm apart, UNCROSSED (right hand right, left hand left). The old
@@ -441,11 +447,22 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// Ease from ready to the contact pose by the gesture weight. The spike/block/
 	// serve build their own motion into ContactR/L (via SwingPhase/ServePhase), so
 	// they should NOT be re-lerped from the ready pose (that would start the hand
-	// at the hip instead of cocked/up). Other hits ease from ready as usual.
+	// at the hip instead of cocked/up). Bump/Set join them ONCE the real contact
+	// swing is under way (Swing > 0): the generic gesture Blend is a 0->1->0 hump
+	// that falls back toward 0 well before the 0.65s window ends (TargetPose =
+	// Sin(Progress*PI) in VolleyballPlayer.as), so re-lerping toward ReadyR through
+	// the second half of the follow-through fought the platform/cup's own EaseOut
+	// swing-through — the hand target was being dragged back to the sides at the
+	// same time the swing was still driving it further along the aim. That tug-
+	// of-war (not upstream jitter) was the "flängigt" flailing in bagger/fingerslag:
+	// spike/block/serve never had it because they were already exempt. Other
+	// hits (still reaching, no contact yet) ease from ready as usual.
 	FVector WantHandR;
 	FVector WantHandL;
-	if (Self.CurrentHit == EHitType::Hit_Spike || Self.CurrentHit == EHitType::Hit_Block
-		|| Self.CurrentHit == EHitType::Hit_Serve)
+	bool bOwnMotion = Self.CurrentHit == EHitType::Hit_Spike || Self.CurrentHit == EHitType::Hit_Block
+		|| Self.CurrentHit == EHitType::Hit_Serve
+		|| ((Self.CurrentHit == EHitType::Hit_Bump || Self.CurrentHit == EHitType::Hit_Set) && Swing > 0.0f);
+	if (bOwnMotion)
 	{
 		WantHandR = ContactR;
 		WantHandL = ContactL;
@@ -459,9 +476,15 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		WantHandR = ReadyR + (ContactR - ReadyR) * Ramp;
 		WantHandL = ReadyL + (ContactL - ReadyL) * Ramp;
 	}
-	// A triggered through-swing (any stroke, not just the spike) is deliberate
-	// ballistic motion: open the sink while it is fast, close it as it bleeds off.
-	if (Swing > 0.0f)
+	// A triggered through-swing on a genuine whip stroke (spike/serve set their
+	// own, higher SinkBoost above) is deliberate ballistic motion worth opening
+	// the sink for. The bump/set swing-through is a much smaller, slower motion
+	// (a controlled platform sweep / cushion-then-drive, not a whip) that never
+	// needed the wider cap to keep up with its OWN target — widening it here just
+	// let ordinary frame-to-frame disagreement (meet-point re-prediction, crouch-
+	// coupled shoulder shift) pass through at near full speed instead of being
+	// smoothed, which read as a flailing dig/set. Leave bump/set at the base limit.
+	if (Swing > 0.0f && Self.CurrentHit != EHitType::Hit_Bump && Self.CurrentHit != EHitType::Hit_Set)
 		SinkBoost = Math::Max(SinkBoost, 1.0f + 1.2f * (1.0f - Swing));
 	// Pose crouch plus whatever extra was requested — the deepest of the two
 	// extra channels wins (held AI stance vs frame-rate transient), added on top
