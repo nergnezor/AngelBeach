@@ -1,0 +1,57 @@
+name: Diagnose – DownloadShim contract
+
+# Read-only, no engine source modification. Finds exactly what
+# GameActivity.java (and other engine Java) expects from DownloadShim
+# and what WriteJavaDownloadSupportFiles actually generates, so the next
+# fix attempt for the "Play Billing Library AIDL version" Play Console
+# flag (confirmed still present with the manifest-only patch alone) is
+# based on the real contract instead of another guess. Delete once the
+# investigation is done.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 10
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
+
+    steps:
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
+
+      - name: Find the GameActivity.java template and its DownloadShim usage
+        run: |
+          echo "############ 1. Locate the GameActivity.java TEMPLATE (source, not generated) ############"
+          find "$ENGINE_DIR/Engine/Build/Android" "$ENGINE_DIR/Engine/Source" -iname "GameActivity.java*" 2>/dev/null
+
+          echo ""
+          echo "############ 2. Every DownloadShim reference in that template, with context ############"
+          find "$ENGINE_DIR/Engine/Build/Android" "$ENGINE_DIR/Engine/Source" -iname "GameActivity.java*" 2>/dev/null | while read -r f; do
+            echo "--- file: $f ---"
+            grep -n -B3 -A5 "DownloadShim" "$f" || echo "(no DownloadShim references in this file)"
+          done
+
+          echo ""
+          echo "############ 3. Full WriteJavaDownloadSupportFiles method body ############"
+          UBT_ANDROID="$ENGINE_DIR/Engine/Source/Programs/UnrealBuildTool/Platform/Android"
+          LINE=$(grep -n "public void WriteJavaDownloadSupportFiles" "$UBT_ANDROID/UEDeployAndroid.cs" | head -1 | cut -d: -f1)
+          echo "method starts at line $LINE"
+          sed -n "${LINE},$((LINE+150))p" "$UBT_ANDROID/UEDeployAndroid.cs"
+
+          echo ""
+          echo "############ 4. Any other generated/template Java file referencing DownloadShim ############"
+          grep -rln "DownloadShim" "$ENGINE_DIR/Engine/Build/Android" "$ENGINE_DIR/Engine/Source/Programs/UnrealBuildTool" 2>/dev/null
