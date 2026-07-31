@@ -17,13 +17,21 @@
   modern billingclient dependency being satisfied, not just the absence of
   the legacy code. Low-risk since it's purely additive — doesn't touch
   engine source, doesn't remove/gate anything, easy to revert.
+
+  NOTE: <baseBuildGradleAdditions> inserts into a separate
+  baseBuildAdditions.gradle that's evaluated WITHOUT the Android plugin
+  applied — 'implementation' isn't a valid configuration there (confirmed:
+  "Could not find method implementation() ... on DefaultDependencyHandler").
+  <buildGradleAdditions> inserts directly into the app module's build.gradle
+  (where the Android application plugin is already applied), which is what
+  this needs.
 -->
 <root xmlns:android="http://schemas.android.com/apk/res/android">
-  <baseBuildGradleAdditions>
+  <buildGradleAdditions>
     <insert>
       dependencies {
           implementation 'com.android.billingclient:billing:6.0.1'
       }
     </insert>
-  </baseBuildGradleAdditions>
+  </buildGradleAdditions>
 </root>
