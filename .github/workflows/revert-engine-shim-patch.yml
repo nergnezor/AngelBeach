@@ -1,0 +1,45 @@
+name: Revert Engine – Undo the Shim gating patch
+
+# The shim-gating patch (guarding WriteJavaDownloadSupportFiles behind
+# bPackageDataInsideApk) broke compilation: GameActivity.java
+# unconditionally imports com.epicgames.unreal.DownloadShim, which that
+# call is responsible for generating. Restore the backup taken right
+# before that patch was applied (UEDeployAndroid.cs.bak-1785493699),
+# which already has the earlier, working manifest-only patch applied.
+# One-off; delete after use.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  revert:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 10
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
+
+    steps:
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
+
+      - name: Restore pre-shim-patch backup
+        run: |
+          TARGET="$ENGINE_DIR/Engine/Source/Programs/UnrealBuildTool/Platform/Android/UEDeployAndroid.cs"
+          BACKUP="$TARGET.bak-1785493699"
+          test -f "$BACKUP" || { echo "ERROR: expected backup $BACKUP not found"; exit 1; }
+          cp "$BACKUP" "$TARGET"
+          echo "Restored $TARGET from $BACKUP"
+          echo "=== confirm shim guard marker is GONE, manifest guard marker still present ==="
+          grep -c "AngelBeach: skip the OBB downloader Shim" "$TARGET" || echo "shim marker: 0 (expected)"
+          grep -c "AngelBeach: gate OBB downloader manifest entry" "$TARGET" || echo "manifest marker: 0 (unexpected!)"
