@@ -39,7 +39,11 @@ class ACourt : AActor
 	private FLinearColor NetBandColor  = FLinearColor(0.03f, 0.03f, 0.04f, 1.0f);
 	private FLinearColor NetTapeColor  = FLinearColor(0.75f, 0.75f, 0.72f, 1.0f);
 	private FLinearColor LineColor     = FLinearColor(0.80f, 0.80f, 0.76f, 1.0f);
-	private FLinearColor PostColor     = FLinearColor(0.45f, 0.42f, 0.38f, 1.0f);
+	// Posts are the exception to the clipping above: measured linear 0.235 at 0.45
+	// albedo, so they were sitting at roughly half light, not saturated. They take
+	// the -1.5 EV exposure cut at face value where the sand only loses its
+	// blow-out, so lift the albedo to keep them from going muddy.
+	private FLinearColor PostColor     = FLinearColor(0.65f, 0.62f, 0.56f, 1.0f);
 
 	// --- Deformable sand heightfield ---
 	const int   SandGridX    = 80;      // cells along X
@@ -164,7 +168,15 @@ class ACourt : AActor
 		// never applied on Android. SandColors() still writes the per-vertex crater
 		// tint into the section; a solid-colour material cannot show it, but the data
 		// is there for an authored vertex-colour material later.
-		ApplySolidColorMaterial(SandMesh, 0, SandBaseColor);
+		UMaterialInstanceDynamic SandMID = ApplySolidColorMaterial(SandMesh, 0, SandBaseColor);
+		// Sand is about as matte as a surface gets. Left glossy, a big flat plane
+		// picks up a broad specular sheen from the low sun and washes out on top of
+		// the exposure problem.
+		if (SandMID != nullptr)
+		{
+			SandMID.SetScalarParameterValue(n"Roughness", 0.95f);
+			SandMID.SetScalarParameterValue(n"Metallic", 0.0f);
+		}
 	}
 
 	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).

@@ -24,9 +24,21 @@ class AEnvironment : AActor
 
 		// The vertex-colour engine debug material used here before never applied in
 		// a packaged build, so the water rendered in the fallback material's flat
-		// cream instead of blue — which is why the horizon had no water in it at
-		// all on device. See ACourt::ApplySolidColorMaterial for the full rationale.
-		ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
+		// cream instead of blue. That is fixed, but the sea STILL measured
+		// (234,208,167) on device — flat cream, barely any variation, no blue.
+		//
+		// A dark blue albedo cannot turn warm cream by being lit, so what is
+		// showing is not the albedo: this is a mirror-flat horizontal plane viewed
+		// at a grazing angle, which is the worst case for specular. A smooth
+		// surface there reflects the bright warm sky straight into the camera and
+		// drowns the colour underneath. Roughen it so the sea scatters instead of
+		// mirroring, and keep it non-metallic.
+		UMaterialInstanceDynamic MID = ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
+		if (MID != nullptr)
+		{
+			MID.SetScalarParameterValue(n"Roughness", 0.55f);
+			MID.SetScalarParameterValue(n"Metallic", 0.0f);
+		}
 	}
 
 	// Deliberate duplicate of ACourt::ApplySolidColorMaterial (see there for why
