@@ -27,11 +27,19 @@ class ACourt : AActor
 	// Surface colours, driven into a solid-colour material per section
 	// (see ACourt::ApplySolidColorMaterial). Plain members, not const: every other const in this
 	// file is a primitive, and const object members are not worth the compile risk.
-	private FLinearColor SandBaseColor = FLinearColor(0.93f, 0.83f, 0.60f, 1.0f);
-	private FLinearColor NetBandColor  = FLinearColor(0.05f, 0.05f, 0.06f, 1.0f);
-	private FLinearColor NetTapeColor  = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
-	private FLinearColor LineColor     = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
-	private FLinearColor PostColor     = FLinearColor(0.80f, 0.80f, 0.80f, 1.0f);
+	//
+	// These are ALBEDO, not final pixel colours. The values here were originally
+	// picked for an unlit vertex-colour material, where the colour IS what you
+	// see; the material is lit now, so the sun multiplies them — and 0.93 sand
+	// over a bright sunset clipped to near-white, which is why the first working
+	// build came out looking like a snowfield. Keep these in the range real
+	// surfaces actually reflect (dry sand ~0.5, white line paint ~0.8) and let
+	// the lighting do the brightening.
+	private FLinearColor SandBaseColor = FLinearColor(0.62f, 0.52f, 0.36f, 1.0f);
+	private FLinearColor NetBandColor  = FLinearColor(0.03f, 0.03f, 0.04f, 1.0f);
+	private FLinearColor NetTapeColor  = FLinearColor(0.75f, 0.75f, 0.72f, 1.0f);
+	private FLinearColor LineColor     = FLinearColor(0.80f, 0.80f, 0.76f, 1.0f);
+	private FLinearColor PostColor     = FLinearColor(0.45f, 0.42f, 0.38f, 1.0f);
 
 	// --- Deformable sand heightfield ---
 	const int   SandGridX    = 80;      // cells along X
@@ -244,16 +252,16 @@ class ACourt : AActor
 			SandColors(), SandTan, false);
 	}
 
-	// Net: a real volleyball net reads as a dark, see-through mesh band with a
-	// white top tape — NOT a solid coloured wall. The previous version used the
-	// engine debug material M_SimpleTranslucent, which ignores vertex colour and
-	// rendered as a solid red sheet. Here the net band sits just under the top
-	// (NetMeshTopZ..NetHeight is the white tape; the band hangs below it).
-	// The band is currently OPAQUE dark rather than see-through: the translucent
-	// engine debug material it used before does not apply in a packaged build at
-	// all (see ACourt::ApplySolidColorMaterial), and no shipping engine material is both
-	// translucent and colour-parameterised. A real see-through net wants net-shaped
-	// geometry (thin strips) or an authored translucent material.
+	// Net: a real volleyball net reads as a dark, SEE-THROUGH mesh band with a
+	// white top tape — not a solid coloured wall.
+	//
+	// It gets its transparency from GEOMETRY, not from a translucent material:
+	// the band is woven out of thin horizontal and vertical strings with gaps
+	// between them, so you look through the holes. That side-steps the whole
+	// problem that sank the two previous attempts — M_SimpleTranslucent rendered
+	// a solid red sheet, and the engine debug materials do not apply in a
+	// packaged build at all (see ACourt::ApplySolidColorMaterial) — since a woven
+	// net needs no alpha to be see-through.
 	private void BuildNet()
 	{
 		float HW = CourtHalfWidth + 30.0f;
@@ -261,14 +269,35 @@ class ACourt : AActor
 		float BandTop = NetHeight - TapeHeight;        // mesh hangs below the tape
 		const float BandBottom = 100.0f;               // net mesh stops ~1m off the sand
 
-		// --- Section 0: net mesh band, dark
+		// --- Section 0: the woven net band
 		{
 			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
 			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
 
-			AddNetQuad(V, T, N, UV, C, NetBandColor, BandBottom, BandTop, HW);
-			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			// Regulation beach volleyball mesh is ~10 cm square. Slightly coarser
+			// here so the string count stays modest on mobile: ~72 verticals plus
+			// ~11 horizontals is a few hundred triangles, and at match camera
+			// distance the weave reads correctly.
+			const float Spacing = 12.0f;   // gap between string centres (cm)
+			const float StringW = 1.6f;    // string thickness (cm)
 
+			int VCount = int((2.0f * HW) / Spacing);
+			for (int i = 0; i <= VCount; i++)
+			{
+				float y = -HW + i * Spacing;
+				AddNetStrip(V, T, N, UV, C, NetBandColor,
+					y - StringW * 0.5f, y + StringW * 0.5f, BandBottom, BandTop);
+			}
+
+			int HCount = int((BandTop - BandBottom) / Spacing);
+			for (int i = 0; i <= HCount; i++)
+			{
+				float z = BandBottom + i * Spacing;
+				AddNetStrip(V, T, N, UV, C, NetBandColor,
+					-HW, HW, z - StringW * 0.5f, z + StringW * 0.5f);
+			}
+
+			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 			ApplySolidColorMaterial(NetMesh, 0, NetBandColor);
 		}
 
@@ -277,27 +306,32 @@ class ACourt : AActor
 			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
 			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
 
-			AddNetQuad(V, T, N, UV, C, NetTapeColor, BandTop, NetHeight, HW);
+			AddNetStrip(V, T, N, UV, C, NetTapeColor, -HW, HW, BandTop, NetHeight);
 			NetMesh.CreateMeshSection_LinearColor(1, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 
 			ApplySolidColorMaterial(NetMesh, 1, NetTapeColor);
 		}
 	}
 
-	// Double-sided vertical quad in the net plane (X=0), spanning Z0..Z1 across the
-	// full width ±HW, with the given vertex colour.
-	private void AddNetQuad(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& N,
+	// One double-sided quad in the net plane (X≈0), spanning Y0..Y1 by Z0..Z1.
+	// Appends to the arrays; the CALLER creates the mesh section. (The version
+	// this replaced hardcoded vertex indices 0..7 and created section 0 itself,
+	// so it could only ever be called once per section — the tape call overwrote
+	// the band's geometry and the band never existed as its own section.)
+	private void AddNetStrip(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& N,
 		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
-		float Z0, float Z1, float HW)
+		float Y0, float Y1, float Z0, float Z1)
 	{
+		int B = V.Num();
+
 		// Front face
-		V.Add(FVector(-NetHalfThick, -HW, Z0)); V.Add(FVector(-NetHalfThick,  HW, Z0));
-		V.Add(FVector(-NetHalfThick,  HW, Z1)); V.Add(FVector(-NetHalfThick, -HW, Z1));
-		T.Add(0); T.Add(1); T.Add(2); T.Add(0); T.Add(2); T.Add(3);
+		V.Add(FVector(-NetHalfThick, Y0, Z0)); V.Add(FVector(-NetHalfThick, Y1, Z0));
+		V.Add(FVector(-NetHalfThick, Y1, Z1)); V.Add(FVector(-NetHalfThick, Y0, Z1));
+		T.Add(B+0); T.Add(B+1); T.Add(B+2); T.Add(B+0); T.Add(B+2); T.Add(B+3);
 		// Back face
-		V.Add(FVector( NetHalfThick,  HW, Z0)); V.Add(FVector( NetHalfThick, -HW, Z0));
-		V.Add(FVector( NetHalfThick, -HW, Z1)); V.Add(FVector( NetHalfThick,  HW, Z1));
-		T.Add(4); T.Add(5); T.Add(6); T.Add(4); T.Add(6); T.Add(7);
+		V.Add(FVector( NetHalfThick, Y1, Z0)); V.Add(FVector( NetHalfThick, Y0, Z0));
+		V.Add(FVector( NetHalfThick, Y0, Z1)); V.Add(FVector( NetHalfThick, Y1, Z1));
+		T.Add(B+4); T.Add(B+5); T.Add(B+6); T.Add(B+4); T.Add(B+6); T.Add(B+7);
 
 		for (int i = 0; i < 8; i++)
 		{
@@ -305,11 +339,6 @@ class ACourt : AActor
 			UV.Add(FVector2D(0, 0));
 			C.Add(Col);
 		}
-
-		// NOTE: this only fills the arrays — the CALLER creates the mesh section.
-		// This used to also create section 0 itself, so the tape (section 1) call
-		// overwrote the band's geometry into section 0 and the net band never
-		// existed as its own section at all.
 	}
 
 	// Court boundary lines and center line
