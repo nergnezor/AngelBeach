@@ -25,7 +25,7 @@ class AEnvironment : AActor
 		// The vertex-colour engine debug material used here before never applied in
 		// a packaged build, so the water rendered in the fallback material's flat
 		// cream instead of blue — which is why the horizon had no water in it at
-		// all on device. See CourtMaterials.as.
+		// all on device. see the ApplySolidColorMaterial helper at the bottom of Court.as.
 		ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
 	}
 
