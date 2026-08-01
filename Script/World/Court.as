@@ -24,6 +24,15 @@ class ACourt : AActor
 	const float PostRadius      = 5.0f;
 	const float LineWidth       = 5.0f;
 
+	// Surface colours, driven into a solid-colour material per section
+	// (see CourtMaterials.as). Plain members, not const: every other const in this
+	// file is a primitive, and const object members are not worth the compile risk.
+	private FLinearColor SandBaseColor = FLinearColor(0.93f, 0.83f, 0.60f, 1.0f);
+	private FLinearColor NetBandColor  = FLinearColor(0.05f, 0.05f, 0.06f, 1.0f);
+	private FLinearColor NetTapeColor  = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
+	private FLinearColor LineColor     = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
+	private FLinearColor PostColor     = FLinearColor(0.80f, 0.80f, 0.80f, 1.0f);
+
 	// --- Deformable sand heightfield ---
 	const int   SandGridX    = 80;      // cells along X
 	const int   SandGridY    = 48;      // cells along Y
@@ -140,17 +149,14 @@ class ACourt : AActor
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			SandColors(), SandTan, true, false);
 
-		// SandMesh never had a material assigned, on any platform — an unassigned
-		// ProceduralMeshComponent section renders with the engine's checkerboard
-		// "no material" placeholder, and SandColors() (the per-vertex sand tint /
-		// crater-darkening feedback from footsteps) was computed but never seen.
-		// VertexColorMaterial is Unlit and reads vertex colour directly, so it
-		// shows the real sand colour without depending on scene lighting — same
-		// material BuildNet() already uses below for the same reason.
-		UMaterialInterface SandMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
-		if (SandMat != nullptr)
-			SandMesh.SetMaterial(0, SandMat);
+		// The sand is the mesh that made the packaged-build material bug obvious: it
+		// is the only section whose UVs span 0..1, so the engine's fallback material
+		// stretched its checker texture right across the court. See CourtMaterials.as
+		// for why /Engine/EngineDebugMaterials/VertexColorMaterial (used here before)
+		// never applied on Android. SandColors() still writes the per-vertex crater
+		// tint into the section; a solid-colour material cannot show it, but the data
+		// is there for an authored vertex-colour material later.
+		ApplySolidColorMaterial(SandMesh, 0, SandBaseColor);
 	}
 
 	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
@@ -161,7 +167,8 @@ class ACourt : AActor
 		{
 			float depth = Math::Clamp(-SandHeight[i] / -SandMinZ, 0.0f, 1.0f);
 			float shade = 1.0f - depth * 0.35f;
-			C.Add(FLinearColor(0.93f * shade, 0.83f * shade, 0.60f * shade, 1));
+			C.Add(FLinearColor(SandBaseColor.R * shade,
+				SandBaseColor.G * shade, SandBaseColor.B * shade, 1));
 		}
 		return C;
 	}
@@ -241,8 +248,12 @@ class ACourt : AActor
 	// white top tape — NOT a solid coloured wall. The previous version used the
 	// engine debug material M_SimpleTranslucent, which ignores vertex colour and
 	// rendered as a solid red sheet. Here the net band sits just under the top
-	// (NetMeshTopZ..NetHeight is the white tape; the band hangs below it) and uses
-	// the unlit vertex-colour material so the colour + alpha actually apply.
+	// (NetMeshTopZ..NetHeight is the white tape; the band hangs below it).
+	// The band is currently OPAQUE dark rather than see-through: the translucent
+	// engine debug material it used before does not apply in a packaged build at
+	// all (see CourtMaterials.as), and no shipping engine material is both
+	// translucent and colour-parameterised. A real see-through net wants net-shaped
+	// geometry (thin strips) or an authored translucent material.
 	private void BuildNet()
 	{
 		float HW = CourtHalfWidth + 30.0f;
@@ -250,38 +261,26 @@ class ACourt : AActor
 		float BandTop = NetHeight - TapeHeight;        // mesh hangs below the tape
 		const float BandBottom = 100.0f;               // net mesh stops ~1m off the sand
 
-		// --- Section 0: net mesh band, dark + mostly transparent (you see through it)
+		// --- Section 0: net mesh band, dark
 		{
 			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
 			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
-			FLinearColor MeshColor = FLinearColor(0.02f, 0.02f, 0.02f, 0.45f); // near-black, ~45% opaque
 
-			AddNetQuad(V, T, N, UV, C, MeshColor, BandBottom, BandTop, HW);
+			AddNetQuad(V, T, N, UV, C, NetBandColor, BandBottom, BandTop, HW);
 			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 
-			UMaterialInterface NetMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-				"/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"));
-			if (NetMat != nullptr)
-			{
-				UMaterialInstanceDynamic MID = NetMesh.CreateDynamicMaterialInstance(0, NetMat);
-				if (MID != nullptr)
-					MID.SetVectorParameterValue(n"Color", MeshColor);
-			}
+			ApplySolidColorMaterial(NetMesh, 0, NetBandColor);
 		}
 
-		// --- Section 1: opaque white top tape — the classic visual cue for the net line
+		// --- Section 1: white top tape — the classic visual cue for the net line
 		{
 			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
 			TArray<FVector2D> UV; TArray<FLinearColor> C; TArray<FProcMeshTangent> Tan;
-			FLinearColor White = FLinearColor(0.95f, 0.95f, 0.95f, 1.0f);
 
-			AddNetQuad(V, T, N, UV, C, White, BandTop, NetHeight, HW);
+			AddNetQuad(V, T, N, UV, C, NetTapeColor, BandTop, NetHeight, HW);
 			NetMesh.CreateMeshSection_LinearColor(1, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 
-			UMaterialInterface VCMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-				"/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
-			if (VCMat != nullptr)
-				NetMesh.SetMaterial(1, VCMat);
+			ApplySolidColorMaterial(NetMesh, 1, NetTapeColor);
 		}
 	}
 
@@ -291,9 +290,6 @@ class ACourt : AActor
 		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
 		float Z0, float Z1, float HW)
 	{
-		TArray<FProcMeshTangent> Tan;
-		TArray<FVector2D> EmptyUV;
-
 		// Front face
 		V.Add(FVector(-NetHalfThick, -HW, Z0)); V.Add(FVector(-NetHalfThick,  HW, Z0));
 		V.Add(FVector(-NetHalfThick,  HW, Z1)); V.Add(FVector(-NetHalfThick, -HW, Z1));
@@ -310,8 +306,10 @@ class ACourt : AActor
 			C.Add(Col);
 		}
 
-		NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
-			EmptyUV, EmptyUV, EmptyUV, C, Tan, false, false);
+		// NOTE: this only fills the arrays — the CALLER creates the mesh section.
+		// This used to also create section 0 itself, so the tape (section 1) call
+		// overwrote the band's geometry into section 0 and the net band never
+		// existed as its own section at all.
 	}
 
 	// Court boundary lines and center line
@@ -346,10 +344,14 @@ class ACourt : AActor
 			TArray<FLinearColor>(), Tan, false, false);
 
 		TArray<FLinearColor> C;
-		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(1,1,1,1));
+		for (int i = 0; i < V.Num(); i++) C.Add(LineColor);
 		LinesMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			C, Tan, false);
+
+		// Never had a material at all — the court lines were drawn in whatever the
+		// engine's fallback material happened to look like.
+		ApplySolidColorMaterial(LinesMesh, 0, LineColor);
 	}
 
 	private void AddLine(TArray<FVector>& Verts, TArray<int32>& Tris,
@@ -389,10 +391,13 @@ class ACourt : AActor
 			TArray<FLinearColor>(), Tan, false, false);
 
 		TArray<FLinearColor> C;
-		for (int i = 0; i < V.Num(); i++) C.Add(FLinearColor(0.8f, 0.8f, 0.8f, 1));
+		for (int i = 0; i < V.Num(); i++) C.Add(PostColor);
 		PostsMesh.UpdateMeshSection_LinearColor(0, V, N, UV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			C, Tan, false);
+
+		// Never had a material either (same as BuildLines above).
+		ApplySolidColorMaterial(PostsMesh, 0, PostColor);
 	}
 
 	private void AddCylinder(TArray<FVector>& Verts, TArray<int32>& Tris,
