@@ -14,16 +14,19 @@ class AEnvironment : AActor
 	const float WaterExtent = 60000.0f;   // huge, reaches the horizon
 	const float WaterZ = -5.0f;           // just below the sand
 
+	// Dusky blue water that picks up a little warm sunset.
+	private FLinearColor WaterColor = FLinearColor(0.10f, 0.20f, 0.32f, 1.0f);
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		UMaterialInterface VCMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
-
 		BuildWater();
 
-		if (VCMat != nullptr)
-			WaterMesh.SetMaterial(0, VCMat);
+		// The vertex-colour engine debug material used here before never applied in
+		// a packaged build, so the water rendered in the fallback material's flat
+		// cream instead of blue — which is why the horizon had no water in it at
+		// all on device. See CourtMaterials.as.
+		ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
 	}
 
 	// Flat water plane (a big quad) tinted a deep sunset-reflecting teal/blue with a
@@ -43,9 +46,7 @@ class AEnvironment : AActor
 		V.Add(FVector( E,  E, WaterZ)); V.Add(FVector(-E,  E, WaterZ));
 		for (int i = 0; i < 4; i++) { N.Add(FVector(0, 0, 1)); UV.Add(FVector2D(0, 0)); }
 
-		// Dusky blue water that picks up a little warm sunset.
-		FLinearColor Water = FLinearColor(0.10f, 0.20f, 0.32f, 1.0f);
-		for (int i = 0; i < 4; i++) C.Add(Water);
+		for (int i = 0; i < 4; i++) C.Add(WaterColor);
 
 		T.Add(0); T.Add(1); T.Add(2);
 		T.Add(0); T.Add(2); T.Add(3);
