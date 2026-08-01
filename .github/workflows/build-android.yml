@@ -332,21 +332,19 @@ jobs:
           NOTES=""
           if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ] && \
              git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            NOTES=$(git log --no-merges --format='- %s' "${BEFORE}..${GITHUB_SHA}" || true)
+            NOTES=$(git log --no-merges --format='%s' "${BEFORE}..${GITHUB_SHA}" || true)
           fi
           # Fallbacks: workflow_dispatch has no before-SHA, and a force push or a
           # shallow-but-deepened history can leave the range empty or unusable.
           if [ -z "$NOTES" ]; then
-            NOTES=$(git log --no-merges --format='- %s' -n 5 "$GITHUB_SHA" || true)
+            NOTES=$(git log --no-merges --format='%s' -n 5 "$GITHUB_SHA" || true)
           fi
-          if [ -z "$NOTES" ]; then
-            NOTES="- Build $(git rev-parse --short "$GITHUB_SHA")"
-          fi
-
-          {
-            printf '%s\n\n' "$NOTES"
-            printf 'Build %s (%s)\n' "$GITHUB_RUN_NUMBER" "$(git rev-parse --short "$GITHUB_SHA")"
-          } > "$RUNNER_TEMP/release-notes.txt"
+          # release_notes.py groups these by Conventional Commit type (New /
+          # Fixes / Performance / Under the hood / ...) and keeps the result
+          # inside Play's 500-character limit.
+          printf '%s\n' "$NOTES" | python3 scripts/release_notes.py \
+            --footer "Build $GITHUB_RUN_NUMBER ($(git rev-parse --short "$GITHUB_SHA"))" \
+            > "$RUNNER_TEMP/release-notes.txt"
 
           echo "----- release notes -----"
           cat "$RUNNER_TEMP/release-notes.txt"

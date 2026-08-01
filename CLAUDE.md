@@ -104,3 +104,26 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
 - **Keep the repo small: no binary assets in git.** `.gitignore` excludes `Content/Characters/`,
   `Content/*.uasset`, `Content/*.umap` (except `CourtLevel.umap`). Mesh/skeleton sources live in
   engine plugins (MoverExamples), not the repo. The Anim BP is authored in-editor and not tracked.
+
+### Commit messages — these become the Play release notes
+
+Write subjects as **Conventional Commits**: `type(scope): subject`. Every push to `main`
+publishes to Play Internal Testing, and `scripts/release_notes.py` groups the commit
+subjects of that push by type into the "What's new" testers see. The type picks the section:
+
+| type | section | | type | section |
+|---|---|---|---|---|
+| `feat` | **New** | | `revert` | **Reverted** |
+| `fix` | **Fixes** | | `build` `chore` `ci` `docs` `refactor` `style` `test` | **Under the hood** |
+| `perf` | **Performance** | | anything unprefixed | **Other** |
+
+- A `!` before the colon (`feat!:`, `fix(ai)!:`) moves the line to a **Breaking** section at the top.
+- The type prefix is stripped from gameplay lines (under "Fixes", a leading `fix:` is noise) but
+  kept on plumbing ones, so a `ci:` line reads as plumbing rather than as a gameplay change.
+- **The subject is player-facing.** Write what changed, not what you touched:
+  `fix(court): sand renders as sand instead of a checkerboard`, not `fix: material`.
+- Merge commits are skipped, so a merge subject never has to carry meaning.
+- Play caps notes at 500 chars; the script trims lowest-priority sections first and appends
+  "…and N more" rather than silently dropping commits. Preview any range locally:
+
+      git log --no-merges --format='%s' <from>..<to> | python3 scripts/release_notes.py
