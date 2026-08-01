@@ -2,7 +2,7 @@
 // The SKY is owned by SkyAtmosphere (spawned in GameMode) — it provides the real
 // sun disc + horizon glow for the lens flare. A procedural gradient dome was tried
 // here but it just fought the atmosphere (which paints over it), so it was removed;
-// only the water remains. Water uses an unlit vertex-colour material.
+// only the water remains.
 class AEnvironment : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)
@@ -25,8 +25,26 @@ class AEnvironment : AActor
 		// The vertex-colour engine debug material used here before never applied in
 		// a packaged build, so the water rendered in the fallback material's flat
 		// cream instead of blue — which is why the horizon had no water in it at
-		// all on device. see the ApplySolidColorMaterial helper at the bottom of Court.as.
+		// all on device. See ACourt::ApplySolidColorMaterial for the full rationale.
 		ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
+	}
+
+	// Deliberate duplicate of ACourt::ApplySolidColorMaterial (see there for why
+	// BasicShapeMaterial and what it trades off). It cannot be shared: this fork
+	// compiles each .as file as its own module, so a global function is only
+	// visible inside its own file — nothing in Script/ calls a global across files.
+	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
+	{
+		if (Comp == nullptr) return nullptr;
+
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (Base == nullptr) return nullptr;
+
+		UMaterialInstanceDynamic MID = Comp.CreateDynamicMaterialInstance(Section, Base);
+		if (MID != nullptr)
+			MID.SetVectorParameterValue(n"Color", Color);
+		return MID;
 	}
 
 	// Flat water plane (a big quad) tinted a deep sunset-reflecting teal/blue with a

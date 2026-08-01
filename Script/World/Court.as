@@ -25,7 +25,7 @@ class ACourt : AActor
 	const float LineWidth       = 5.0f;
 
 	// Surface colours, driven into a solid-colour material per section
-	// (see the ApplySolidColorMaterial helper at the bottom of Court.as). Plain members, not const: every other const in this
+	// (see ACourt::ApplySolidColorMaterial). Plain members, not const: every other const in this
 	// file is a primitive, and const object members are not worth the compile risk.
 	private FLinearColor SandBaseColor = FLinearColor(0.93f, 0.83f, 0.60f, 1.0f);
 	private FLinearColor NetBandColor  = FLinearColor(0.05f, 0.05f, 0.06f, 1.0f);
@@ -151,7 +151,7 @@ class ACourt : AActor
 
 		// The sand is the mesh that made the packaged-build material bug obvious: it
 		// is the only section whose UVs span 0..1, so the engine's fallback material
-		// stretched its checker texture right across the court. see the ApplySolidColorMaterial helper at the bottom of Court.as
+		// stretched its checker texture right across the court. see ACourt::ApplySolidColorMaterial
 		// for why /Engine/EngineDebugMaterials/VertexColorMaterial (used here before)
 		// never applied on Android. SandColors() still writes the per-vertex crater
 		// tint into the section; a solid-colour material cannot show it, but the data
@@ -251,7 +251,7 @@ class ACourt : AActor
 	// (NetMeshTopZ..NetHeight is the white tape; the band hangs below it).
 	// The band is currently OPAQUE dark rather than see-through: the translucent
 	// engine debug material it used before does not apply in a packaged build at
-	// all (see the ApplySolidColorMaterial helper at the bottom of Court.as), and no shipping engine material is both
+	// all (see ACourt::ApplySolidColorMaterial), and no shipping engine material is both
 	// translucent and colour-parameterised. A real see-through net wants net-shaped
 	// geometry (thin strips) or an authored translucent material.
 	private void BuildNet()
@@ -425,58 +425,61 @@ class ACourt : AActor
 			Tris.Add(A);   Tris.Add(B+1); Tris.Add(A+1);
 		}
 	}
-}
 
-// Shipping-safe solid-colour material for the procedural (sand/net/lines/posts/
-// water) meshes. Lives at the bottom of Court.as rather than in its own file on
-// purpose: the cook picks scripts up via a hot reload, which does not discover
-// NEW .as files, so a helper in a new file compiles to nothing and every call
-// site fails with "No matching signatures".
-//
-// WHY THIS EXISTS — do not go back to /Engine/EngineDebugMaterials/*:
-// Court.as and Environment.as used to load VertexColorMaterial and
-// M_SimpleUnlitTranslucent from /Engine/EngineDebugMaterials/. Those render fine
-// in the editor but NEVER applied in a packaged Android build: every procedural
-// mesh came out with the engine's own fallback material instead. The give-away is
-// visible in any device screenshot — the sand is the only mesh whose UVs span
-// 0..1 (BuildSand), and it is the only one showing a checkerboard, because the
-// fallback material's checker texture gets stretched across that UV range; every
-// other mesh sets UV (0,0) on all verts, samples one texel, and comes out flat
-// cream (posts, court lines, and the water plane that should be filling the
-// horizon in blue). Force-cooking the debug materials via AlwaysCookMaps did not
-// help — they are editor/debug content and are not usable material assets in a
-// cooked Shipping build.
-//
-// BasicShapeMaterial is ordinary shipping content (it is the material the
-// /Engine/BasicShapes meshes use, and SpawnFallbackBox in VolleyballPlayer.as
-// already relies on it) and exposes a "Color" vector parameter, so a Dynamic
-// Material Instance per section gives each mesh its colour.
-//
-// TRADE-OFFS this makes, both deliberate:
-//  - It is LIT, where the debug materials were unlit. Sand/water now take the
-//    sunset directional light, which is what you want anyway.
-//  - It is OPAQUE and ignores vertex colour. So the sand's per-vertex crater/
-//    footprint darkening (SandColors) and the net band's see-through alpha are
-//    not rendered. The vertex colours are still written into the mesh sections,
-//    so an authored vertex-colour material would bring the crater feedback back
-//    for free. A genuinely see-through net needs either an authored translucent
-//    material or net-shaped geometry (thin strips) instead of a solid quad.
-//
-// Note the material is static-mesh-only: ProceduralMeshComponent is fine (it uses
-// the same local vertex factory), but do NOT use it on the skeletal player mesh —
-// that was tried and rejected at runtime with "missing bUsedWithSkeletalMesh=True!".
-// Typed to UProceduralMeshComponent rather than the UMeshComponent base because
-// this fork's bindings do not implicitly upcast the component handle.
-UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
-{
-	if (Comp == nullptr) return nullptr;
+	// Shipping-safe solid-colour material for this actor's procedural mesh sections.
+	//
+	// WHY THIS EXISTS — do not go back to /Engine/EngineDebugMaterials/*:
+	// Court.as and Environment.as used to load VertexColorMaterial and
+	// M_SimpleUnlitTranslucent from /Engine/EngineDebugMaterials/. Those render fine
+	// in the editor but NEVER applied in a packaged Android build: every procedural
+	// mesh came out with the engine's own fallback material instead. The give-away is
+	// visible in any device screenshot — the sand is the only mesh whose UVs span
+	// 0..1 (BuildSand), and it is the only one showing a checkerboard, because the
+	// fallback material's checker texture gets stretched across that UV range; every
+	// other mesh sets UV (0,0) on all verts, samples one texel, and comes out flat
+	// cream (posts, court lines, and the water plane that should be filling the
+	// horizon in blue). Force-cooking the debug materials via AlwaysCookMaps did not
+	// help — they are editor/debug content and are not usable material assets in a
+	// cooked Shipping build.
+	//
+	// BasicShapeMaterial is ordinary shipping content (it is the material the
+	// /Engine/BasicShapes meshes use, and SpawnFallbackBox in VolleyballPlayer.as
+	// already relies on it) and exposes a "Color" vector parameter, so a Dynamic
+	// Material Instance per section gives each mesh its colour.
+	//
+	// TRADE-OFFS this makes, both deliberate:
+	//  - It is LIT, where the debug materials were unlit. Sand/water now take the
+	//    sunset directional light, which is what you want anyway.
+	//  - It is OPAQUE and ignores vertex colour. So the sand's per-vertex crater/
+	//    footprint darkening (SandColors) and the net band's see-through alpha are
+	//    not rendered. The vertex colours are still written into the mesh sections,
+	//    so an authored vertex-colour material would bring the crater feedback back
+	//    for free. A genuinely see-through net needs either an authored translucent
+	//    material or net-shaped geometry (thin strips) instead of a solid quad.
+	//
+	// A PRIVATE METHOD, deliberately duplicated in AEnvironment rather than shared:
+	// this fork compiles each .as file as its own module, so a global function is
+	// only visible inside its own file (note nothing in Script/ calls a global across
+	// files — MotionPlan.as's MB_* helpers are used only within MotionPlan.as). A
+	// shared helper in a new file is worse still: the cook loads scripts via a hot
+	// reload, which does not even discover new .as files.
+	//
+	// Note the material is static-mesh-only: ProceduralMeshComponent is fine (it uses
+	// the same local vertex factory), but do NOT use it on the skeletal player mesh —
+	// that was tried and rejected at runtime with "missing bUsedWithSkeletalMesh=True!".
+	// Typed to UProceduralMeshComponent rather than the UMeshComponent base because
+	// this fork's bindings do not implicitly upcast the component handle.
+	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
+	{
+		if (Comp == nullptr) return nullptr;
 
-	UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
-		"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	if (Base == nullptr) return nullptr;
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (Base == nullptr) return nullptr;
 
-	UMaterialInstanceDynamic MID = Comp.CreateDynamicMaterialInstance(Section, Base);
-	if (MID != nullptr)
-		MID.SetVectorParameterValue(n"Color", Color);
-	return MID;
+		UMaterialInstanceDynamic MID = Comp.CreateDynamicMaterialInstance(Section, Base);
+		if (MID != nullptr)
+			MID.SetVectorParameterValue(n"Color", Color);
+		return MID;
+	}
 }
