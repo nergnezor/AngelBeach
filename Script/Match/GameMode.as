@@ -100,11 +100,23 @@ class ABeachVolleyballGameMode : AGameModeBase
 			{
 				// Thin, distant haze only — NOT a thick coloured band over the court.
 				// The previous dense volumetric fog read as smoke, not a sunset.
+				//
+				// On device the old start distance saturated everything past the
+				// court to the inscattering colour: the sea, the far sand and the
+				// sky all came out as the same flat cream, so the water was
+				// invisible. Pushing the start out to 3500 clears the court and the
+				// near water (~2000-3000 from the match camera) so the sea reads
+				// blue again, while everything further still fades to warm haze.
+				//
+				// The DENSITY deliberately stays where it is. Android disables
+				// SkyAtmosphere (Config/Android/AndroidEngine.ini), so this fog is
+				// the only thing painting the sky up there — thinning it does not
+				// just soften the haze, it turns the sky black.
 				FC.SetFogDensity(0.002f);
 				FC.SetFogHeightFalloff(0.5f);
 				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
 				FC.SetVolumetricFog(false);
-				FC.SetStartDistance(1500.0f);   // no fog up close; only far away
+				FC.SetStartDistance(3500.0f);   // no fog up close; only far away
 				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.55f, 0.25f));
 				FC.SetDirectionalInscatteringExponent(8.0f);
 			}
