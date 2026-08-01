@@ -83,7 +83,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 			if (SLC != nullptr)
 			{
 				SLC.SetRealTimeCapture(true);
-				SLC.SetIntensity(2.0f);
+				// Raised alongside the -1.5 EV exposure cut. The cut is aimed at the
+				// sun-lit sand that was clipping; without more ambient it would also
+				// crush the players, who are dark-skinned meshes sitting in their own
+				// shadow. More fill, less overall exposure: the sand comes down, the
+				// bodies do not go to pure black.
+				SLC.SetIntensity(3.0f);
 			}
 		}
 
@@ -113,7 +118,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// the only thing painting the sky up there — thinning it does not
 				// just soften the haze, it turns the sky black.
 				FC.SetFogDensity(0.002f);
-				FC.SetFogHeightFalloff(0.5f);
+				// Falloff 0.5 kept the fog hugging the ground, so a view ray aimed
+				// upward left the fog layer almost immediately and picked up no
+				// inscattering — which is why the top of frame measured (13,5,3),
+				// a black band, with a hard bright seam at the horizon. Android has
+				// no SkyAtmosphere to paint that region, so the fog layer has to be
+				// tall enough to be the sky. 0.1 stretches it up without thickening
+				// the haze at court level.
+				FC.SetFogHeightFalloff(0.1f);
 				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
 				FC.SetVolumetricFog(false);
 				FC.SetStartDistance(3500.0f);   // no fog up close; only far away
@@ -133,10 +145,19 @@ class ABeachVolleyballGameMode : AGameModeBase
 			PP.BloomIntensity = 0.8f;
 			PP.bOverride_BloomThreshold = true;
 			PP.BloomThreshold = 1.0f;
-			// Brighter exposure window so the COURT is lit, not crushed black to
-			// compensate for the bright sky. Bias up and raise the max.
+			// EXPOSURE — measured, not guessed. The scene was blowing out: sand
+			// rendered (243,225,196) at albedo 0.93, and after dropping the albedo
+			// by a third to 0.62 it still rendered (241,218,184). Linear red moved
+			// 0.878 -> 0.880, i.e. not at all, which only happens when the surface
+			// is clipping. Albedo was never the lever — the light was.
+			//
+			// Sand at 0.62 albedo wants to land near 0.35 linear (a proper tan), so
+			// the scene needs about 0.56x the light it was getting. That is -1.5 EV,
+			// hence +1.0 -> -0.5. Everything else falls out of clipping with it:
+			// line paint and net tape stop being pure white, and the near-black net
+			// cord finally reads as cord instead of grey.
 			PP.bOverride_AutoExposureBias = true;
-			PP.AutoExposureBias = 1.0f;
+			PP.AutoExposureBias = -0.5f;
 			PP.bOverride_AutoExposureMinBrightness = true;
 			PP.AutoExposureMinBrightness = 0.5f;
 			PP.bOverride_AutoExposureMaxBrightness = true;
