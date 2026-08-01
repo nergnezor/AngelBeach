@@ -123,13 +123,25 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// the sea, because a taller layer means more fog along the near-
 				// horizontal view rays that look at the water.
 				//
-				// SkyAtmosphere is back on for Android now (see
-				// Config/Android/AndroidEngine.ini), so the sky has its own source
-				// and the fog can go back to being just aerial perspective. 0.2 is
-				// the engine default: shallower than the 0.1 experiment, still
-				// taller than the original 0.5 so a failed atmosphere is no worse
-				// than what shipped.
-				FC.SetFogHeightFalloff(0.2f);
+				// Re-enabling SkyAtmosphere for Android did NOT bring a sky back —
+				// the top of frame went (17,8,3) -> (7,2,1), i.e. still black and
+				// slightly darker, since the falloff went the wrong way at the same
+				// time. Mobile really does want an authored sky mesh, so the
+				// original comment in AndroidEngine.ini was right after all.
+				//
+				// That leaves the fog as the sky whether we like it or not, so stop
+				// fighting it and make the layer genuinely tall.
+				//
+				// Note the samples so far do NOT settle this on their own: falloff
+				// 0.5 -> top (13,5,3), 0.2 -> (7,2,1), 0.1 -> (17,8,3) is not
+				// monotonic, and those shots differ in aspect ratio, framing and
+				// whether SkyAtmosphere was on, so "top of frame" is not even the
+				// same piece of sky. What they do agree on is that every value in
+				// that range leaves a black band, i.e. the seam stays in frame.
+				// 0.02 is five times taller than the tallest tried, chosen to put
+				// the seam decisively out of frame rather than to interpolate a
+				// trend. Court level is unaffected: the fog still starts at 3500.
+				FC.SetFogHeightFalloff(0.02f);
 				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
 				FC.SetVolumetricFog(false);
 				FC.SetStartDistance(3500.0f);   // no fog up close; only far away
