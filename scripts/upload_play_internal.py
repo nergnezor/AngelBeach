@@ -6,7 +6,7 @@ Usage:
       --package com.angelbeach.beachvolleyball \
       --aab path/to/app.aab \
       --service-account-json path/to/key.json \
-      [--track internal] [--release-notes "text"]
+      [--track internal] [--release-notes "text" | --release-notes-file notes.txt]
 
 Requires: pip install google-api-python-client google-auth
 
@@ -35,6 +35,40 @@ SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 CHUNK_SIZE = 8 * 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 300
 
+# Play rejects release notes longer than this (per language).
+MAX_RELEASE_NOTES = 500
+
+
+def load_release_notes(args):
+    """Release notes text, from --release-notes-file or --release-notes.
+
+    Truncated on a line boundary where possible so the text never ends
+    mid-sentence, since Play rejects anything over MAX_RELEASE_NOTES.
+    """
+    if args.release_notes_file:
+        with open(args.release_notes_file, encoding="utf-8") as f:
+            text = f.read()
+    else:
+        text = args.release_notes
+
+    text = text.strip()
+    if len(text) <= MAX_RELEASE_NOTES:
+        return text
+
+    kept = []
+    used = 0
+    for line in text.splitlines():
+        # +1 for the newline that rejoins this line to the previous one.
+        cost = len(line) + (1 if kept else 0)
+        if used + cost > MAX_RELEASE_NOTES - 2:
+            break
+        kept.append(line)
+        used += cost
+
+    if kept:
+        return "\n".join(kept) + "\n…"
+    return text[: MAX_RELEASE_NOTES - 1].rstrip() + "…"
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -43,6 +77,8 @@ def main():
     p.add_argument("--service-account-json", required=True)
     p.add_argument("--track", default="internal")
     p.add_argument("--release-notes", default="")
+    p.add_argument("--release-notes-file", default="",
+                   help="Read release notes from this file instead (multi-line friendly).")
     args = p.parse_args()
 
     creds = service_account.Credentials.from_service_account_file(
@@ -89,10 +125,10 @@ def main():
             "versionCodes": [str(version_code)],
             "status": "completed",
         }
-        if args.release_notes:
-            release["releaseNotes"] = [
-                {"language": "en-US", "text": args.release_notes}
-            ]
+        notes = load_release_notes(args)
+        if notes:
+            release["releaseNotes"] = [{"language": "en-US", "text": notes}]
+            print(f"Release notes ({len(notes)} chars):\n{notes}")
 
         service.edits().tracks().update(
             editId=edit_id,
