@@ -119,8 +119,12 @@ class ACourt : AActor
 	// Subdivided sand grid so it can be dented into craters and footprints.
 	private void BuildSand()
 	{
-		SandW = CourtHalfLength + 200.0f; // extra sand border
-		SandD = CourtHalfWidth + 200.0f;
+		// Wider sand skirt (was +200 on each side). At 2 m the beach ended barely
+		// outside the sidelines, so on device the court read as a slab dropped into
+		// the sea rather than a court marked out on a beach. 5 m gives it somewhere
+		// to sit; grid cells go from 25 to ~32 cm, still finer than a footprint.
+		SandW = CourtHalfLength + 500.0f; // extra sand border
+		SandD = CourtHalfWidth + 500.0f;
 		SandCellX = (2.0f * SandW) / SandGridX;
 		SandCellY = (2.0f * SandD) / SandGridY;
 
