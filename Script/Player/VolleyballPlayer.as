@@ -1561,11 +1561,23 @@ class AVolleyballPlayer : APawn
 	// Hook for subclasses (AI) to react when this player legally touches the ball.
 	protected void OnTouchRegistered() {}
 
+	// Team tint, fed to M_Mannequin's "Tint" parameter by ApplyTeamMaterial.
+	//
+	// Deliberately over-1.0 (HDR), the same trick Ball.as uses to make the ball
+	// actually read as yellow. "Tint" MULTIPLIES the mannequin's base texture,
+	// which is near-black charcoal, so the old sub-1.0 values could only ever make
+	// a dark body darker — on device both teams came out as identical black
+	// silhouettes, telling you nothing about who is who. Pushing the dominant
+	// channel well above 1 lifts the body out of the shadow and separates the two
+	// sides at a glance.
+	//
+	// (The parameter name is not a guess: unpacking the cooked APK shows
+	// M_Mannequin exposing Tint, EmissivePower, Roughness and Metallic.)
 	private FLinearColor TeamColor() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.15f, 0.35f, 0.85f, 1)
-			: FLinearColor(0.85f, 0.20f, 0.20f, 1);
+			? FLinearColor(0.30f, 0.70f, 1.90f, 1)
+			: FLinearColor(1.90f, 0.35f, 0.30f, 1);
 	}
 
 }
