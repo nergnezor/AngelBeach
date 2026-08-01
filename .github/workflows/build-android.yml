@@ -316,6 +316,40 @@ jobs:
           # Binaries/ caches the build job just left behind — and the freshly
           # collected Artifacts/aab/ we upload from below.
           clean: false
+          # The release notes below are built from commit subjects, and the
+          # default fetch-depth of 1 gives a single (usually merge) commit with
+          # nothing to describe.
+          fetch-depth: 50
+
+      - name: Compose release notes
+        run: |
+          # Play shows this as "What's new" to everyone on the internal track, so
+          # a bare 40-char commit SHA (what this used to send) tells a tester
+          # nothing. Use the actual commit subjects from this push, newest first.
+          # Merges are skipped — "Merge remote-tracking branch ..." is noise.
+          BEFORE="${{ github.event.before }}"
+          ZERO=0000000000000000000000000000000000000000
+          NOTES=""
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ] && \
+             git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            NOTES=$(git log --no-merges --format='- %s' "${BEFORE}..${GITHUB_SHA}" || true)
+          fi
+          # Fallbacks: workflow_dispatch has no before-SHA, and a force push or a
+          # shallow-but-deepened history can leave the range empty or unusable.
+          if [ -z "$NOTES" ]; then
+            NOTES=$(git log --no-merges --format='- %s' -n 5 "$GITHUB_SHA" || true)
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES="- Build $(git rev-parse --short "$GITHUB_SHA")"
+          fi
+
+          {
+            printf '%s\n\n' "$NOTES"
+            printf 'Build %s (%s)\n' "$GITHUB_RUN_NUMBER" "$(git rev-parse --short "$GITHUB_SHA")"
+          } > "$RUNNER_TEMP/release-notes.txt"
+
+          echo "----- release notes -----"
+          cat "$RUNNER_TEMP/release-notes.txt"
 
       - name: Write service account key
         run: |
@@ -347,7 +381,7 @@ jobs:
             --aab "$AAB" \
             --service-account-json "$RUNNER_TEMP/play-service-account.json" \
             --track internal \
-            --release-notes "CI build ${{ github.sha }}"
+            --release-notes-file "$RUNNER_TEMP/release-notes.txt"
 
       - name: Clean up service account key
         if: always()
