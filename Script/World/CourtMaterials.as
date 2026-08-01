@@ -33,7 +33,10 @@
 // Note it is static-mesh-only: ProceduralMeshComponent is fine (it uses the same
 // local vertex factory), but do NOT use it on the skeletal player mesh — that was
 // tried and rejected at runtime with "missing bUsedWithSkeletalMesh=True!".
-UMaterialInstanceDynamic ApplySolidColorMaterial(UMeshComponent Comp, int Section, FLinearColor Color)
+// Typed to UProceduralMeshComponent, not the UMeshComponent base: this fork's
+// bindings do not implicitly upcast the component handle, so a UMeshComponent
+// parameter fails to compile with "No matching signatures" at every call site.
+UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
 {
 	if (Comp == nullptr) return nullptr;
 
