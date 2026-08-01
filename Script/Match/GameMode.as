@@ -108,24 +108,28 @@ class ABeachVolleyballGameMode : AGameModeBase
 				//
 				// On device the old start distance saturated everything past the
 				// court to the inscattering colour: the sea, the far sand and the
-				// sky all came out as the same flat cream, so the water was
-				// invisible. Pushing the start out to 3500 clears the court and the
-				// near water (~2000-3000 from the match camera) so the sea reads
-				// blue again, while everything further still fades to warm haze.
+				// sky all came out as the same flat cream. Pushing the start out to
+				// 3500 clears the court and the near water (~2000-3000 from the
+				// match camera), while everything further still fades to warm haze.
+				// (That alone did NOT turn the sea blue — the water at that range is
+				// unfogged and still rendered warm, because it is reflecting the
+				// sky, and the sky was warm haze. Hence the SkyAtmosphere change.)
 				//
-				// The DENSITY deliberately stays where it is. Android disables
-				// SkyAtmosphere (Config/Android/AndroidEngine.ini), so this fog is
-				// the only thing painting the sky up there — thinning it does not
-				// just soften the haze, it turns the sky black.
 				FC.SetFogDensity(0.002f);
-				// Falloff 0.5 kept the fog hugging the ground, so a view ray aimed
-				// upward left the fog layer almost immediately and picked up no
-				// inscattering — which is why the top of frame measured (13,5,3),
-				// a black band, with a hard bright seam at the horizon. Android has
-				// no SkyAtmosphere to paint that region, so the fog layer has to be
-				// tall enough to be the sky. 0.1 stretches it up without thickening
-				// the haze at court level.
-				FC.SetFogHeightFalloff(0.1f);
+				// Stretching the fog layer upward (falloff 0.5 -> 0.1) was an attempt
+				// to make the fog double as the sky on Android, where SkyAtmosphere
+				// was switched off. It did not work — the top of frame went from
+				// (13,5,3) to (17,8,3), still black — and it made things worse for
+				// the sea, because a taller layer means more fog along the near-
+				// horizontal view rays that look at the water.
+				//
+				// SkyAtmosphere is back on for Android now (see
+				// Config/Android/AndroidEngine.ini), so the sky has its own source
+				// and the fog can go back to being just aerial perspective. 0.2 is
+				// the engine default: shallower than the 0.1 experiment, still
+				// taller than the original 0.5 so a failed atmosphere is no worse
+				// than what shipped.
+				FC.SetFogHeightFalloff(0.2f);
 				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
 				FC.SetVolumetricFog(false);
 				FC.SetStartDistance(3500.0f);   // no fog up close; only far away
