@@ -15,23 +15,26 @@
 // when an engine feature will not apply on mobile, build the thing out of
 // procedural geometry and the one material that is known to work.
 //
-// The dome sits INSIDE the fog's start distance on purpose. That keeps the
-// gradient unfogged, and it also truncates the visible sea to well within the
-// same distance — which should finally let the water show its own blue instead
-// of the warm haze it has been washed to in every screenshot so far.
+// The dome sits INSIDE the fog's start distance on purpose, so the gradient is
+// never hazed away.
+//
+// THE DOME IS ALSO THE SEA, and there is no water plane any more. A flat water
+// quad was tried for a long time and never once rendered blue: at the 3-9 degree
+// grazing angle this camera sees it at, a horizontal plane shows mostly
+// reflected sky, and BasicShapeMaterial appears to expose only "Color" — the
+// SetScalarParameterValue("Roughness") calls meant to fix that were silent
+// no-ops. Measuring at x=600 in build 175 settled it: every pixel from the
+// horizon down to the sand edge was (193,127,69), the dome's own warm horizon
+// band, with no water band at all. A distant wall and a flat plane are
+// indistinguishable at these angles, so the bands below the horizon are simply
+// coloured as sea and the whole specular problem goes away with the quad.
 class AEnvironment : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)
 	USceneComponent Root;
 
 	UPROPERTY(DefaultComponent, Attach = Root)
-	UProceduralMeshComponent WaterMesh;
-
-	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent SkyMesh;
-
-	const float WaterExtent = 60000.0f;   // huge; the dome cuts it off long before this
-	const float WaterZ = -5.0f;           // just below the sand
 
 	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
 	// match camera sits 1400 out) and stay under the fog's start distance so the
@@ -43,13 +46,14 @@ class AEnvironment : AActor
 	// back sand-coloured. 5000 gives the sea roughly 4000 units to be a sea in.
 	// The fog start moves with it (GameMode.as).
 	const float SkyRadius    = 5000.0f;
-	// 10x24 left the facets plainly visible on device — vertical seams down the
-	// sky and stair-steps between bands. The dome is a few thousand triangles
-	// either way, so buy the smoothness.
-	const int   SkyBands     = 18;
-	const int   SkySegments  = 48;
-	// Starts below the horizon so the water plane meets the dome wall with no gap
-	// (at -30 degrees the dome bottom is z=-1500, far under the water at z=-5).
+	// Each band is a separate mesh section, so band count is also the draw-call
+	// count for the sky — 40 is a deliberate ceiling. It is needed because a solid
+	// colour per band means the gradient can only ever be a staircase, and at 18
+	// bands the steps were visible as stripes across the sky. 32 segments is
+	// plenty around the horizontal now that the seams sit closer together.
+	const int   SkyBands     = 40;
+	const int   SkySegments  = 32;
+	// The dome runs well below the horizon because these lower bands ARE the sea.
 	const float SkyBottomDeg = -30.0f;
 
 	// THESE BLUES LOOK ABSURD ON PURPOSE — read this before "fixing" them.
@@ -65,11 +69,10 @@ class AEnvironment : AActor
 	// So the albedos are pre-divided by that gain. Blue above 1.0 is not a
 	// mistake: it is what it costs to land a dusk blue through a warm light.
 	//   zenith -> linear (0.015,0.035,0.090)
-	//   sea    -> linear (0.012,0.030,0.075)
+	//   sea    -> linear (0.010,0.023,0.096)
 	// If the lighting is ever retuned, re-measure the gain and redo this division
 	// rather than eyeballing new numbers.
-	private FLinearColor WaterColor = FLinearColor(0.04f, 0.19f, 1.12f, 1.0f);
-
+	private FLinearColor SkySeaColor     = FLinearColor(0.03f, 0.14f, 0.85f, 1.0f);
 	private FLinearColor SkyHorizonColor = FLinearColor(0.95f, 0.58f, 0.34f, 1.0f);
 	private FLinearColor SkyZenithColor  = FLinearColor(0.05f, 0.22f, 1.34f, 1.0f);
 
@@ -77,25 +80,6 @@ class AEnvironment : AActor
 	void BeginPlay()
 	{
 		BuildSky();
-		BuildWater();
-
-		// The vertex-colour engine debug material used here before never applied in
-		// a packaged build, so the water rendered in the fallback material's flat
-		// cream instead of blue. That is fixed, but the sea STILL measured
-		// (234,208,167) on device — flat cream, barely any variation, no blue.
-		//
-		// A dark blue albedo cannot turn warm cream by being lit, so what is
-		// showing is not the albedo: this is a mirror-flat horizontal plane viewed
-		// at a grazing angle, which is the worst case for specular. A smooth
-		// surface there reflects the bright warm sky straight into the camera and
-		// drowns the colour underneath. Roughen it so the sea scatters instead of
-		// mirroring, and keep it non-metallic.
-		UMaterialInstanceDynamic MID = ApplySolidColorMaterial(WaterMesh, 0, WaterColor);
-		if (MID != nullptr)
-		{
-			MID.SetScalarParameterValue(n"Roughness", 0.55f);
-			MID.SetScalarParameterValue(n"Metallic", 0.0f);
-		}
 	}
 
 	// Deliberate duplicate of ACourt::ApplySolidColorMaterial (see there for why
@@ -182,52 +166,42 @@ class AEnvironment : AActor
 			Math::Sin(Elevation) * SkyRadius);
 	}
 
-	// Horizon -> zenith, spread over the part of the sky you can actually SEE.
+	// Sea -> warm horizon -> zenith, over the part of the dome you can actually SEE.
 	//
 	// T runs 0..1 across the dome's full -30..90 degrees, but the match camera
-	// only ever shows about -5 to +45. Both earlier curves ignored that and put
-	// the interesting colour off-screen: sqrt(T) climbed too fast and bleached the
-	// horizon band, then T*T went the other way and left the top of frame only 39%
-	// of the way to zenith blue — measured (169,114,87), still warm, which is why
-	// the sky reads as one flat orange.
+	// shows very little of that. Getting this wrong has put the interesting colour
+	// off-screen twice already: sqrt(T) climbed too fast and bleached the horizon,
+	// then T*T went the other way and left the top of frame only 39% of the way to
+	// blue. Widening it to complete at 42 degrees was still too generous — in the
+	// letterboxed 2640x1080 view the top of frame is only about 20 degrees up, and
+	// the sky measured (166,121,121) there: mauve, not the intended blue.
 	//
-	// So remap: fully warm at the horizon (T=0.25, elevation 0) and fully at the
-	// zenith colour by T=0.60 (elevation 42), with a smoothstep between so the
-	// transition has no visible edge. Above that the sky just stays blue, which
-	// costs nothing since it is out of frame.
+	// So the transition completes at 25 degrees, and the band BELOW the horizon
+	// runs from the warm strip down into sea blue over about 12 degrees. What you
+	// get in frame is the classic sunset stack: dark sea, a bright warm band at
+	// the waterline, blue above.
 	private FLinearColor SkyBandColor(float T) const
 	{
-		float k = Math::Clamp((T - 0.25f) / 0.35f, 0.0f, 1.0f);
+		// Elevation 0 is T=0.25; -12 degrees is T=0.15; +25 degrees is T=0.458.
+		if (T <= 0.25f)
+		{
+			float k = Math::Clamp((T - 0.15f) / 0.10f, 0.0f, 1.0f);
+			k = k * k * (3.0f - 2.0f * k);
+			return Blend(SkySeaColor, SkyHorizonColor, k);
+		}
+
+		float k = Math::Clamp((T - 0.25f) / 0.208f, 0.0f, 1.0f);
 		k = k * k * (3.0f - 2.0f * k);
+		return Blend(SkyHorizonColor, SkyZenithColor, k);
+	}
+
+	private FLinearColor Blend(FLinearColor A, FLinearColor B, float K) const
+	{
 		return FLinearColor(
-			SkyHorizonColor.R + (SkyZenithColor.R - SkyHorizonColor.R) * k,
-			SkyHorizonColor.G + (SkyZenithColor.G - SkyHorizonColor.G) * k,
-			SkyHorizonColor.B + (SkyZenithColor.B - SkyHorizonColor.B) * k,
+			A.R + (B.R - A.R) * K,
+			A.G + (B.G - A.G) * K,
+			A.B + (B.B - A.B) * K,
 			1.0f);
 	}
 
-	// Flat water plane (a big quad) tinted a deep sunset-reflecting teal/blue with a
-	// warm sheen — vertex colour only, kept simple.
-	private void BuildWater()
-	{
-		TArray<FVector> V;
-		TArray<int32> T;
-		TArray<FVector> N;
-		TArray<FVector2D> UV;
-		TArray<FLinearColor> C;
-		TArray<FVector2D> NoUV;
-		TArray<FProcMeshTangent> Tan;
-
-		float E = WaterExtent;
-		V.Add(FVector(-E, -E, WaterZ)); V.Add(FVector( E, -E, WaterZ));
-		V.Add(FVector( E,  E, WaterZ)); V.Add(FVector(-E,  E, WaterZ));
-		for (int i = 0; i < 4; i++) { N.Add(FVector(0, 0, 1)); UV.Add(FVector2D(0, 0)); }
-
-		for (int i = 0; i < 4; i++) C.Add(WaterColor);
-
-		T.Add(0); T.Add(1); T.Add(2);
-		T.Add(0); T.Add(2); T.Add(3);
-
-		WaterMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
-	}
 }

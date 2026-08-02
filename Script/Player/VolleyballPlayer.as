@@ -9,6 +9,20 @@ class AVolleyballPlayer : APawn
 	UPROPERTY(DefaultComponent, Attach = Capsule)
 	USkeletalMeshComponent Mesh;
 
+	// Team identity, as a ring drawn on the sand under the player.
+	//
+	// It is a ring and not a coloured jersey because the body cannot be tinted.
+	// ApplyTeamMaterial feeds M_Mannequin's "Tint" parameter — the name is real,
+	// it shows up when the cooked APK is unpacked — but on device it changes
+	// nothing measurable: both sides came back (60,39,18), (69,46,23), (63,41,21),
+	// the same dark charcoal, whether tinted sub-1.0 or pushed to HDR. Rather than
+	// keep guessing at parameter names inside a material that cannot be opened
+	// here, put the team colour on geometry we control, using the same procedural
+	// mesh + BasicShapeMaterial path that already works for the court, the net and
+	// the sky.
+	UPROPERTY(DefaultComponent, Attach = Capsule)
+	UProceduralMeshComponent TeamRing;
+
 	float MoveSpeed = 450.0f;
 	// PLAYER gravity is ~2x earth (the ball keeps real -980): with real g the
 	// tuned jump heights hung airborne ~1.5s and read as moon-floating. Heavy
@@ -125,6 +139,75 @@ class AVolleyballPlayer : APawn
 
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
+		BuildTeamRing();
+	}
+
+	// Flat annulus on the sand in the player's team colour.
+	private void BuildTeamRing()
+	{
+		const int Segs = 24;
+		const float RInner = 42.0f;
+		const float ROuter = 58.0f;
+
+		TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+		TArray<FVector2D> UV; TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+		for (int i = 0; i < Segs; i++)
+		{
+			float A = 2.0f * PI * i / Segs;
+			float Cx = Math::Cos(A);
+			float Sy = Math::Sin(A);
+			V.Add(FVector(Cx * RInner, Sy * RInner, 0));
+			V.Add(FVector(Cx * ROuter, Sy * ROuter, 0));
+		}
+
+		for (int i = 0; i < Segs; i++)
+		{
+			int A0 = i * 2;
+			int B0 = ((i + 1) % Segs) * 2;
+			T.Add(A0); T.Add(B0);     T.Add(B0 + 1);
+			T.Add(A0); T.Add(B0 + 1); T.Add(A0 + 1);
+			// Reverse winding as well, so it reads from above whichever way the
+			// front face ends up pointing.
+			T.Add(A0); T.Add(B0 + 1); T.Add(B0);
+			T.Add(A0); T.Add(A0 + 1); T.Add(B0 + 1);
+		}
+
+		FLinearColor Col = TeamRingColor();
+		for (int i = 0; i < V.Num(); i++)
+		{
+			N.Add(FVector(0, 0, 1));
+			UV.Add(FVector2D(0, 0));
+			C.Add(Col);
+		}
+
+		TeamRing.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		TeamRing.SetCastShadow(false);
+
+		// Same helper as ACourt/AEnvironment, copied rather than shared: this fork
+		// compiles each .as file as its own module, so a global function is only
+		// visible inside its own file.
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (Base != nullptr)
+		{
+			UMaterialInstanceDynamic MID = TeamRing.CreateDynamicMaterialInstance(0, Base);
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Color", Col);
+		}
+	}
+
+	// Pre-divided by the measured per-channel light gain (0.314,0.162,0.067) — see
+	// the long note in Environment.as. Blue reaches the screen at 21% of red under
+	// this sunset, so an honest blue would read as grey; 3.0 in the blue channel is
+	// what it costs to actually look blue. Red is lifted too, but less, since it
+	// needs no help getting through.
+	private FLinearColor TeamRingColor() const
+	{
+		return (TeamSide == ETeam::Team_A)
+			? FLinearColor(0.10f, 0.60f, 3.00f, 1)
+			: FLinearColor(1.60f, 0.25f, 0.15f, 1);
 	}
 
 	// Visible placeholder so a player is never invisible if the mesh can't load
@@ -192,6 +275,12 @@ class AVolleyballPlayer : APawn
 
 	void UpdatePlayer(float DeltaTime)
 	{
+		// Pin the team ring to the sand. It hangs off the capsule so it follows the
+		// player around, but the capsule also rises on a jump, and a marker ring
+		// floating at head height would read as a bug rather than as a shadow.
+		// Cancelling the actor's Z keeps it flat on the beach at all times.
+		TeamRing.SetRelativeLocation(FVector(0, 0, 2.0f - GetActorLocation().Z));
+
 		// Crouch release runs FIRST, before any writer: with the decay at the
 		// end of the frame it subtracted from what dive/tuck/split-step had
 		// just asserted and ExtraCrouch sawtoothed ±0.04 at frame rate — the
