@@ -206,10 +206,22 @@ class AAIPlayer : AVolleyballPlayer
 	// While waiting at the baseline as the upcoming server, face the court — the
 	// serve ritual must not start with a 180° pirouette (the toss hand swings
 	// around with the turning body and the carry starts at the hip).
+	//
+	// Gated on bHolding (MoveToHold's "arrived and standing still" flag, set by
+	// the MoveToHold(ReadyPosition(), ...) call this same tick, just above ours
+	// in the dead-ball branch): forcing the net-facing unconditionally, from the
+	// moment the ball goes dead, held it for the ENTIRE walk back to the baseline
+	// spot — including legs whose actual travel was AWAY from the net. Facing
+	// net while translating away from it is a backward walk (MoveDirAngle ≈
+	// 180), which is exactly the "runs toward the net but moves backwards" look.
+	// Waiting for arrival means the turn happens while planted (pure rotation,
+	// no translation to mismatch), well before RunServeSequence needs it.
 	protected void PreFaceForServe()
 	{
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr || GS.ServingTeam != TeamSide || Role != EPlayerRole::Role_Back)
+			return;
+		if (!bHolding)
 			return;
 		FacingDir = FVector(-MySign(), 0, 0);
 		bHasFacing = true;
