@@ -19,15 +19,20 @@
 // never hazed away.
 //
 // THE DOME IS ALSO THE SEA, and there is no water plane any more. A flat water
-// quad was tried for a long time and never once rendered blue: at the 3-9 degree
-// grazing angle this camera sees it at, a horizontal plane shows mostly
-// reflected sky, and BasicShapeMaterial appears to expose only "Color" — the
-// SetScalarParameterValue("Roughness") calls meant to fix that were silent
-// no-ops. Measuring at x=600 in build 175 settled it: every pixel from the
-// horizon down to the sand edge was (193,127,69), the dome's own warm horizon
-// band, with no water band at all. A distant wall and a flat plane are
-// indistinguishable at these angles, so the bands below the horizon are simply
-// coloured as sea and the whole specular problem goes away with the quad.
+// quad was tried for a long time and never once rendered blue. Measuring at
+// x=600 in build 175 settled that it was not being drawn as sea at all: every
+// pixel from the horizon down to the sand edge was (193,127,69), the dome's own
+// warm horizon band, with no water band anywhere in between.
+//
+// CORRECTION to what this comment used to claim: BasicShapeMaterial does expose
+// a real "Roughness" scalar parameter (checked directly in
+// Engine/Content/BasicShapes/BasicShapeMaterial.uasset — it has both a
+// MaterialExpressionVectorParameter "Color" and a MaterialExpressionScalarParameter
+// "Roughness"), so the SetScalarParameterValue calls were NOT silent no-ops and
+// that was never the reason. The quad is gone anyway because a dome band is the
+// simpler thing: at these grazing angles a distant wall and a flat plane are
+// indistinguishable, and colouring the bands below the horizon as sea removes a
+// whole surface — and its reflections — rather than tuning them.
 class AEnvironment : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)

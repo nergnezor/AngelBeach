@@ -236,25 +236,21 @@ class AVolleyballPlayer : APawn
 	{
 		if (Mesh == nullptr) return;
 
-		// Keep the mesh's OWN material (M_Mannequin) and just tint it, instead of
-		// replacing every slot with /Engine/EngineMaterials/DefaultMaterial.
+		// Keep the mesh's own material and tint it, instead of replacing every slot
+		// with /Engine/EngineMaterials/DefaultMaterial (an old stopgap from when the
+		// body "came out flat and untextured on Android" — a diagnosis made while
+		// EVERY material in the scene was silently falling back to the engine
+		// default, which is exactly what that looks like on a skinned mesh).
 		//
-		// That replacement was a stopgap from the days when M_Mannequin "came out
-		// flat and untextured on Android". It is worth re-testing now, because the
-		// diagnosis behind it was made while EVERY material in the scene was
-		// silently falling back — the court, net, lines and water were all
-		// rendering in the engine fallback because they asked for editor debug
-		// materials that do not exist in a packaged build. Flat, untextured
-		// players are exactly what that same failure looks like on a skinned mesh.
-		//
-		// And the assets are demonstrably in the shipped container: unpacking the
-		// APK's IoStore paks shows M_Mannequin.uasset alongside T_Manny_01_D /
-		// _02_D / _BN / _MRA cooked as PF_ASTC_6x6. Nothing is missing to cook.
-		//
-		// Worst case this is neutral: DefaultMaterial has no "Color" parameter, so
-		// the stopgap was already drawing untinted grey bodies that read as black
-		// silhouettes against the sunset. If M_Mannequin really is broken on
-		// mobile, we land back on the engine fallback anyway — the same picture.
+		// THE PARAMETER IS "Paint Tint", WITH THE SPACE. This was wrong twice, and
+		// the tint silently did nothing both times, because setting a parameter that
+		// does not exist is a no-op rather than an error. Read straight off the
+		// assets: SKM_Manny_Simple uses MI_Manny_01_New and MI_Manny_02_New;
+		// MI_Manny_01_New is a child of M_Mannequin and overrides "Paint Tint";
+		// MI_Manny_02_New is a child of that and overrides "LogoTint". There is no
+		// parameter called "Tint" or "Color" anywhere in the chain — the earlier
+		// "Tint" guess came from misreading a run-together string in the cooked
+		// package, which was the tail of "LogoTint"/"Paint Tint".
 		int NumSlots = Mesh.GetNumMaterials();
 		for (int i = 0; i < NumSlots; i++)
 		{
@@ -262,13 +258,9 @@ class AVolleyballPlayer : APawn
 			if (SlotMat == nullptr) continue;
 
 			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, SlotMat);
-			// M_Mannequin exposes "Tint"; the engine fallback exposes neither. Set
-			// both names and let whichever exists win — a missing parameter is a
-			// no-op, not an error.
 			if (MID != nullptr)
 			{
-				MID.SetVectorParameterValue(n"Tint", TeamColor());
-				MID.SetVectorParameterValue(n"Color", TeamColor());
+				MID.SetVectorParameterValue(n"Paint Tint", TeamColor());
 			}
 		}
 	}
