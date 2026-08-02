@@ -1,8 +1,24 @@
-// Surrounding environment: a large water plane filling the land beyond the sand.
-// The SKY is owned by SkyAtmosphere (spawned in GameMode) — it provides the real
-// sun disc + horizon glow for the lens flare. A procedural gradient dome was tried
-// here but it just fought the atmosphere (which paints over it), so it was removed;
-// only the water remains.
+// Surrounding environment: the sea, and the SKY DOME that stands in for
+// SkyAtmosphere on mobile.
+//
+// WHY THERE IS A DOME AT ALL. Android has SkyAtmosphere disabled (it wants an
+// authored sky mesh; re-enabling it was tested and rendered nothing), so for a
+// long time nothing drew the sky and device screenshots had a black band across
+// the top of frame. Three attempts to make ExponentialHeightFog cover for it all
+// failed — falloff 0.5, 0.2 and 0.02 — because height fog only tints RENDERED
+// GEOMETRY. The bright region under the black band was never sky: it was the
+// water plane receding to the horizon, fully fogged. The "seam" was the horizon
+// itself, and above it there is no geometry for fog to colour. No fog setting
+// can paint an empty background.
+//
+// So the sky needs to BE geometry. This is the same move that fixed the net:
+// when an engine feature will not apply on mobile, build the thing out of
+// procedural geometry and the one material that is known to work.
+//
+// The dome sits INSIDE the fog's start distance on purpose. That keeps the
+// gradient unfogged, and it also truncates the visible sea to well within the
+// same distance — which should finally let the water show its own blue instead
+// of the warm haze it has been washed to in every screenshot so far.
 class AEnvironment : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)
@@ -11,15 +27,31 @@ class AEnvironment : AActor
 	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent WaterMesh;
 
-	const float WaterExtent = 60000.0f;   // huge, reaches the horizon
+	UPROPERTY(DefaultComponent, Attach = Root)
+	UProceduralMeshComponent SkyMesh;
+
+	const float WaterExtent = 60000.0f;   // huge; the dome cuts it off long before this
 	const float WaterZ = -5.0f;           // just below the sand
+
+	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
+	// match camera sits 1400 out) and stay under the fog's 3500 start distance.
+	const float SkyRadius    = 3000.0f;
+	const int   SkyBands     = 10;
+	const int   SkySegments  = 24;
+	// Starts below the horizon so the water plane meets the dome wall with no gap
+	// (at -30 degrees the dome bottom is z=-1500, far under the water at z=-5).
+	const float SkyBottomDeg = -30.0f;
 
 	// Dusky blue water that picks up a little warm sunset.
 	private FLinearColor WaterColor = FLinearColor(0.10f, 0.20f, 0.32f, 1.0f);
 
+	private FLinearColor SkyHorizonColor = FLinearColor(0.95f, 0.58f, 0.34f, 1.0f);
+	private FLinearColor SkyZenithColor  = FLinearColor(0.10f, 0.14f, 0.36f, 1.0f);
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
+		BuildSky();
 		BuildWater();
 
 		// The vertex-colour engine debug material used here before never applied in
@@ -57,6 +89,88 @@ class AEnvironment : AActor
 		if (MID != nullptr)
 			MID.SetVectorParameterValue(n"Color", Color);
 		return MID;
+	}
+
+	// Banded dome: each elevation band is its own mesh section with its own solid
+	// colour, so a stepped gradient stands in for a real sky material.
+	private void BuildSky()
+	{
+		// CRITICAL: a closed dome around the whole scene that casts shadows would
+		// occlude the directional light — the sun sits at pitch -6, so its rays
+		// come in through the dome WALL — and put the entire court in shadow.
+		SkyMesh.SetCastShadow(false);
+
+		for (int b = 0; b < SkyBands; b++)
+		{
+			float t0 = float(b) / float(SkyBands);
+			float t1 = float(b + 1) / float(SkyBands);
+			float E0 = (SkyBottomDeg + (90.0f - SkyBottomDeg) * t0) * PI / 180.0f;
+			float E1 = (SkyBottomDeg + (90.0f - SkyBottomDeg) * t1) * PI / 180.0f;
+
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+			FLinearColor Col = SkyBandColor((t0 + t1) * 0.5f);
+
+			for (int s = 0; s < SkySegments; s++)
+			{
+				float A0 = 2.0f * PI * s / SkySegments;
+				float A1 = 2.0f * PI * (s + 1) / SkySegments;
+
+				int B = V.Num();
+				V.Add(SkyPoint(A0, E0)); V.Add(SkyPoint(A1, E0));
+				V.Add(SkyPoint(A1, E1)); V.Add(SkyPoint(A0, E1));
+
+				// Both windings. The dome is viewed from the inside, and emitting
+				// the back faces too costs a few hundred triangles while making it
+				// impossible to get the winding order backwards and end up with an
+				// invisible sky.
+				T.Add(B+0); T.Add(B+1); T.Add(B+2);
+				T.Add(B+0); T.Add(B+2); T.Add(B+3);
+				T.Add(B+0); T.Add(B+2); T.Add(B+1);
+				T.Add(B+0); T.Add(B+3); T.Add(B+2);
+
+				for (int i = 0; i < 4; i++)
+				{
+					// Normal up, not outward: the material is lit, and a uniform
+					// normal means every band takes identical lighting. The gradient
+					// then comes purely from the albedos below, which is predictable
+					// — an outward normal would shade each band by its own angle to
+					// the sun and fight the gradient.
+					N.Add(FVector(0, 0, 1));
+					UV.Add(FVector2D(0, 0));
+					C.Add(Col);
+				}
+			}
+
+			SkyMesh.CreateMeshSection_LinearColor(b, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			ApplySolidColorMaterial(SkyMesh, b, Col);
+		}
+	}
+
+	private FVector SkyPoint(float Azimuth, float Elevation) const
+	{
+		float CosE = Math::Cos(Elevation);
+		return FVector(Math::Cos(Azimuth) * CosE * SkyRadius,
+			Math::Sin(Azimuth) * CosE * SkyRadius,
+			Math::Sin(Elevation) * SkyRadius);
+	}
+
+	// Horizon -> zenith. Squaring the parameter keeps the warm band thick down at
+	// the horizon and holds the cool colour up high, the way a sunset actually
+	// sits. (Square-ROOTING it, tried first, does the exact opposite: sqrt climbs
+	// fastest near zero, so the horizon band came out already half-way to zenith
+	// blue at 0.52 albedo instead of staying at 0.95.)
+	private FLinearColor SkyBandColor(float T) const
+	{
+		float c = Math::Clamp(T, 0.0f, 1.0f);
+		float k = c * c;
+		return FLinearColor(
+			SkyHorizonColor.R + (SkyZenithColor.R - SkyHorizonColor.R) * k,
+			SkyHorizonColor.G + (SkyZenithColor.G - SkyHorizonColor.G) * k,
+			SkyHorizonColor.B + (SkyZenithColor.B - SkyHorizonColor.B) * k,
+			1.0f);
 	}
 
 	// Flat water plane (a big quad) tinted a deep sunset-reflecting teal/blue with a
