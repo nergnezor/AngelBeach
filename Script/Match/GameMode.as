@@ -33,6 +33,30 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// Set to 1.0 for normal speed.
 	float TimeScale = 1.0f;
 
+	// --- Mobile stand-ins for what Lumen gives desktop for free -----------------
+	// Desktop is the reference look; these exist only to let mobile land on the same
+	// image. Tune them against a real desktop capture, not by eye — and capture it at
+	// FULL quality (MatchFilmer without -es31). The ES3.1 preview is a different
+	// picture: it put the body average at (68,44,26) while the actual desktop build
+	// renders (71,49,40) in the same shot, so tuning to the preview aims at the wrong
+	// target. Mobile currently lands on (68,54,38) against that (71,49,40).
+	const FLinearColor SandBounceColor         = FLinearColor(0.55f, 0.30f, 0.12f, 1.0f);
+	const float        MobileSkyLightIntensity = 5.2f;
+	// The SkyLight's UPPER hemisphere captures the dome, which is blue-violet, so a
+	// plain intensity boost fills the bodies with cool light. Tinting the SkyLight warm
+	// biases it back toward the sand-bounce cast desktop gets from Lumen. Measured on
+	// device against the full-quality desktop body average (71,49,40), R/G 1.45:
+	//   no tint          -> (56,50,38)  R/G 1.12
+	//   (1.0,0.70,0.48)  -> (68,54,38)  R/G 1.26   <- this one
+	//   (1.0,0.57,0.33)  -> (66,52,37)  R/G 1.27
+	// Note the third row: pushing the tint further moved the body colour *not at all*.
+	// Past this point the SkyLight is no longer what decides the body's hue — the
+	// mannequin's own near-neutral albedo and the direct sun rim are — so don't reach
+	// for a stronger tint here expecting a warmer body. Brightness lands on desktop's
+	// number; the residual coolness in R/G would have to come out of the material or
+	// the post-process, not this light.
+	const FLinearColor MobileSkyLightTint      = FLinearColor(1.0f, 0.70f, 0.48f, 1.0f);
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
@@ -40,6 +64,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 		SetupWorld();
 		SpawnActors();
 		StartMatch();
+	}
+
+	// Angelscript has no platform macro, so this is the single place that decides
+	// what "mobile" means. Everything gated on it is a stand-in for a renderer
+	// feature mobile lacks — never a different art direction.
+	private bool IsMobilePlatform() const
+	{
+		FString P = Gameplay::GetPlatformName();
+		return P == "Android" || P == "IOS";
 	}
 
 	private void SetupWorld()
@@ -51,32 +84,17 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// in front of the camera — that's what the lens flare catches.
 		//   pitch -6  = just above the horizon (sunset, not midday)
 		//   yaw  180  = light travels -X, sun disc appears toward +X (far court end)
-		// MOBILE AIMS THE SUN DIFFERENTLY — and it is not an art change.
-		//
-		// At pitch -6 / yaw 180 the sun sits behind the players relative to the
-		// camera, so every body we see is its own shadow side. On desktop that reads
-		// fine because Lumen GI bounces the bright sand back into that side. Mobile
-		// has no GI whatsoever, so the same setup rendered the players as black
-		// silhouettes — measured on device: body max (121,82,46) but average
-		// (12,8,5), against (68,44,26) for the same frame on desktop.
-		//
-		// This was mistaken for a broken material for a long time. It is not: a
-		// custom trivial material and the stock M_Mannequin land within noise of
-		// each other on device (max (121,82,46) vs (114,82,53)) — there is simply
-		// almost no light reaching the surfaces the camera can see.
-		//
-		// Re-aiming is free here because SkyAtmosphere is DISABLED on Android
-		// (Config/Android/AndroidEngine.ini): no sun disc is drawn there, and the
-		// visible sunset is AEnvironment's procedural dome, which does not care where
-		// this light points. So mobile keeps the identical sky and just gets a sun
-		// that actually reaches the players. Desktop keeps the original backlit
-		// sunset, disc and all.
-		FString PlatformName = Gameplay::GetPlatformName();
-		bool bMobile = (PlatformName == "Android" || PlatformName == "IOS");
-		FRotator SunRot = bMobile ? FRotator(-35, 25, 0) : FRotator(-6, 180, 0);
+		// THE SUN IS THE SAME ON EVERY PLATFORM. It briefly was not: mobile rendered
+		// the players as black silhouettes under this backlit setup (body average
+		// (12,8,5) on device against (68,44,26) on desktop), and the first fix aimed
+		// the sun somewhere else on mobile. That treated the symptom. Desktop is the
+		// reference and the backlighting is deliberate — it is what gives the rim on
+		// the bodies and the sunset its depth — so mobile now reproduces desktop's
+		// missing ingredient instead of dodging it. See the SkyLight below.
+		bool bMobile = IsMobilePlatform();
 
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), SunRot));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-6, 180, 0)));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
@@ -112,7 +130,30 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// crush the players, who are dark-skinned meshes sitting in their own
 				// shadow. More fill, less overall exposure: the sand comes down, the
 				// bodies do not go to pure black.
-				SLC.SetIntensity(3.0f);
+				SLC.SetIntensity(bMobile ? MobileSkyLightIntensity : 3.0f);
+
+				if (bMobile)
+				{
+					// MOBILE STANDS IN FOR LUMEN HERE.
+					//
+					// With the sun this low and behind the players, the only thing
+					// lighting the side the camera sees is bounce off the sunlit sand.
+					// Desktop gets that from Lumen GI; mobile has no GI at all, which is
+					// the entire reason the bodies went black there.
+					//
+					// A SkyLight's lower hemisphere is a flat colour (black by default),
+					// so it normally contributes nothing from below. Filling it with the
+					// sand's own bounce colour is the standard approximation — the engine
+					// says so itself in SkyLightComponent.h: "useful to approximate
+					// skylight bounce lighting". One call, no per-frame cost, and it adds
+					// exactly the missing term rather than a different look.
+					//
+					// The colour is the sand albedo (0.62,0.52,0.36 in Court.as) warmed by
+					// the sun's own tint and scaled down to bounce strength — sand does not
+					// return all of what hits it.
+					SLC.SetLowerHemisphereColor(SandBounceColor);
+					SLC.SetLightColor(MobileSkyLightTint);
+				}
 			}
 		}
 
