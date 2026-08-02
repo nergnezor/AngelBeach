@@ -51,8 +51,32 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// in front of the camera — that's what the lens flare catches.
 		//   pitch -6  = just above the horizon (sunset, not midday)
 		//   yaw  180  = light travels -X, sun disc appears toward +X (far court end)
+		// MOBILE AIMS THE SUN DIFFERENTLY — and it is not an art change.
+		//
+		// At pitch -6 / yaw 180 the sun sits behind the players relative to the
+		// camera, so every body we see is its own shadow side. On desktop that reads
+		// fine because Lumen GI bounces the bright sand back into that side. Mobile
+		// has no GI whatsoever, so the same setup rendered the players as black
+		// silhouettes — measured on device: body max (121,82,46) but average
+		// (12,8,5), against (68,44,26) for the same frame on desktop.
+		//
+		// This was mistaken for a broken material for a long time. It is not: a
+		// custom trivial material and the stock M_Mannequin land within noise of
+		// each other on device (max (121,82,46) vs (114,82,53)) — there is simply
+		// almost no light reaching the surfaces the camera can see.
+		//
+		// Re-aiming is free here because SkyAtmosphere is DISABLED on Android
+		// (Config/Android/AndroidEngine.ini): no sun disc is drawn there, and the
+		// visible sunset is AEnvironment's procedural dome, which does not care where
+		// this light points. So mobile keeps the identical sky and just gets a sun
+		// that actually reaches the players. Desktop keeps the original backlit
+		// sunset, disc and all.
+		FString PlatformName = Gameplay::GetPlatformName();
+		bool bMobile = (PlatformName == "Android" || PlatformName == "IOS");
+		FRotator SunRot = bMobile ? FRotator(-35, 25, 0) : FRotator(-6, 180, 0);
+
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-6, 180, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), SunRot));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(

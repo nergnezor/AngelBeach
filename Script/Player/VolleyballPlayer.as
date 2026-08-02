@@ -101,6 +101,12 @@ class AVolleyballPlayer : APawn
 			// loader it can fail before its packages have been re-saved in UE 5.7.
 			// MoverExamples is enabled for this project and supplies the matching,
 			// current-engine Manny mesh as a safe runtime fallback.
+			//
+			// Verified 2026-08-02 that Android does NOT take this path — removing it
+			// entirely changed nothing on device, so the /Game mesh does load there.
+			// Worth knowing if this is ever suspected again: under match lighting this
+			// fallback mesh renders near-black (torso (2,1,0) vs (68,44,26)), so if it
+			// ever DOES get taken it looks like a bug in its own right.
 			Log("VolleyballPlayer: project Manny mesh unavailable; trying MoverExamples copy");
 			SkMesh = Cast<USkeletalMesh>(LoadObject(nullptr,
 				"/MoverExamples/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
@@ -234,37 +240,41 @@ class AVolleyballPlayer : APawn
 	{
 		if (Mesh == nullptr) return;
 
-		// "Paint Tint" (33f8493) WAS the right parameter name — confirmed by device
-		// testing (2026-08-02): the fix made no visible difference because the body
-		// is not tinted-wrong, it is COMPLETELY UNLIT on Android. Sampling the real
-		// CI APK on a physical device gave pure (0,0,0) at the torso, not a dark
-		// texture — the sky dome and sand sit right next to it in the same frame,
-		// lit correctly by the same DirectionalLight, using BasicShapeMaterial. So
-		// the sun reaches the scene fine on mobile; M_Mannequin's own chain
-		// (MI_Manny_01_New / MI_Manny_02_New) specifically does not shade under it.
-		// Matches be45995's original hypothesis: a Quality/Feature-Level Switch node
-		// in that material graph most likely outputs black on the mobile branch —
-		// impossible to confirm without the Material Editor GUI, still unavailable
-		// here.
+		// Keep the mesh's OWN imported materials (MI_Manny_01/02_New) and only tint
+		// them. They were suspected for a long time of being broken on Android —
+		// several builds replaced them with the engine DefaultMaterial, and one with
+		// a custom mobile-safe material authored just for this. None of that was
+		// necessary: measured on device, a trivial custom material and the stock one
+		// land within noise of each other (body max (121,82,46) vs (114,82,53)). The
+		// bodies were black because almost no light reached the side of them the
+		// camera sees — see the sun-aiming note in GameMode.as::SetupWorld.
 		//
-		// BasicShapeMaterial (the material already proven, in this exact scene, to
-		// light correctly on Android) is NOT an option for a skinned mesh — tried
-		// under be45995, rejected at runtime: "missing bUsedWithSkeletalMesh=True!
-		// Default Material will be used in game" — it is static-mesh-only. So fall
-		// back to the one material guaranteed valid on every vertex factory,
-		// including skinned meshes: the engine's own DefaultMaterial. It has no
-		// tint parameter, which is fine — TeamRing (BuildTeamRing, drawn with
-		// BasicShapeMaterial on procedural geometry) is what actually carries team
-		// colour now.
-		UMaterialInterface BaseMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
-		if (BaseMat == nullptr) return;
-
+		// THE PARAMETER IS "Paint Tint", WITH THE SPACE (read off the assets, not
+		// guessed: SKM_Manny_Simple uses MI_Manny_01_New and MI_Manny_02_New;
+		// MI_Manny_01_New is a child of M_Mannequin and overrides "Paint Tint").
+		// Setting a parameter that does not exist is a silent no-op, not an error,
+		// which is how two earlier wrong names went unnoticed.
 		int NumSlots = Mesh.GetNumMaterials();
 		for (int i = 0; i < NumSlots; i++)
 		{
-			Mesh.CreateDynamicMaterialInstance(i, BaseMat);
+			UMaterialInterface SlotMat = Mesh.GetMaterial(i);
+			if (SlotMat == nullptr) continue;
+
+			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, SlotMat);
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Paint Tint", TeamBodyTint());
 		}
+	}
+
+	// Kept close to the material's own default (0.92 grey) on purpose. "Paint Tint"
+	// MULTIPLIES the body texture, so the HDR values TeamColor() uses would crush or
+	// blow out the texture and hand back the flat silhouette this whole exercise was
+	// about. Team identity is carried by TeamRing on the sand; this is only a hint.
+	private FLinearColor TeamBodyTint() const
+	{
+		return (TeamSide == ETeam::Team_A)
+			? FLinearColor(0.74f, 0.88f, 1.06f, 1)
+			: FLinearColor(1.06f, 0.84f, 0.76f, 1);
 	}
 
 	void UpdatePlayer(float DeltaTime)
