@@ -144,7 +144,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 				FC.SetFogHeightFalloff(0.02f);
 				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
 				FC.SetVolumetricFog(false);
-				FC.SetStartDistance(3500.0f);   // no fog up close; only far away
+				// Must stay OUTSIDE the sky dome (radius 5000 in Environment.as).
+				// Fog saturates to its inscattering colour within a couple of
+				// thousand units at this density, so anything it reaches turns warm
+				// cream — that is what hid the sea for so long. With the dome now
+				// providing the sky, fog has no job left except far-field haze, and
+				// starting it past the dome keeps it from bleaching the gradient or
+				// the water.
+				FC.SetStartDistance(5200.0f);
 				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.55f, 0.25f));
 				FC.SetDirectionalInscatteringExponent(8.0f);
 			}
