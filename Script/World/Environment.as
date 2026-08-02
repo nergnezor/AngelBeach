@@ -34,8 +34,15 @@ class AEnvironment : AActor
 	const float WaterZ = -5.0f;           // just below the sand
 
 	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
-	// match camera sits 1400 out) and stay under the fog's 3500 start distance.
-	const float SkyRadius    = 3000.0f;
+	// match camera sits 1400 out) and stay under the fog's start distance so the
+	// gradient is not hazed away.
+	//
+	// 3000 was too tight. The sand skirt now reaches 900 along the view axis, so
+	// it left only ~700 units of sea between the beach and the dome — a sliver
+	// that vanished into the horizon, and every sample below the horizon came
+	// back sand-coloured. 5000 gives the sea roughly 4000 units to be a sea in.
+	// The fog start moves with it (GameMode.as).
+	const float SkyRadius    = 5000.0f;
 	// 10x24 left the facets plainly visible on device — vertical seams down the
 	// sky and stair-steps between bands. The dome is a few thousand triangles
 	// either way, so buy the smoothness.
@@ -175,15 +182,23 @@ class AEnvironment : AActor
 			Math::Sin(Elevation) * SkyRadius);
 	}
 
-	// Horizon -> zenith. Squaring the parameter keeps the warm band thick down at
-	// the horizon and holds the cool colour up high, the way a sunset actually
-	// sits. (Square-ROOTING it, tried first, does the exact opposite: sqrt climbs
-	// fastest near zero, so the horizon band came out already half-way to zenith
-	// blue at 0.52 albedo instead of staying at 0.95.)
+	// Horizon -> zenith, spread over the part of the sky you can actually SEE.
+	//
+	// T runs 0..1 across the dome's full -30..90 degrees, but the match camera
+	// only ever shows about -5 to +45. Both earlier curves ignored that and put
+	// the interesting colour off-screen: sqrt(T) climbed too fast and bleached the
+	// horizon band, then T*T went the other way and left the top of frame only 39%
+	// of the way to zenith blue — measured (169,114,87), still warm, which is why
+	// the sky reads as one flat orange.
+	//
+	// So remap: fully warm at the horizon (T=0.25, elevation 0) and fully at the
+	// zenith colour by T=0.60 (elevation 42), with a smoothstep between so the
+	// transition has no visible edge. Above that the sky just stays blue, which
+	// costs nothing since it is out of frame.
 	private FLinearColor SkyBandColor(float T) const
 	{
-		float c = Math::Clamp(T, 0.0f, 1.0f);
-		float k = c * c;
+		float k = Math::Clamp((T - 0.25f) / 0.35f, 0.0f, 1.0f);
+		k = k * k * (3.0f - 2.0f * k);
 		return FLinearColor(
 			SkyHorizonColor.R + (SkyZenithColor.R - SkyHorizonColor.R) * k,
 			SkyHorizonColor.G + (SkyZenithColor.G - SkyHorizonColor.G) * k,
