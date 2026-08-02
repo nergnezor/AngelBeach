@@ -77,24 +77,23 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void SetupWorld()
 	{
-		// Sun: low on the horizon for a sunset. A low pitch makes SkyAtmosphere paint
-		// a warm horizon glow easing to blue overhead (the natural sunset gradient),
-		// instead of a flat blue daytime sky. The camera sits at -X looking toward +X,
-		// so the sun travels toward -X (yaw 180) to put its disc on the far horizon
-		// in front of the camera — that's what the lens flare catches.
-		//   pitch -6  = just above the horizon (sunset, not midday)
-		//   yaw  180  = light travels -X, sun disc appears toward +X (far court end)
-		// THE SUN IS THE SAME ON EVERY PLATFORM. It briefly was not: mobile rendered
-		// the players as black silhouettes under this backlit setup (body average
-		// (12,8,5) on device against (68,44,26) on desktop), and the first fix aimed
-		// the sun somewhere else on mobile. That treated the symptom. Desktop is the
-		// reference and the backlighting is deliberate — it is what gives the rim on
-		// the bodies and the sunset its depth — so mobile now reproduces desktop's
-		// missing ingredient instead of dodging it. See the SkyLight below.
+		// Sun: pitch -90 puts it straight overhead (noon), light travelling
+		// straight down — yaw is irrelevant at the zenith. This replaces the
+		// earlier low-sunset sun (pitch -6, warm backlit rim); see git history
+		// if that mood needs to come back.
+		//
+		// THE SUN IS THE SAME ON EVERY PLATFORM. Under the old low sun, mobile
+		// rendered the players as black silhouettes from the backlighting (body
+		// average (12,8,5) on device against (68,44,26) on desktop) — that's
+		// what SandBounceColor/MobileSkyLightTint below were built to fix. An
+		// overhead sun lights the tops of the players directly on every
+		// platform instead of backlighting them, so that specific failure mode
+		// should no longer apply, but the mobile fill values were tuned against
+		// the old sun angle and have not been re-measured against this one.
 		bool bMobile = IsMobilePlatform();
 
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-6, 180, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-90, 0, 0)));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
@@ -102,7 +101,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 			if (LC != nullptr)
 			{
 				LC.SetIntensity(6.0f);                                 // bright enough; atmosphere adds glow
-				LC.SetLightColor(FLinearColor(1.0f, 0.6f, 0.35f));    // warm low sun
+				LC.SetLightColor(FLinearColor(1.0f, 0.98f, 0.92f));   // neutral noon sun, not sunset-warm
 				LC.CastShadows = true;
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 			}
@@ -207,7 +206,10 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// the seam decisively out of frame rather than to interpolate a
 				// trend. Court level is unaffected: the fog still starts at 3500.
 				FC.SetFogHeightFalloff(0.02f);
-				FC.SetFogInscatteringColor(FLinearColor(0.9f, 0.5f, 0.3f));
+				// Was a warm (0.9,0.5,0.3) orange to match the old low sunset sun;
+				// with the sun overhead there's no horizon glow to match, so this
+				// substitute Android "sky" goes neutral midday blue instead.
+				FC.SetFogInscatteringColor(FLinearColor(0.55f, 0.68f, 0.85f));
 				FC.SetVolumetricFog(false);
 				// Must stay OUTSIDE the sky dome (radius 5000 in Environment.as).
 				// Fog saturates to its inscattering colour within a couple of
@@ -217,7 +219,10 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// starting it past the dome keeps it from bleaching the gradient or
 				// the water.
 				FC.SetStartDistance(5200.0f);
-				FC.SetDirectionalInscatteringColor(FLinearColor(1.0f, 0.55f, 0.25f));
+				// Was warm to glow toward the low sunset sun disc; with the sun
+				// at the zenith this glow isn't visible from a horizontal camera
+				// anyway, so keep it neutral rather than falsely warm.
+				FC.SetDirectionalInscatteringColor(FLinearColor(0.95f, 0.95f, 0.9f));
 				FC.SetDirectionalInscatteringExponent(8.0f);
 			}
 		}
