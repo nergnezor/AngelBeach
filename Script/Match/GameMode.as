@@ -172,8 +172,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 			// hence +1.0 -> -0.5. Everything else falls out of clipping with it:
 			// line paint and net tape stop being pure white, and the near-black net
 			// cord finally reads as cord instead of grey.
+			//
+			// Nudged back up (-0.5 -> +0.25) now the sky dome exists. -1.5 EV was
+			// measured against a scene lit partly by a very bright fog "sky"; the
+			// dome that replaced it is darker, so the sky light bouncing off it is
+			// weaker and the sand fell from 117 to 82 grey — muddy. This is about
+			// +0.75 EV back, which puts the sand near 107 without going anywhere
+			// near the clipping it started at.
 			PP.bOverride_AutoExposureBias = true;
-			PP.AutoExposureBias = -0.5f;
+			PP.AutoExposureBias = 0.25f;
 			PP.bOverride_AutoExposureMinBrightness = true;
 			PP.AutoExposureMinBrightness = 0.5f;
 			PP.bOverride_AutoExposureMaxBrightness = true;

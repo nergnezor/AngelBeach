@@ -36,17 +36,35 @@ class AEnvironment : AActor
 	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
 	// match camera sits 1400 out) and stay under the fog's 3500 start distance.
 	const float SkyRadius    = 3000.0f;
-	const int   SkyBands     = 10;
-	const int   SkySegments  = 24;
+	// 10x24 left the facets plainly visible on device — vertical seams down the
+	// sky and stair-steps between bands. The dome is a few thousand triangles
+	// either way, so buy the smoothness.
+	const int   SkyBands     = 18;
+	const int   SkySegments  = 48;
 	// Starts below the horizon so the water plane meets the dome wall with no gap
 	// (at -30 degrees the dome bottom is z=-1500, far under the water at z=-5).
 	const float SkyBottomDeg = -30.0f;
 
-	// Dusky blue water that picks up a little warm sunset.
-	private FLinearColor WaterColor = FLinearColor(0.10f, 0.20f, 0.32f, 1.0f);
+	// THESE BLUES LOOK ABSURD ON PURPOSE — read this before "fixing" them.
+	//
+	// The scene light is deeply warm (sun 1.0/0.6/0.35, and the sky light bounces
+	// off this dome, which is warm too). Measuring the sand pins down what that
+	// does: albedo (0.62,0.52,0.36) renders (122,82,43), i.e. a per-channel gain
+	// of (0.314,0.162,0.067). Blue comes out at 21% of red. Any honest blue albedo
+	// is crushed to grey-brown, which is exactly why the sea has been warm cream
+	// in every screenshot and why the zenith band came out (136,81,47) instead of
+	// the dark blue it was set to.
+	//
+	// So the albedos are pre-divided by that gain. Blue above 1.0 is not a
+	// mistake: it is what it costs to land a dusk blue through a warm light.
+	//   zenith -> linear (0.015,0.035,0.090)
+	//   sea    -> linear (0.012,0.030,0.075)
+	// If the lighting is ever retuned, re-measure the gain and redo this division
+	// rather than eyeballing new numbers.
+	private FLinearColor WaterColor = FLinearColor(0.04f, 0.19f, 1.12f, 1.0f);
 
 	private FLinearColor SkyHorizonColor = FLinearColor(0.95f, 0.58f, 0.34f, 1.0f);
-	private FLinearColor SkyZenithColor  = FLinearColor(0.10f, 0.14f, 0.36f, 1.0f);
+	private FLinearColor SkyZenithColor  = FLinearColor(0.05f, 0.22f, 1.34f, 1.0f);
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
