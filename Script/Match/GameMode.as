@@ -68,8 +68,10 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	// Angelscript has no platform macro, so this is the single place that decides
 	// what "mobile" means. Everything gated on it is a stand-in for a renderer
-	// feature mobile lacks — never a different art direction.
-	private bool IsMobilePlatform() const
+	// feature mobile lacks — never a different art direction. Also used by
+	// ABeachVolleyballHUD to decide whether to draw the on-screen touch controls.
+	UFUNCTION(BlueprintPure)
+	bool IsMobilePlatform() const
 	{
 		FString P = Gameplay::GetPlatformName();
 		return P == "Android" || P == "IOS";

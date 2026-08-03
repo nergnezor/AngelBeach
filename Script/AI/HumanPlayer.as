@@ -103,28 +103,64 @@ class AHumanPlayer : AAIPlayer
 	UFUNCTION()
 	void OnJump(FKey Key)
 	{
-		if (!bPlayerControlled) TakeControl();
-		Jump();
+		DoJump();
 	}
 
 	UFUNCTION()
 	void OnPass(FKey Key)
+	{
+		DoPass();
+	}
+
+	UFUNCTION()
+	void OnSet(FKey Key)
+	{
+		DoSet();
+	}
+
+	UFUNCTION()
+	void OnSpike(FKey Key)
+	{
+		DoSpike();
+	}
+
+	// ---- Touch input (Android on-screen controls; see ABeachVolleyballHUD) ----
+	// The HUD drives these directly instead of the FKey-based handlers above:
+	// there is no real key behind a screen tap, and the axis handlers already
+	// take a plain float so they need no touch-specific twin.
+
+	void TouchMove(float Forward, float Right)
+	{
+		OnMoveForward(Forward);
+		OnMoveRight(Right);
+	}
+
+	void TouchJump()  { DoJump(); }
+	void TouchPass()  { DoPass(); }
+	void TouchSet()   { DoSet(); }
+	void TouchSpike() { DoSpike(); }
+
+	private void DoJump()
+	{
+		if (!bPlayerControlled) TakeControl();
+		Jump();
+	}
+
+	private void DoPass()
 	{
 		if (!bPlayerControlled) TakeControl();
 		if (Ball == nullptr) FindBall();
 		TryPass(Ball);
 	}
 
-	UFUNCTION()
-	void OnSet(FKey Key)
+	private void DoSet()
 	{
 		if (!bPlayerControlled) TakeControl();
 		if (Ball == nullptr) FindBall();
 		TrySet(Ball);
 	}
 
-	UFUNCTION()
-	void OnSpike(FKey Key)
+	private void DoSpike()
 	{
 		if (!bPlayerControlled) TakeControl();
 		if (Ball == nullptr) FindBall();
@@ -134,6 +170,6 @@ class AHumanPlayer : AAIPlayer
 	private void TakeControl()
 	{
 		bPlayerControlled = true;
-		Print("Gamepad detected - player control activated!");
+		Print("Player control activated!");
 	}
 }
