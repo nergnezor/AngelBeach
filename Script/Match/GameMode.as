@@ -301,6 +301,13 @@ class ABeachVolleyballGameMode : AGameModeBase
 				PC.Possess(HumanPawn);
 				// Delay one frame so camera actor exists before we switch to it
 				System::SetTimer(this, n"RestoreCamera", 0.05f, bLooping = false);
+
+				// Hand the HUD its GameMode reference the same way Ball/HumanPawn
+				// get theirs — there is no BlueprintCallable "get the game mode"
+				// to pull it from the HUD side.
+				ABeachVolleyballHUD BVHUD = Cast<ABeachVolleyballHUD>(PC.GetHUD());
+				if (BVHUD != nullptr)
+					BVHUD.GM = this;
 			}
 		}
 

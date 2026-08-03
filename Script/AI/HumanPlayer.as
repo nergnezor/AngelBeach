@@ -129,7 +129,7 @@ class AHumanPlayer : AAIPlayer
 	// there is no real key behind a screen tap, and the axis handlers already
 	// take a plain float so they need no touch-specific twin.
 
-	void TouchMove(float Forward, float Right)
+	void TouchMove(float32 Forward, float32 Right)
 	{
 		OnMoveForward(Forward);
 		OnMoveRight(Right);

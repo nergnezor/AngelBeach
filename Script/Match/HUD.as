@@ -4,22 +4,26 @@
 // drag joystick (movement) and four tap buttons (Jump/Pass/Set/Spike), the touch
 // equivalent of the WASD + Space/E/LeftShift/F bindings in DefaultInput.ini.
 // Desktop/gamepad players never see this — AHumanPlayer already plays itself as
-// AI until real input arrives, and IsMobilePlatform() keeps it off everywhere
+// AI until real input arrives, and GM.IsMobilePlatform() keeps it off everywhere
 // that isn't Android/iOS. Drawn with AHUD::DrawRect/DrawText (no textures) to
 // match the "no binary assets in git" rule in CLAUDE.md.
+//
+// GM is set by ABeachVolleyballGameMode.SpawnActors (there is no BlueprintCallable
+// "get the game mode" on UWorld/AActor in this fork — GameMode pushes the
+// reference down to whoever needs it, same as it does for ABall and AHumanPlayer).
 
 class ABeachVolleyballHUD : AHUD
 {
-	private ABeachVolleyballGameMode GM;
-	private bool bTouchControlsActive = false;
+	ABeachVolleyballGameMode GM;
 
 	// Updated every DrawHUD; touch handlers reuse the last known size rather
 	// than querying the viewport again.
 	private float ScreenSizeX = 1280.0f;
 	private float ScreenSizeY = 720.0f;
 
-	// -1 = no finger currently driving the joystick.
-	private int32 MoveFingerIndex = -1;
+	// Whether a finger is currently driving the movement joystick.
+	private bool bMoveTouchActive = false;
+	private ETouchIndex::Type MoveFingerIndex = ETouchIndex::Touch1;
 	private FVector2D MoveOrigin = FVector2D(0.0f, 0.0f);
 	private FVector2D JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 
@@ -30,16 +34,13 @@ class ABeachVolleyballHUD : AHUD
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		GM = Cast<ABeachVolleyballGameMode>(GetWorld().GetAuthGameMode());
-		bTouchControlsActive = GM != nullptr && GM.IsMobilePlatform();
-		if (!bTouchControlsActive)
-			return;
-
+		// GM may not be assigned yet (GameMode.SpawnActors sets it a little later
+		// than this HUD's own BeginPlay) — that's fine, ReceiveDrawHUD re-checks
+		// GM.IsMobilePlatform() every frame rather than caching the result here.
 		APlayerController PC = GetOwningPlayerController();
 		if (PC != nullptr)
 		{
 			PC.OnInputTouchBegin.AddUFunction(this, n"OnTouchBegin");
-			PC.OnInputTouchMoved.AddUFunction(this, n"OnTouchMoved");
 			PC.OnInputTouchEnd.AddUFunction(this, n"OnTouchEnd");
 		}
 	}
@@ -47,11 +48,16 @@ class ABeachVolleyballHUD : AHUD
 	UFUNCTION(BlueprintOverride)
 	void ReceiveDrawHUD(int SizeX, int SizeY)
 	{
-		if (!bTouchControlsActive)
+		if (GM == nullptr || !GM.IsMobilePlatform())
 			return;
 
 		ScreenSizeX = float(SizeX);
 		ScreenSizeY = float(SizeY);
+
+		// No "touch moved" event is bound (see OnTouchBegin/OnTouchEnd below), so
+		// the joystick polls the held finger's current position every drawn frame.
+		if (bMoveTouchActive)
+			PollJoystick();
 
 		DrawJoystick();
 		DrawButton(JumpCenter(),  "Jump");
@@ -81,7 +87,7 @@ class ABeachVolleyballHUD : AHUD
 
 	private void DrawJoystick()
 	{
-		FVector2D Base = (MoveFingerIndex >= 0) ? MoveOrigin : JoystickIdleBase();
+		FVector2D Base = bMoveTouchActive ? MoveOrigin : JoystickIdleBase();
 
 		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.25f),
 			Base.X - JoystickRadius, Base.Y - JoystickRadius,
@@ -89,23 +95,23 @@ class ABeachVolleyballHUD : AHUD
 
 		FVector2D Knob = Base + JoystickKnobOffset;
 		float KnobRadius = 34.0f;
-		FLinearColor KnobColor = (MoveFingerIndex >= 0)
+		FLinearColor KnobColor = bMoveTouchActive
 			? FLinearColor(1.0f, 1.0f, 1.0f, 0.55f)
 			: FLinearColor(1.0f, 1.0f, 1.0f, 0.30f);
 		DrawRect(KnobColor, Knob.X - KnobRadius, Knob.Y - KnobRadius, KnobRadius * 2.0f, KnobRadius * 2.0f);
 	}
 
+	// No GetTextSize on this HUD build, so labels aren't pixel-centred — just
+	// nudged by a rough half-width guess. Cosmetic only; doesn't affect hit-testing.
 	private void DrawButton(FVector2D Center, FString Label)
 	{
 		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.30f),
 			Center.X - ButtonRadius, Center.Y - ButtonRadius,
 			ButtonRadius * 2.0f, ButtonRadius * 2.0f);
 
-		float TextW = 0.0f;
-		float TextH = 0.0f;
-		GetTextSize(Label, TextW, TextH, nullptr, 1.0f);
+		float ApproxHalfWidth = Label.Len() * 4.0f;
 		DrawText(Label, FLinearColor(1.0f, 1.0f, 1.0f, 0.85f),
-			Center.X - TextW * 0.5f, Center.Y - TextH * 0.5f, nullptr, 1.0f, false);
+			Center.X - ApproxHalfWidth, Center.Y - 8.0f, nullptr, 1.0f, false);
 	}
 
 	// ---- Touch handling --------------------------------------------------
@@ -122,9 +128,10 @@ class ABeachVolleyballHUD : AHUD
 		// steal it, so a button tap by the same hand can't derail movement).
 		if (Location.X < ScreenSizeX * 0.5f)
 		{
-			if (MoveFingerIndex == -1)
+			if (!bMoveTouchActive)
 			{
-				MoveFingerIndex = int(FingerIndex);
+				bMoveTouchActive = true;
+				MoveFingerIndex = FingerIndex;
 				MoveOrigin = FVector2D(Location.X, Location.Y);
 				JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 				Pawn.TouchMove(0.0f, 0.0f);
@@ -145,21 +152,49 @@ class ABeachVolleyballHUD : AHUD
 	}
 
 	UFUNCTION()
-	void OnTouchMoved(ETouchIndex::Type FingerIndex, FVector Location)
+	void OnTouchEnd(ETouchIndex::Type FingerIndex, FVector Location)
 	{
-		if (int(FingerIndex) != MoveFingerIndex)
+		if (!bMoveTouchActive || FingerIndex != MoveFingerIndex)
 			return;
+
+		bMoveTouchActive = false;
+		JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 
 		AHumanPlayer Pawn = (GM != nullptr) ? GM.HumanPawn : nullptr;
-		if (Pawn == nullptr)
-			return;
+		if (Pawn != nullptr)
+			Pawn.TouchMove(0.0f, 0.0f);
+	}
 
-		FVector2D Delta = FVector2D(Location.X, Location.Y) - MoveOrigin;
+	// Called from ReceiveDrawHUD instead of an OnInputTouchMoved event (this
+	// engine build doesn't expose one on APlayerController) — polls the held
+	// finger's live position every drawn frame instead.
+	private void PollJoystick()
+	{
+		APlayerController PC = GetOwningPlayerController();
+		AHumanPlayer Pawn = (GM != nullptr) ? GM.HumanPawn : nullptr;
+
+		float TouchX = 0.0f;
+		float TouchY = 0.0f;
+		bool bPressed = false;
+		if (PC != nullptr)
+			PC.GetInputTouchState(MoveFingerIndex, TouchX, TouchY, bPressed);
+
+		if (PC == nullptr || !bPressed)
+		{
+			bMoveTouchActive = false;
+			JoystickKnobOffset = FVector2D(0.0f, 0.0f);
+			if (Pawn != nullptr)
+				Pawn.TouchMove(0.0f, 0.0f);
+			return;
+		}
+
+		FVector2D Delta = FVector2D(TouchX, TouchY) - MoveOrigin;
 		float Len = Delta.Size();
 		if (Len < JoystickDeadZone)
 		{
 			JoystickKnobOffset = FVector2D(0.0f, 0.0f);
-			Pawn.TouchMove(0.0f, 0.0f);
+			if (Pawn != nullptr)
+				Pawn.TouchMove(0.0f, 0.0f);
 			return;
 		}
 
@@ -175,20 +210,7 @@ class ABeachVolleyballHUD : AHUD
 		// grows downward).
 		float Forward = -Dir.Y * Magnitude;
 		float Right   =  Dir.X * Magnitude;
-		Pawn.TouchMove(Forward, Right);
-	}
-
-	UFUNCTION()
-	void OnTouchEnd(ETouchIndex::Type FingerIndex, FVector Location)
-	{
-		if (int(FingerIndex) != MoveFingerIndex)
-			return;
-
-		MoveFingerIndex = -1;
-		JoystickKnobOffset = FVector2D(0.0f, 0.0f);
-
-		AHumanPlayer Pawn = (GM != nullptr) ? GM.HumanPawn : nullptr;
 		if (Pawn != nullptr)
-			Pawn.TouchMove(0.0f, 0.0f);
+			Pawn.TouchMove(Forward, Right);
 	}
 }
