@@ -21,12 +21,15 @@ class ABeachVolleyballHUD : AHUD
 	private float ScreenSizeX = 1280.0f;
 	private float ScreenSizeY = 720.0f;
 
-	// Whether a finger is currently driving the movement joystick.
+	// Whether a finger is currently driving the movement joystick, and which one.
+	// Stored as a plain int (via int(FingerIndex)) rather than ETouchIndex — the
+	// delegate parameters below are typed ETouchIndex::Type only to match
+	// OnInputTouchBegin/End's native signature; that spelling doesn't resolve to
+	// a usable type anywhere else (assigning/comparing it as ETouchIndex fails to
+	// compile), and GetInputTouchState wants its own value-typed ETouchIndex
+	// built fresh via ETouchIndex(int) at the call site, not a stored reference.
 	private bool bMoveTouchActive = false;
-	// Angelscript resolves this enum as plain 'ETouchIndex' for a variable's type
-	// (the '::Type' form only works inside a delegate-matching UFUNCTION signature,
-	// e.g. OnTouchBegin below — using it here left the field's type unresolved).
-	private ETouchIndex MoveFingerIndex = ETouchIndex::Touch1;
+	private int MoveFingerIndex = 0;
 	private FVector2D MoveOrigin = FVector2D(0.0f, 0.0f);
 	private FVector2D JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 
@@ -134,7 +137,7 @@ class ABeachVolleyballHUD : AHUD
 			if (!bMoveTouchActive)
 			{
 				bMoveTouchActive = true;
-				MoveFingerIndex = FingerIndex;
+				MoveFingerIndex = int(FingerIndex);
 				MoveOrigin = FVector2D(Location.X, Location.Y);
 				JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 				Pawn.TouchMove(0.0f, 0.0f);
@@ -157,7 +160,7 @@ class ABeachVolleyballHUD : AHUD
 	UFUNCTION()
 	void OnTouchEnd(ETouchIndex::Type FingerIndex, FVector Location)
 	{
-		if (!bMoveTouchActive || FingerIndex != MoveFingerIndex)
+		if (!bMoveTouchActive || int(FingerIndex) != MoveFingerIndex)
 			return;
 
 		bMoveTouchActive = false;
@@ -180,7 +183,7 @@ class ABeachVolleyballHUD : AHUD
 		float TouchY = 0.0f;
 		bool bPressed = false;
 		if (PC != nullptr)
-			PC.GetInputTouchState(MoveFingerIndex, TouchX, TouchY, bPressed);
+			PC.GetInputTouchState(ETouchIndex(MoveFingerIndex), TouchX, TouchY, bPressed);
 
 		if (PC == nullptr || !bPressed)
 		{
