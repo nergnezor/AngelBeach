@@ -1,8 +1,10 @@
 // HUD placeholder - score display is handled via UMG or future widget implementation.
 //
 // The one thing actually drawn here is the Android on-screen control scheme: a
-// drag joystick (movement) and four tap buttons (Jump/Pass/Set/Spike), the touch
-// equivalent of the WASD + Space/E/LeftShift/F bindings in DefaultInput.ini.
+// point-and-hold joystick (movement) and four tap buttons (Jump/Pass/Set/Spike),
+// the touch equivalent of the WASD + Space/E/LeftShift/F bindings in
+// DefaultInput.ini. See ApplyJoystickTouch for why it's point-and-hold rather
+// than a smoothly-dragged stick.
 // Desktop/gamepad players never see this — AHumanPlayer already plays itself as
 // AI until real input arrives, and GM.IsMobilePlatform() keeps it off everywhere
 // that isn't Android/iOS. Drawn with AHUD::DrawRect/DrawText (no textures) to
@@ -25,9 +27,9 @@ class ABeachVolleyballHUD : AHUD
 	// Stored as a plain int (via int(FingerIndex)) rather than ETouchIndex — the
 	// delegate parameters below are typed ETouchIndex::Type only to match
 	// OnInputTouchBegin/End's native signature; that spelling doesn't resolve to
-	// a usable type anywhere else (assigning/comparing it as ETouchIndex fails to
-	// compile), and GetInputTouchState wants its own value-typed ETouchIndex
-	// built fresh via ETouchIndex(int) at the call site, not a stored reference.
+	// a usable type anywhere else, so comparing/assigning it as an enum fails
+	// to compile (see ApplyJoystickTouch for why the finger's position, not just
+	// its index, is also read only at touch-down).
 	private bool bMoveTouchActive = false;
 	private int MoveFingerIndex = 0;
 	private FVector2D MoveOrigin = FVector2D(0.0f, 0.0f);
@@ -59,11 +61,6 @@ class ABeachVolleyballHUD : AHUD
 
 		ScreenSizeX = float(SizeX);
 		ScreenSizeY = float(SizeY);
-
-		// No "touch moved" event is bound (see OnTouchBegin/OnTouchEnd below), so
-		// the joystick polls the held finger's current position every drawn frame.
-		if (bMoveTouchActive)
-			PollJoystick();
 
 		DrawJoystick();
 		DrawButton(JumpCenter(),  "Jump");
@@ -138,9 +135,8 @@ class ABeachVolleyballHUD : AHUD
 			{
 				bMoveTouchActive = true;
 				MoveFingerIndex = int(FingerIndex);
-				MoveOrigin = FVector2D(Location.X, Location.Y);
-				JoystickKnobOffset = FVector2D(0.0f, 0.0f);
-				Pawn.TouchMove(0.0f, 0.0f);
+				MoveOrigin = JoystickIdleBase();
+				ApplyJoystickTouch(FVector2D(Location.X, Location.Y), Pawn);
 			}
 			return;
 		}
@@ -171,30 +167,17 @@ class ABeachVolleyballHUD : AHUD
 			Pawn.TouchMove(0.0f, 0.0f);
 	}
 
-	// Called from ReceiveDrawHUD instead of an OnInputTouchMoved event (this
-	// engine build doesn't expose one on APlayerController) — polls the held
-	// finger's live position every drawn frame instead.
-	private void PollJoystick()
+	// Sets the movement axes from a single touch point relative to the
+	// joystick's fixed home position (JoystickIdleBase). There is no working
+	// per-frame touch-position query in this fork — APlayerController has no
+	// OnInputTouchMoved event, and every variant of GetInputTouchState's first
+	// argument (Unknown/ETouchIndex&/const ETouchIndex) failed to match any
+	// signature — so the direction is locked in at touch-down and held until
+	// OnTouchEnd, rather than tracked as the finger drags. Less smooth than a
+	// real analog stick, but works: point down where you want to go, hold it.
+	private void ApplyJoystickTouch(FVector2D Touch, AHumanPlayer Pawn)
 	{
-		APlayerController PC = GetOwningPlayerController();
-		AHumanPlayer Pawn = (GM != nullptr) ? GM.HumanPawn : nullptr;
-
-		float TouchX = 0.0f;
-		float TouchY = 0.0f;
-		bool bPressed = false;
-		if (PC != nullptr)
-			PC.GetInputTouchState(ETouchIndex(MoveFingerIndex), TouchX, TouchY, bPressed);
-
-		if (PC == nullptr || !bPressed)
-		{
-			bMoveTouchActive = false;
-			JoystickKnobOffset = FVector2D(0.0f, 0.0f);
-			if (Pawn != nullptr)
-				Pawn.TouchMove(0.0f, 0.0f);
-			return;
-		}
-
-		FVector2D Delta = FVector2D(TouchX, TouchY) - MoveOrigin;
+		FVector2D Delta = Touch - MoveOrigin;
 		float Len = Delta.Size();
 		if (Len < JoystickDeadZone)
 		{
