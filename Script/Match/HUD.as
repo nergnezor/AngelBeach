@@ -23,7 +23,10 @@ class ABeachVolleyballHUD : AHUD
 
 	// Whether a finger is currently driving the movement joystick.
 	private bool bMoveTouchActive = false;
-	private ETouchIndex::Type MoveFingerIndex = ETouchIndex::Touch1;
+	// Angelscript resolves this enum as plain 'ETouchIndex' for a variable's type
+	// (the '::Type' form only works inside a delegate-matching UFUNCTION signature,
+	// e.g. OnTouchBegin below — using it here left the field's type unresolved).
+	private ETouchIndex MoveFingerIndex = ETouchIndex::Touch1;
 	private FVector2D MoveOrigin = FVector2D(0.0f, 0.0f);
 	private FVector2D JoystickKnobOffset = FVector2D(0.0f, 0.0f);
 
@@ -211,6 +214,6 @@ class ABeachVolleyballHUD : AHUD
 		float Forward = -Dir.Y * Magnitude;
 		float Right   =  Dir.X * Magnitude;
 		if (Pawn != nullptr)
-			Pawn.TouchMove(Forward, Right);
+			Pawn.TouchMove(float32(Forward), float32(Right));
 	}
 }
