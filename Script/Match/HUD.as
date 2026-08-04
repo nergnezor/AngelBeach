@@ -43,7 +43,7 @@ class ABeachVolleyballHUD : AHUD
 	void BeginPlay()
 	{
 		// GM may not be assigned yet (GameMode.SpawnActors sets it a little later
-		// than this HUD's own BeginPlay) — that's fine, ReceiveDrawHUD re-checks
+		// than this HUD's own BeginPlay) — that's fine, DrawHUD re-checks
 		// GM.IsMobilePlatform() every frame rather than caching the result here.
 		APlayerController PC = GetOwningPlayerController();
 		if (PC != nullptr)
@@ -54,7 +54,7 @@ class ABeachVolleyballHUD : AHUD
 	}
 
 	UFUNCTION(BlueprintOverride)
-	void ReceiveDrawHUD(int SizeX, int SizeY)
+	void DrawHUD(int SizeX, int SizeY)
 	{
 		if (GM == nullptr || !GM.IsMobilePlatform())
 			return;
