@@ -13,10 +13,6 @@ class AHumanPlayer : AAIPlayer
 	float AxisForward = 0.0f;
 	float AxisRight = 0.0f;
 
-	// On-screen controls (Android). The HUD owns their layout and hit-testing;
-	// this pawn owns the only input component that actually receives touches.
-	// Set by ABeachVolleyballGameMode.SpawnActors.
-	ABeachVolleyballHUD TouchHUD;
 
 	// Deliberately replaces AAIPlayer's BeginPlay/Tick (we gate the AI on
 	// bPlayerControlled), so we intentionally do not call Super.
@@ -44,43 +40,14 @@ class AHumanPlayer : AAIPlayer
 		ScriptInputComponent.BindAction(n"Set",   EInputEvent::IE_Pressed, FInputActionHandlerDynamicSignature(this, n"OnSet"));
 		ScriptInputComponent.BindAction(n"Spike", EInputEvent::IE_Pressed, FInputActionHandlerDynamicSignature(this, n"OnSpike"));
 
-		// TOUCH GOES THROUGH THE INPUT COMPONENT, NOT THROUGH THE PLAYER CONTROLLER.
-		// The first version of the on-screen controls bound APlayerController's
-		// OnInputTouchBegin/End instead. Those compile, but they are AActor's
-		// "something touched THIS actor" delegates — they need collision on the
-		// actor and never fire for a PlayerController, so every button and the
-		// joystick were dead on device while looking perfectly fine in the HUD.
-		// BindTouch is the screen-wide touch stream, and IE_Repeat gives the
-		// finger-moved events APlayerController never exposed (which is what had
-		// forced the joystick into point-and-hold; it can drag properly again).
-		ScriptInputComponent.BindTouch(EInputEvent::IE_Pressed,  FInputTouchHandlerDynamicSignature(this, n"OnTouchPressed"));
-		ScriptInputComponent.BindTouch(EInputEvent::IE_Repeat,   FInputTouchHandlerDynamicSignature(this, n"OnTouchMoved"));
-		ScriptInputComponent.BindTouch(EInputEvent::IE_Released, FInputTouchHandlerDynamicSignature(this, n"OnTouchReleased"));
-	}
-
-	// ---- Touch input plumbing (Android) ----
-	// Pure forwarding: the HUD decides what a touch at this position means,
-	// since it is the thing that drew the joystick and the buttons there.
-
-	UFUNCTION()
-	void OnTouchPressed(ETouchIndex::Type FingerIndex, FVector Location)
-	{
-		if (TouchHUD != nullptr)
-			TouchHUD.HandleTouchBegin(int(FingerIndex), FVector2D(Location.X, Location.Y));
-	}
-
-	UFUNCTION()
-	void OnTouchMoved(ETouchIndex::Type FingerIndex, FVector Location)
-	{
-		if (TouchHUD != nullptr)
-			TouchHUD.HandleTouchMoved(int(FingerIndex), FVector2D(Location.X, Location.Y));
-	}
-
-	UFUNCTION()
-	void OnTouchReleased(ETouchIndex::Type FingerIndex, FVector Location)
-	{
-		if (TouchHUD != nullptr)
-			TouchHUD.HandleTouchEnd(int(FingerIndex), FVector2D(Location.X, Location.Y));
+		// No touch bindings here on purpose. Script in this fork cannot read the
+		// raw touch stream at all: APlayerController.OnInputTouchBegin/End are
+		// AActor's "this actor was touched" delegates (need collision, never fire
+		// for a controller), APlayerController.GetInputTouchState isn't callable
+		// with any argument spelling, and UInputComponent::BindTouch isn't bound.
+		// So movement comes from the engine's virtual joystick via the ordinary
+		// Gamepad_LeftX/Y axis mappings above (see Config/DefaultInput.ini), and
+		// the action buttons come from HUD hit boxes (see ABeachVolleyballHUD).
 	}
 
 	UFUNCTION(BlueprintOverride)

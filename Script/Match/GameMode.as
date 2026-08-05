@@ -304,15 +304,10 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 				// Hand the HUD its GameMode reference the same way Ball/HumanPawn
 				// get theirs — there is no BlueprintCallable "get the game mode"
-				// to pull it from the HUD side. The pawn needs the reverse link
-				// too: it owns the input component that receives touches, the HUD
-				// owns where the on-screen controls are drawn.
+				// to pull it from the HUD side.
 				ABeachVolleyballHUD BVHUD = Cast<ABeachVolleyballHUD>(PC.GetHUD());
 				if (BVHUD != nullptr)
-				{
 					BVHUD.GM = this;
-					HumanPawn.TouchHUD = BVHUD;
-				}
 			}
 		}
 
