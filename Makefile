@@ -60,7 +60,7 @@ JAVA_HOME         ?= $(HOME)/jdk17
 
 # --- Meta --------------------------------------------------------------------
 .DEFAULT_GOAL := help
-.PHONY: help deps swap engine tools project genproject run package-linux package-android android clean-project distclean check all
+.PHONY: help deps swap engine tools project genproject run run-game run-packaged package-linux package-android android clean-project distclean check all
 
 help: ## Show this help
 	@echo "Beach Volleyball — UE5 + AngelScript"
@@ -215,6 +215,35 @@ genproject: check ## (Optional) generate IDE project files for this project
 run: check ## Launch the editor on this project
 	@echo ">> Launching UnrealEditor on $(PROJECT_NAME)..."
 	"$(UE_EDITOR)" "$(UPROJECT)"
+
+# Two ways to play WITHOUT the editor UI:
+#
+#   make run-game       fast loop. No cook, no packaging — the editor binary runs the
+#                       game directly off the uncooked content (`-game`). Boots in about
+#                       a minute, and the Angelscript debug server still listens on 27099
+#                       so VSCode breakpoints work. Beware: a script compile error opens a
+#                       modal that blocks frame 0 forever, even with -unattended.
+#
+#   make run-packaged   the real thing. A cooked standalone build with no engine editor in
+#                       the loop at all — but `make package-linux` must produce it first
+#                       (slow), and Angelscript is baked in, so no hot reload.
+#
+# Pass extra engine args through RUNARGS, e.g.
+#   make run-game RUNARGS="-RenderOffscreen -nosplash -unattended"
+RUNARGS ?=
+MAP     ?= /Game/CourtLevel
+
+run-game: check ## Play standalone off uncooked content — no editor UI, no cook (fast loop)
+	@echo ">> Launching $(PROJECT_NAME) standalone on $(MAP)..."
+	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game $(RUNARGS)
+
+run-packaged: ## Run the cooked Linux build (needs 'make package-linux' first)
+	@BIN=$$(find "$(OUTPUT_DIR)/Linux" -name '$(PROJECT_NAME).sh' -type f 2>/dev/null | head -1); \
+	test -n "$$BIN" || { \
+		echo "ERROR: no packaged Linux build under $(OUTPUT_DIR)/Linux"; \
+		echo "       Run 'make package-linux' first."; exit 1; }; \
+	echo ">> Running $$BIN"; \
+	"$$BIN" $(RUNARGS)
 
 # --- Cleanup -----------------------------------------------------------------
 clean-project: ## Remove this project's generated build artifacts
