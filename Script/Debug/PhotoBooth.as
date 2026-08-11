@@ -134,9 +134,9 @@ class APhotoBoothGameMode : AGameModeBase
 
 	private void SetupWorld()
 	{
-		// Neutral, bright daylight — pose reading beats sunset mood here.
+		// Neutral, bright daylight straight overhead — pose reading beats mood here.
 		ADirectionalLight Sun = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-50, 40, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-90, 0, 0)));
 		if (Sun != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
