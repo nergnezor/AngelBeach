@@ -26,7 +26,20 @@ UPROJECT="$PROJECT_DIR/BeachVolleyball.uproject"
 UE_EDITOR="${ENGINE_DIR:-$HOME/UnrealEngine-Angelscript}/Engine/Binaries/Linux/UnrealEditor"
 LOG="$PROJECT_DIR/Saved/Logs/launch-$MODE.log"
 
-port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
+# Check for a LISTENING socket rather than connecting to it. Connecting is not a passive
+# probe here: the Angelscript debug server registers every incoming connection as a debug
+# client ("Added angelscript debug client"), and a connected client can pause the game
+# indefinitely — so a /dev/tcp poll left a phantom debugger attached before the real one
+# arrived, once per second until the port came up.
+port_open() {
+	if command -v ss > /dev/null 2>&1; then
+		ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .
+	else
+		# /proc/net/tcp: field 2 is local address as HEX:PORT, field 4 is state (0A = LISTEN)
+		awk -v hex="$(printf ':%04X' "$PORT")" '$4 == "0A" && $2 ~ hex"$" { found = 1 } END { exit !found }' \
+			/proc/net/tcp /proc/net/tcp6 2>/dev/null
+	fi
+}
 
 # Each mode gets its own debug port, so the editor and a standalone game can be up at the
 # same time without fighting over one. It also keeps the readiness check honest: sharing a
