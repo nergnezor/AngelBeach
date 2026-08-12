@@ -18,7 +18,6 @@
 set -uo pipefail
 
 MODE="${1:-editor}"
-PORT="${AS_DEBUG_PORT:-27099}"
 TIMEOUT="${LAUNCH_TIMEOUT:-420}"
 MAP="${MAP:-/Game/CourtLevel}"
 
@@ -29,11 +28,17 @@ LOG="$PROJECT_DIR/Saved/Logs/launch-$MODE.log"
 
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
 
+# Each mode gets its own debug port, so the editor and a standalone game can be up at the
+# same time without fighting over one. It also keeps the readiness check honest: sharing a
+# port meant that starting the game while the editor was already up found 27099 open, skipped
+# the launch entirely and attached the debugger to the editor — the game never started.
+# These must match the `port` in .vscode/launch.json.
 case "$MODE" in
-	editor) ARGS=( "$UPROJECT" ) ;;
-	game)   ARGS=( "$UPROJECT" "$MAP" -game ) ;;
+	editor) PORT="${AS_DEBUG_PORT:-27099}"; ARGS=( "$UPROJECT" ) ;;
+	game)   PORT="${AS_DEBUG_PORT:-27100}"; ARGS=( "$UPROJECT" "$MAP" -game ) ;;
 	*) echo "usage: $0 [editor|game]" >&2; exit 2 ;;
 esac
+ARGS+=( "-asdebugport=$PORT" )
 # shellcheck disable=SC2206  # deliberate word splitting: EXTRA_ARGS is a list of flags
 [ -n "${EXTRA_ARGS:-}" ] && ARGS+=( ${EXTRA_ARGS} )
 
@@ -42,7 +47,7 @@ esac
 
 # Already running? Attach to that one rather than starting a second editor.
 if port_open; then
-	echo ">> Angelscript debug server already listening on $PORT — reusing it."
+	echo ">> A $MODE is already listening on $PORT — reusing it, not starting a second one."
 	exit 0
 fi
 
