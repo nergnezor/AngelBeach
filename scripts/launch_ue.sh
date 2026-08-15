@@ -24,7 +24,7 @@ MAP="${MAP:-/Game/CourtLevel}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPROJECT="$PROJECT_DIR/BeachVolleyball.uproject"
 UE_EDITOR="${ENGINE_DIR:-$HOME/UnrealEngine-Angelscript}/Engine/Binaries/Linux/UnrealEditor"
-LOG="$PROJECT_DIR/Saved/Logs/launch-$MODE.log"
+LOG=""  # set once PORT is known, below — two instances of a mode must not share one log
 
 # Check for a LISTENING socket rather than connecting to it. Connecting is not a passive
 # probe here: the Angelscript debug server registers every incoming connection as a debug
@@ -52,6 +52,9 @@ case "$MODE" in
 	*) echo "usage: $0 [editor|game]" >&2; exit 2 ;;
 esac
 ARGS+=( "-asdebugport=$PORT" )
+# Keyed by port, not just mode: running a second instance on another port must not clobber
+# the first one's log, which is the only record of why an instance froze or died.
+LOG="$PROJECT_DIR/Saved/Logs/launch-$MODE-$PORT.log"
 # shellcheck disable=SC2206  # deliberate word splitting: EXTRA_ARGS is a list of flags
 [ -n "${EXTRA_ARGS:-}" ] && ARGS+=( ${EXTRA_ARGS} )
 

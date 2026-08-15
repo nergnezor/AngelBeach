@@ -220,8 +220,8 @@ run: check ## Launch the editor on this project
 #
 #   make run-game       fast loop. No cook, no packaging — the editor binary runs the
 #                       game directly off the uncooked content (`-game`). Boots in about
-#                       a minute, and the Angelscript debug server still listens on 27099
-#                       so VSCode breakpoints work. Beware: a script compile error opens a
+#                       15s warm. Runs in the foreground: the terminal shows the log and
+#                       stopping it stops the game. Beware: a script compile error opens a
 #                       modal that blocks frame 0 forever, even with -unattended.
 #
 #   make run-packaged   the real thing. A cooked standalone build with no engine editor in
@@ -233,9 +233,15 @@ run: check ## Launch the editor on this project
 RUNARGS ?=
 MAP     ?= /Game/CourtLevel
 
+# -asdebugport puts the Angelscript debug server somewhere the VSCode extension is not
+# configured to look. Left on the default 27099, the extension can auto-attach to a plain
+# run and pause it indefinitely — an attached debug client holds the game thread. Nothing
+# should be able to reach in and stop a run you started to just play.
+DEBUGPORT ?= 27110
+
 run-game: check ## Play standalone off uncooked content — no editor UI, no cook (fast loop)
 	@echo ">> Launching $(PROJECT_NAME) standalone on $(MAP)..."
-	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game $(RUNARGS)
+	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game -asdebugport=$(DEBUGPORT) $(RUNARGS)
 
 run-packaged: ## Run the cooked Linux build (needs 'make package-linux' first)
 	@BIN=$$(find "$(OUTPUT_DIR)/Linux" -name '$(PROJECT_NAME).sh' -type f 2>/dev/null | head -1); \
