@@ -48,8 +48,23 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	}
 
 	// Relaxed ready position: hands hang slightly forward at the sides.
-	FVector ReadyR = ShR + Fwd * 18.0f - Up * 35.0f;
-	FVector ReadyL = ShL + Fwd * 18.0f - Up * 35.0f;
+	//
+	// Anchored in ACTOR space, not to the shoulder BONES like every other target
+	// here. The bones are the solver's OUTPUT: pelvis carries no position
+	// stiffness in the IK rig, so it drifts to help the hands reach, which moves
+	// the shoulders, which moves these targets, which makes the solver re-solve —
+	// a closed loop with nothing damping it. Measured at the bones, the hips were
+	// reversing direction 10.5 times a second while every script-side input read
+	// perfectly clean. The gesture targets genuinely need live bones (the hand has
+	// to arrive where the shoulder actually is); a pose whose whole job is "hands
+	// hang at the sides" does not, so it is the one that can leave the loop.
+	float ReadyCrouch = Math::Max(Self.ExtraCrouch, Self.HeldCrouch);
+	FVector ActorMid = Self.GetActorLocation();
+	float ShoulderUp = 55.0f - ReadyCrouch * 30.0f;   // hips sink, shoulders follow
+	FVector ReadyShR = ActorMid + Up * ShoulderUp + Right * 18.0f;
+	FVector ReadyShL = ActorMid + Up * ShoulderUp - Right * 18.0f;
+	FVector ReadyR = ReadyShR + Fwd * 18.0f - Up * 35.0f;
+	FVector ReadyL = ReadyShL + Fwd * 18.0f - Up * 35.0f;
 
 	FVector ContactR;
 	FVector ContactL;
@@ -402,8 +417,9 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	}
 	else
 	{
+		// Poles leave the loop with the targets — same reason, same anchor.
 		ContactR = ReadyR; ContactL = ReadyL;
-		PoleR = ShR - Up * 40.0f; PoleL = ShL - Up * 40.0f;
+		PoleR = ReadyShR - Up * 40.0f; PoleL = ReadyShL - Up * 40.0f;
 	}
 
 	// Ease from ready to the contact pose by the gesture weight. The spike/block/
