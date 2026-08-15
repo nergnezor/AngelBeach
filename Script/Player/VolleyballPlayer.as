@@ -21,6 +21,13 @@ class AVolleyballPlayer : APawn
 	UPROPERTY(DefaultComponent, Attach = Capsule)
 	UProceduralMeshComponent TeamRing;
 
+	// The ring is built once at construction, so editing TeamRingColor() would not show
+	// up on players that already exist — hot reload swaps code, it does not re-run
+	// construction. Holding the material instance and the colour last pushed to it lets
+	// UpdatePlayer notice a changed return value and repaint, so colour edits are live.
+	UMaterialInstanceDynamic RingMID;
+	FLinearColor AppliedRingColor = FLinearColor(-1, -1, -1, -1);
+
 	float MoveSpeed = 450.0f;
 	// PLAYER gravity is ~2x earth (the ball keeps real -980): with real g the
 	// tuned jump heights hung airborne ~1.5s and read as moon-floating. Heavy
@@ -196,10 +203,29 @@ class AVolleyballPlayer : APawn
 			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 		if (Base != nullptr)
 		{
-			UMaterialInstanceDynamic MID = TeamRing.CreateDynamicMaterialInstance(0, Base);
-			if (MID != nullptr)
-				MID.SetVectorParameterValue(n"Color", Col);
+			RingMID = TeamRing.CreateDynamicMaterialInstance(0, Base);
+			if (RingMID != nullptr)
+			{
+				RingMID.SetVectorParameterValue(n"Color", Col);
+				AppliedRingColor = Col;
+			}
 		}
+	}
+
+	// Repaint the ring when TeamRingColor() starts returning something else, which is
+	// what makes a hot-reloaded colour edit visible on players that are already on court.
+	private void RefreshTeamRingColor()
+	{
+		if (RingMID == nullptr)
+			return;
+
+		FLinearColor Want = TeamRingColor();
+		if (Want.R == AppliedRingColor.R && Want.G == AppliedRingColor.G
+			&& Want.B == AppliedRingColor.B && Want.A == AppliedRingColor.A)
+			return;
+
+		RingMID.SetVectorParameterValue(n"Color", Want);
+		AppliedRingColor = Want;
 	}
 
 	// Pre-divided by the measured per-channel light gain (0.314,0.162,0.067) — see
@@ -284,6 +310,7 @@ class AVolleyballPlayer : APawn
 		// floating at head height would read as a bug rather than as a shadow.
 		// Cancelling the actor's Z keeps it flat on the beach at all times.
 		TeamRing.SetRelativeLocation(FVector(0, 0, 2.0f - GetActorLocation().Z));
+		RefreshTeamRingColor();
 
 		// Crouch release runs FIRST, before any writer: with the decay at the
 		// end of the frame it subtracted from what dive/tuck/split-step had
