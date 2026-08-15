@@ -25,7 +25,6 @@
 			"type": "node-terminal",
 			"request": "launch",
 			"command": "make run-game",
-			"problemMatcher": [],
 			"cwd": "${workspaceFolder}"
 		},
 		{
