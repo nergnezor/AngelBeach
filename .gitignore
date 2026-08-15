@@ -5,9 +5,6 @@ Intermediate/
 Saved/
 PackagedBuilds/
 
-# Editor metadata
-.vscode/
-
 # Binary assets not tracked via Git LFS
 Content/Collections/
 Content/Developers/

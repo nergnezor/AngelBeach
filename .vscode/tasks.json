@@ -1,0 +1,99 @@
+{
+	// Launching Unreal doesn't need a debug extension, so it's a task. The Angelscript
+	// debugger (launch.json) then attaches to the running instance.
+	//
+	// Two deliberate choices here, both learned the hard way:
+	//
+	// "type": "process" — not "shell". A shell task runs through the login shell with
+	// shell integration, and VSCode learns the exit code from that. If it doesn't come
+	// back, the task looks like it ended with no exit code, which is the one case where
+	// VSCode abandons a debug session in total silence: no terminal, no dialog, no
+	// output. Exec'ing the script directly removes that whole layer.
+	//
+	// The labels are new. VSCode keeps a per-workspace copy of task definitions in
+	// workspaceStorage/<hash>/state.vscdb keyed by label, and this workspace's copy still
+	// described these as background tasks with an empty problemMatcher — a shape that can
+	// never report readiness. Fresh labels have no stored state to inherit.
+	// scripts/clear_vscode_task_state.py removes the old entries (VSCode must be closed).
+	//
+	// The tasks call scripts/launch_ue.sh, which starts Unreal detached and exits once the
+	// Angelscript debug server accepts connections. So these are ordinary foreground tasks
+	// that VSCode simply waits for — no isBackground, no problem matcher.
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "UE: editor",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/launch_ue.sh",
+			"args": ["editor"],
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			// No editor UI: the editor binary runs the game directly off uncooked content.
+			// Boots in about a minute and serves the Angelscript debugger on 27100.
+			"label": "UE: standalone game",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/launch_ue.sh",
+			"args": ["game"],
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Build project module (Linux)",
+			"type": "process",
+			"command": "make",
+			"args": ["project"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			// Just play. No debugger anywhere in this path: the game runs in the foreground
+			// so the terminal shows its log, stopping the task stops the game, and the
+			// Angelscript debug server is moved off 27099 so nothing can attach and pause it.
+			// Angelscript hot reload still works — edit Script/*.as and soft-reload.
+			"label": "Game: run",
+			"type": "process",
+			"command": "make",
+			"args": ["run-game"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+		},
+		{
+			// Same, but compiles the C++ module first. Only needed after C++ changes —
+			// Angelscript-only work does not need a build, so "Game: run" is the daily one.
+			"label": "Game: build + run",
+			"type": "process",
+			"command": "make",
+			"args": ["run-game"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"dependsOn": "Build project module (Linux)",
+			"dependsOrder": "sequence",
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+		},
+		{
+			// Cooked standalone build — no engine editor in the loop at all.
+			// Slow, and Angelscript is baked in (no hot reload), so this is for
+			// checking the shipped thing, not for iterating.
+			"label": "Package Linux build",
+			"type": "process",
+			"command": "make",
+			"args": ["package-linux"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": []
+		},
+		{
+			"label": "Run packaged Linux build",
+			"type": "process",
+			"command": "make",
+			"args": ["run-packaged"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "reveal": "always", "panel": "dedicated" }
+		}
+	]
+}

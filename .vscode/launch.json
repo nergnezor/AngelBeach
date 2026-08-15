@@ -1,0 +1,76 @@
+{
+	// AngelBeach is developed almost entirely in Angelscript (Script/*.as), which the
+	// Hazelight Angelscript UE fork hot-reloads in the running editor. Debugging is
+	// done with the installed `hazelight.unreal-angelscript` extension, which attaches
+	// to the running editor over a TCP port and breakpoints .as files directly — no
+	// C/C++ (cppdbg) extension is involved.
+	//
+	// Workflow: pick a config and press F5 — the preLaunchTask starts the editor (or the
+	// game), waits until it logs that the Angelscript debug server is listening, and only
+	// then attaches. Set breakpoints in Script/*.as.
+	//
+	// Note `request` is "launch" everywhere: this debug type only ever attaches to the
+	// port, so it is the preLaunchTask — not the debugger — that starts anything. A config
+	// without a preLaunchTask therefore needs you to have started the editor yourself.
+	"version": "0.2.0",
+	"configurations": [
+		{
+			// PLAY, no debugger. Picked from the Run and Debug dropdown like the others,
+			// but deliberately NOT type "angelscript": that type never starts a session on
+			// this machine, and since a preLaunchTask only runs as a step of starting one,
+			// nothing ever launched. "node-terminal" is VSCode's built-in "just run this
+			// command in a terminal" type, so this path touches none of that.
+			// No breakpoints here — Angelscript hot reload still works.
+			"name": "Game: run",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "make run-game",
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			// Same, compiling the C++ module first. Only needed after C++ changes.
+			"name": "Game: build + run",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "make project && make run-game",
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			// Full editor. Use this when you want the viewport, PIE and content browser.
+			"name": "Editor + Angelscript debug",
+			"type": "angelscript",
+			"request": "launch",
+			"preLaunchTask": "UE: editor",
+			"port": 27099
+		},
+		{
+			// Straight into the game, no editor UI — faster loop, breakpoints still work.
+			// Port 27100, not 27099: the game gets its own debug port so it can run
+			// alongside the editor. scripts/launch_ue.sh passes it as -asdebugport.
+			"name": "Game standalone + Angelscript debug",
+			"type": "angelscript",
+			"request": "launch",
+			"preLaunchTask": "UE: standalone game",
+			"port": 27100
+		},
+		{
+			// Attach to an ALREADY-RUNNING editor (start it yourself first). Note this
+			// fails silently if nothing is listening — the extension closes the session
+			// without a message, which looks exactly like F5 doing nothing.
+			"name": "Angelscript: attach to running editor",
+			"type": "angelscript",
+			"request": "launch",
+			"port": 27099
+		},
+		{
+			// Same, for a game started by hand:  ./scripts/launch_ue.sh game
+			// No preLaunchTask, so this path works even when VSCode's task runner won't
+			// start one — which it silently refuses to do when its stored task state for
+			// the workspace is stale.
+			"name": "Angelscript: attach to standalone game",
+			"type": "angelscript",
+			"request": "launch",
+			"port": 27100
+		}
+	]
+}
