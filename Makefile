@@ -239,9 +239,16 @@ MAP     ?= /Game/CourtLevel
 # should be able to reach in and stop a run you started to just play.
 DEBUGPORT ?= 27110
 
+# Windowed by default. A `-game` run takes the whole screen otherwise, which buries the
+# editor and the terminal you started it from and makes it awkward to alt-tab back to a
+# script while the match plays. Override with RESX/RESY, or pass -fullscreen in RUNARGS.
+RESX ?= 1600
+RESY ?= 900
+
 run-game: check ## Play standalone off uncooked content — no editor UI, no cook (fast loop)
-	@echo ">> Launching $(PROJECT_NAME) standalone on $(MAP)..."
-	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game -asdebugport=$(DEBUGPORT) $(RUNARGS)
+	@echo ">> Launching $(PROJECT_NAME) standalone on $(MAP) ($(RESX)x$(RESY) windowed)..."
+	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game -asdebugport=$(DEBUGPORT) \
+		-windowed -ResX=$(RESX) -ResY=$(RESY) $(RUNARGS)
 
 run-packaged: ## Run the cooked Linux build (needs 'make package-linux' first)
 	@BIN=$$(find "$(OUTPUT_DIR)/Linux" -name '$(PROJECT_NAME).sh' -type f 2>/dev/null | head -1); \
