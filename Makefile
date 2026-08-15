@@ -245,10 +245,14 @@ DEBUGPORT ?= 27110
 RESX ?= 1600
 RESY ?= 900
 
+# -as-development-mode is what turns Angelscript hot reload on outside the editor. The
+# engine sets bScriptDevelopmentMode = GIsEditor || this flag, and only then starts the
+# thread that watches Script/*.as for changes — so without it a standalone run ignores
+# every edit until you restart it.
 run-game: check ## Play standalone off uncooked content — no editor UI, no cook (fast loop)
 	@echo ">> Launching $(PROJECT_NAME) standalone on $(MAP) ($(RESX)x$(RESY) windowed)..."
 	"$(UE_EDITOR)" "$(UPROJECT)" $(MAP) -game -asdebugport=$(DEBUGPORT) \
-		-windowed -ResX=$(RESX) -ResY=$(RESY) $(RUNARGS)
+		-as-development-mode -windowed -ResX=$(RESX) -ResY=$(RESY) $(RUNARGS)
 
 run-packaged: ## Run the cooked Linux build (needs 'make package-linux' first)
 	@BIN=$$(find "$(OUTPUT_DIR)/Linux" -name '$(PROJECT_NAME).sh' -type f 2>/dev/null | head -1); \
