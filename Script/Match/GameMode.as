@@ -460,6 +460,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 	{
 		Log("RALLY end reason=" + Reason + " crossings=" + RallyCrossings
 			+ " seq=[" + RallySeq + " ]");
+
+		// Motion-quality totals per player, on the same hook, so every rally in a
+		// headless run yields one comparable regression line per player.
+		TArray<AVolleyballPlayer> MonPlayers;
+		GetAllActorsOfClass(AVolleyballPlayer, MonPlayers);
+		for (AVolleyballPlayer P : MonPlayers)
+			if (P != nullptr) P.EmitMotionStats();
+
 		RallyCrossings = 0;
 		RallySeq = "";
 	}

@@ -88,6 +88,7 @@ class AAIPlayer : AVolleyballPlayer
 			bChoseOnTwo = false;
 			bIntendSet = false;
 			bOnTwoLoggedNotViable = false;
+			bSpikeCueOn = false;    // a committed attack cue must not outlive its ball
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
 			return;
@@ -1050,10 +1051,7 @@ class AAIPlayer : AVolleyballPlayer
 			AimAt(FVector(-MySign() * 300.0f, 0.0f, FloorZ));
 
 			AAIPlayer Att = FindAttackingOpponent();
-			bool bAttackerAirborne = (Att != nullptr && !Att.bIsGrounded);
-			bool bBallNearNet = Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f;
-			bool bSpikeIncoming = (bAttackerAirborne && bBallNearNet)
-				|| (bBallNearNet && Ball.BallVel.Z < -250.0f);   // already smashed/dropping fast
+			bool bSpikeIncoming = UpdateSpikeIncoming(Att);
 			// Hold the middle of the net while the opponent is still building. Track
 			// laterally only after the attack cue; following every set's small Y
 			// drift was visually busy and gave up the centre for no benefit.
@@ -1099,9 +1097,9 @@ class AAIPlayer : AVolleyballPlayer
 			// the opponent's lateral setup; move toward that line only when the
 			// attacker has actually committed to the spike.
 			Goal = HomePosition();
-			bool bSpikeIncoming = (Attacker != nullptr && !Attacker.bIsGrounded
-				&& Math::Abs(Ball.Position.X) < 350.0f && Ball.Position.Z > 220.0f)
-				|| (Math::Abs(Ball.Position.X) < 350.0f && Ball.BallVel.Z < -250.0f);
+			// Same hysteresed cue as the blocker — this copy of the raw OR moved
+			// the deep defender's goal just as far, just as often.
+			bool bSpikeIncoming = UpdateSpikeIncoming(Attacker);
 			if (bSpikeIncoming && Attacker != nullptr)
 				Goal.Y = Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f,
 					CourtMinY + 80.0f, CourtMaxY - 80.0f);
@@ -1272,8 +1270,46 @@ class AAIPlayer : AVolleyballPlayer
 	// ---------------------------------------------------------------
 	// Movement (no auto-jump here — jumping is decided by spike logic)
 	// ---------------------------------------------------------------
+	// --- Spike-incoming cue, with the same commit/release discipline every other
+	// decision in here already has ------------------------------------------
+	// This was a raw OR of three threshold tests, re-evaluated every AI tick. All
+	// three inputs (attacker airborne, ball near net, ball descending fast) can
+	// cross back and forth within one flight, and a single toggle moves the block
+	// goal from the net centre out to the ball's Y — up to 2.7m. That is far past
+	// MoveToHold's 110cm StartMoving, so the hold releases and the player runs,
+	// then runs back. No existing detector saw it: the run itself is perfectly
+	// smooth, so neither velocity nor yaw ever reverses. It shows up as goalJumps.
+	//
+	// Bands do not overlap, matching the block-commitment pattern below: commit on
+	// the real cue, release only when the ball is clearly no longer an attack.
+	private bool bSpikeCueOn = false;
+	private bool UpdateSpikeIncoming(AAIPlayer Att)
+	{
+		bool bAttackerAirborne = (Att != nullptr && !Att.bIsGrounded);
+		float BallX = Math::Abs(Ball.Position.X);
+		float BallZ = Ball.Position.Z;
+
+		if (!bSpikeCueOn)
+		{
+			// Commit: the attacker has left the ground with the ball at the net, or
+			// the ball is already coming down hard.
+			bool bNearNet = BallX < 350.0f && BallZ > 220.0f;
+			if ((bAttackerAirborne && bNearNet) || (bNearNet && Ball.BallVel.Z < -250.0f))
+				bSpikeCueOn = true;
+		}
+		else
+		{
+			// Release on a wider band, so the small drifts that flipped the raw
+			// test cannot un-commit us mid-approach.
+			if (BallX > 480.0f || BallZ < 150.0f)
+				bSpikeCueOn = false;
+		}
+		return bSpikeCueOn;
+	}
+
 	private void MoveToward2D(FVector Target, float Dt, bool bSprint = false, float SpeedCap = 1.0f)
 	{
+		ReportMoveGoal(Target);
 		FVector Dir = Target - GetActorLocation();
 		Dir.Z = 0;
 		float D = Dir.Size2D();
@@ -1365,6 +1401,10 @@ class AAIPlayer : AVolleyballPlayer
 	private bool bHolding = false;
 	protected void MoveToHold(FVector Target, float Dt, float SpeedCap = 1.0f)
 	{
+		// Report here too, not just via MoveToward2D: while holding, a target that
+		// teleports never reaches MoveToward2D at all until the hold breaks, and
+		// that break is exactly the event worth counting.
+		ReportMoveGoal(Target);
 		const float StartMoving = 110.0f;   // must drift this far before we re-chase
 		const float Arrived     = 35.0f;    // close enough — plant and hold
 		float D = (Target - GetActorLocation()).Size2D();

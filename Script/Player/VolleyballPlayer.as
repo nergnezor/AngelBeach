@@ -54,7 +54,13 @@ class AVolleyballPlayer : APawn
 	// actually track, so the body is never asked to reverse turn direction
 	// instantaneously when the raw target crosses to the other side.
 	private FVector SmFacingDir = FVector(1, 0, 0);
-	const float FacingDirMaxTurnRate = 300.0f;   // deg/s
+	const float FacingDirMaxTurnRate = 300.0f;   // deg/s — limits the TARGET
+	// Ceiling on how fast the BODY itself may rotate (deg/s). Distinct from the
+	// above, which only ever limited where the body was aiming. Measured peak
+	// before this existed: 1239 deg/s, median 566.
+	const float BodyMaxTurnRate = 450.0f;
+	// The one rate-limited facing target that all three sources feed through.
+	private FVector SmWantDir;
 	// Committed turn direction (signed degrees, last frame's Delta) — breaks
 	// the near-180° shortest-path tie deterministically instead of by float
 	// noise. See the rotation block in UpdatePlayer.
@@ -455,16 +461,34 @@ class AVolleyballPlayer : APawn
 
 		UpdateTurnRun(DeltaTime);
 
-		FVector Want = FVector::ZeroVector;
+		FVector RawWant = FVector::ZeroVector;
 		if (bTurnRun)
 			// Face the commanded travel (the intent), not the lagging velocity:
 			// the turn starts the same frame the run does. Demand ≥ 0.35 while
 			// engaged, so this is never a degenerate direction.
-			Want = FVector(MoveInput.X, MoveInput.Y, 0);
+			RawWant = FVector(MoveInput.X, MoveInput.Y, 0);
 		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
-			Want = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
+			RawWant = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
 		else if (HSpeed2 > 30.0f)
-			Want = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+			RawWant = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+
+		// ALL THREE SOURCES pass through one rate-limited target, not just the
+		// held-request one. Only src=1 was smoothed before, so the two unsmoothed
+		// paths (velocity, turn-and-run) and — worse — every SWITCH between the
+		// three handed the body a target that had teleported. Measured over 142
+		// flips: none sat near the 180° band RotDirBias guards, the sources were
+		// churning 65/45/32 between themselves instead. Smoothing the SELECTED
+		// target makes a source change a continuous move rather than a step.
+		if (RawWant.SizeSquared() > 0.01f)
+		{
+			if (SmWantDir.SizeSquared() < 0.01f) SmWantDir = RawWant.GetSafeNormal2D();
+			float CurWantYaw = SmWantDir.Rotation().Yaw;
+			float NewWantYaw = RawWant.Rotation().Yaw;
+			float WStep = Math::Clamp(Math::FindDeltaAngleDegrees(CurWantYaw, NewWantYaw),
+				-FacingDirMaxTurnRate * DeltaTime, FacingDirMaxTurnRate * DeltaTime);
+			SmWantDir = FRotator(0.0f, CurWantYaw + WStep, 0.0f).Vector();
+		}
+		FVector Want = SmWantDir;
 
 		if (Want.SizeSquared() > 0.01f)
 		{
@@ -488,8 +512,19 @@ class AVolleyballPlayer : APawn
 				Delta = bDeltaPos ? Delta - 360.0f : Delta + 360.0f;
 			if (Math::Abs(Delta) > 1.0f) RotDirBias = Delta;
 
+			// Proportional approach with an ATHLETIC CEILING. The gain alone is
+			// uncapped: a 180° error yields 180*8 = 1440 deg/s on the first frame,
+			// and the live telemetry measured a 566 deg/s median and 1239 deg/s
+			// peak — four times FacingDirMaxTurnRate, which only ever limited the
+			// target. A human pivoting hard manages roughly 400-500 deg/s; past
+			// that the body reads as a turret, not a player. Same shape the crouch
+			// sink argues for: proportional so micro-corrections stay micro, with
+			// the cap only catching the outliers.
 			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
-			SetActorRotation(FRotator(Cur.Pitch, Cur.Yaw + Delta * Alpha, Cur.Roll));
+			float Step = Delta * Alpha;
+			float MaxStep = BodyMaxTurnRate * DeltaTime;
+			Step = Math::Clamp(Step, -MaxStep, MaxStep);
+			SetActorRotation(FRotator(Cur.Pitch, Cur.Yaw + Step, Cur.Roll));
 		}
 		// Debug attribution for YFLIP (see UpdateMotionMonitor): which source
 		// picked this frame's facing target, and what it pointed at.
@@ -743,6 +778,66 @@ class AVolleyballPlayer : APawn
 	private int MonYFlipLogs = 0;
 	private float MonPrevDt = 0.0f;   // testing whether YFLIP correlates with erratic frame pacing
 
+	// RUN TOTALS — the window counters above reset every 0.5s and only ever print
+	// on threshold breach, so a clean run and a run where the monitor silently
+	// stopped working look identical, and a worse build can log the same capped
+	// 60 YFLIP lines as a better one. These accumulate for the whole rally and are
+	// emitted unconditionally as MOTIONSTATS, with seconds-in-motion as the
+	// denominator so two runs of different length are comparable.
+	private int MonTotMoveFlips = 0;
+	private int MonTotYawFlips = 0;
+	private int MonTotCrouchFlips = 0;
+	private int MonTotIKTeleports = 0;
+	private float MonMovingTime = 0.0f;
+	private float MonYawRateSum = 0.0f;    // |rate| while turning, for the mean
+	private float MonYawRateSamples = 0.0f;
+	private float MonYawRateMax = 0.0f;
+	// Goal jumps: the movement TARGET teleporting is invisible to every detector
+	// above — MoveToHold absorbs it into a perfectly smooth run in the wrong
+	// direction, so no velocity or yaw reversal ever fires. Threshold sits above
+	// MoveToHold's 110cm StartMoving, i.e. only jumps big enough to actually make
+	// the player run somewhere else count.
+	private FVector MonPrevGoal;
+	private bool bMonGoalInit = false;
+	private int MonGoalJumps = 0;
+
+	// Called by the AI whenever it commands a movement target. Reporting the same
+	// target twice in a frame is harmless (delta 0), so both MoveToHold and
+	// MoveToward2D can call it without double counting.
+	void ReportMoveGoal(FVector Goal)
+	{
+		if (bMonGoalInit && (Goal - MonPrevGoal).Size2D() > 150.0f)
+			MonGoalJumps++;
+		MonPrevGoal = Goal;
+		bMonGoalInit = true;
+	}
+
+	// Emitted per rally from GameMode.LogRallyEnd — one greppable regression
+	// number per player instead of "eyeball the flipbook".
+	void EmitMotionStats()
+	{
+		if (!bMonitorMotion) return;
+		int YawMean = (MonYawRateSamples > 0.0f) ? int(MonYawRateSum / MonYawRateSamples) : 0;
+		Log("MOTIONSTATS " + GetName()
+			+ " moving=" + int(MonMovingTime * 100.0f)
+			+ " moveFlips=" + MonTotMoveFlips
+			+ " yawFlips=" + MonTotYawFlips
+			+ " crouchFlips=" + MonTotCrouchFlips
+			+ " ikTeleports=" + MonTotIKTeleports
+			+ " goalJumps=" + MonGoalJumps
+			+ " yawRateMean=" + YawMean
+			+ " yawRateMax=" + int(MonYawRateMax));
+		MonTotMoveFlips = 0;
+		MonTotYawFlips = 0;
+		MonTotCrouchFlips = 0;
+		MonTotIKTeleports = 0;
+		MonGoalJumps = 0;
+		MonMovingTime = 0.0f;
+		MonYawRateSum = 0.0f;
+		MonYawRateSamples = 0.0f;
+		MonYawRateMax = 0.0f;
+	}
+
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
@@ -765,7 +860,12 @@ class AVolleyballPlayer : APawn
 		FVector PV = FVector(MonPrevVel.X, MonPrevVel.Y, 0);
 		if (V.Size() > 60.0f && PV.Size() > 60.0f
 			&& V.DotProduct(PV) < -0.2f * V.Size() * PV.Size())
+		{
 			MonMoveFlips++;
+			MonTotMoveFlips++;
+		}
+		// Denominator: only time actually spent moving is comparable between runs.
+		if (V.Size() > 60.0f) MonMovingTime += DeltaTime;
 
 		// 2) Yaw oscillation: turn direction alternates at a real turn RATE.
 		// Thresholds are rates (per second), not per-frame deltas — a per-frame
@@ -777,6 +877,7 @@ class AVolleyballPlayer : APawn
 			&& YawRate * MonPrevYawDelta < 0.0f)
 		{
 			MonYawFlips++;
+			MonTotYawFlips++;
 			if (MonYFlipLogs < 60)
 			{
 				MonYFlipLogs++;
@@ -791,6 +892,15 @@ class AVolleyballPlayer : APawn
 		}
 		if (Math::Abs(YawRate) > 20.0f) MonPrevYawDelta = YawRate;
 		MonPrevDt = DeltaTime;
+		// Turn-rate distribution: the flip COUNT says how often direction reverses,
+		// this says how violently the body turns at all — the thing that reads as
+		// unnatural even when the direction never reverses.
+		if (Math::Abs(YawRate) > 20.0f)
+		{
+			MonYawRateSum += Math::Abs(YawRate);
+			MonYawRateSamples += 1.0f;
+			MonYawRateMax = Math::Max(MonYawRateMax, Math::Abs(YawRate));
+		}
 
 		// 3) Crouch flapping: knee direction alternates at a real rate. The
 		// threshold must catch ASYMMETRIC oscillation too: the proportional
@@ -802,6 +912,7 @@ class AVolleyballPlayer : APawn
 			&& CrouchRate * MonPrevCrouchDelta < 0.0f)
 		{
 			MonCrouchFlips++;
+			MonTotCrouchFlips++;
 			// Component dump: which upstream source is alternating? (pose*blend
 			// vs ExtraCrouch vs the sink itself). Capped so logs stay readable.
 			if (MonCFlipLogs < 60)
@@ -821,7 +932,10 @@ class AVolleyballPlayer : APawn
 		// The ceiling follows SinkBoostLog: a swing legitimately opens it.
 		float HandStep = (HandR - MonPrevHandR).Size();
 		if (HandStep > 900.0f * SinkBoostLog * DeltaTime * 1.6f + 2.0f)
+		{
 			MonIKTeleports++;
+			MonTotIKTeleports++;
+		}
 		// Rolling hand-speed peak for the SWING telemetry (decays ~0.5s).
 		PeakHandSpd = Math::Max(HandStep / DeltaTime, PeakHandSpd - 4000.0f * DeltaTime);
 
