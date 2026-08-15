@@ -801,6 +801,24 @@ class AVolleyballPlayer : APawn
 	private bool bMonGoalInit = false;
 	private int MonGoalJumps = 0;
 
+	// BONE-LEVEL JITTER — the solver's OUTPUT, which is what the eye actually sees.
+	// Every detector above watches script INTENT (velocity, yaw, crouch, hand
+	// targets). The visible pose is the FBIK solve on top of that, and the solver
+	// re-solves the whole chain — pelvis and spine included — from the hand
+	// targets every frame, so it can shake while every input reads clean. That is
+	// the blind spot the previous pass named and could not measure.
+	//
+	// footSlide is the classic skating tell: a foot in contact with the sand
+	// should be stationary in WORLD space. Any horizontal travel while it is
+	// planted is the foot sliding under the body.
+	private FVector MonPrevFootL;
+	private FVector MonPrevFootR;
+	private FVector MonPrevPelvis;
+	private FVector MonPrevPelvisVel;
+	private bool bMonBoneInit = false;
+	private float MonFootSlide = 0.0f;    // cm accumulated while planted
+	private int MonPelvisFlips = 0;       // pelvis direction reversals (the sink can't see these)
+
 	// Called by the AI whenever it commands a movement target. Reporting the same
 	// target twice in a frame is harmless (delta 0), so both MoveToHold and
 	// MoveToward2D can call it without double counting.
@@ -826,7 +844,9 @@ class AVolleyballPlayer : APawn
 			+ " ikTeleports=" + MonTotIKTeleports
 			+ " goalJumps=" + MonGoalJumps
 			+ " yawRateMean=" + YawMean
-			+ " yawRateMax=" + int(MonYawRateMax));
+			+ " yawRateMax=" + int(MonYawRateMax)
+			+ " footSlide=" + int(MonFootSlide)
+			+ " pelvisFlips=" + MonPelvisFlips);
 		MonTotMoveFlips = 0;
 		MonTotYawFlips = 0;
 		MonTotCrouchFlips = 0;
@@ -836,6 +856,8 @@ class AVolleyballPlayer : APawn
 		MonYawRateSum = 0.0f;
 		MonYawRateSamples = 0.0f;
 		MonYawRateMax = 0.0f;
+		MonFootSlide = 0.0f;
+		MonPelvisFlips = 0;
 	}
 
 	private void UpdateMotionMonitor(float DeltaTime)
@@ -938,6 +960,44 @@ class AVolleyballPlayer : APawn
 		}
 		// Rolling hand-speed peak for the SWING telemetry (decays ~0.5s).
 		PeakHandSpd = Math::Max(HandStep / DeltaTime, PeakHandSpd - 4000.0f * DeltaTime);
+
+		// 5) What the solver actually produced this frame.
+		if (Mesh != nullptr)
+		{
+			FVector FootL = Mesh.GetBoneTransform(n"foot_l").Translation;
+			FVector FootR = Mesh.GetBoneTransform(n"foot_r").Translation;
+			FVector Pelvis = Mesh.GetBoneTransform(n"pelvis").Translation;
+
+			if (!bMonBoneInit)
+			{
+				bMonBoneInit = true;
+				MonPrevFootL = FootL;
+				MonPrevFootR = FootR;
+				MonPrevPelvis = Pelvis;
+			}
+			else if (bIsGrounded)
+			{
+				// A foot counts as planted when it is within 12cm of the sand.
+				// Horizontal travel while planted is slide, in cm.
+				float FloorPlant = FloorZ + 12.0f;
+				if (FootL.Z < FloorPlant)
+					MonFootSlide += FVector(FootL.X - MonPrevFootL.X, FootL.Y - MonPrevFootL.Y, 0).Size();
+				if (FootR.Z < FloorPlant)
+					MonFootSlide += FVector(FootR.X - MonPrevFootR.X, FootR.Y - MonPrevFootR.Y, 0).Size();
+
+				// Pelvis reversals, measured the same rate-based way as the rest:
+				// the hips flipping direction at frame rate is the "shaky" look
+				// even when velocity and yaw are both perfectly smooth.
+				FVector PVel = (Pelvis - MonPrevPelvis) / DeltaTime;
+				if (PVel.Size() > 40.0f && MonPrevPelvisVel.Size() > 40.0f
+					&& PVel.DotProduct(MonPrevPelvisVel) < -0.2f * PVel.Size() * MonPrevPelvisVel.Size())
+					MonPelvisFlips++;
+				if (PVel.Size() > 15.0f) MonPrevPelvisVel = PVel;
+			}
+			MonPrevFootL = FootL;
+			MonPrevFootR = FootR;
+			MonPrevPelvis = Pelvis;
+		}
 
 		MonPrevVel = PlayerVelocity;
 		MonPrevYaw = Yaw;
