@@ -69,27 +69,16 @@ class AHumanPlayer : AAIPlayer
 			return;
 		}
 
-		if (Ball == nullptr || !Ball.bInPlay)
-		{
-			bIMadeLastTouch = false;
-			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
-			PreFaceForServe();
-			return;
-		}
-
-		if (bPlayerControlled)
+		if (bPlayerControlled && Ball != nullptr && Ball.bInPlay)
 		{
 			// Direct control: player drives movement, hits via buttons
 			MovePlayer(FVector2D(AxisForward, AxisRight));
 			return;
 		}
 
-		// AI fallback — reuse the exact same state machine as AAIPlayer,
-		// gated by the same reaction delay.
-		ReactionTimer += DeltaTime;
-		if (ReactionTimer < ReactionDelay) return;
-		ReactionTimer = 0.0f;
-		UpdateAI(DeltaTime);
+		// AI fallback — the SAME brain as AAIPlayer, not a copy of it: dead-ball
+		// resets, perception latency and the reaction gate all included.
+		RunAIBrain(DeltaTime);
 	}
 
 	// ---- Input handlers ----

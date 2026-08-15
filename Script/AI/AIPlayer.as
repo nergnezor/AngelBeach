@@ -78,6 +78,20 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
+		RunAIBrain(DeltaTime);
+	}
+
+	// The dead-ball reset, perception latency and reaction gate, in one place.
+	// AHumanPlayer runs the same brain as its fallback and used to carry its own
+	// copy of this sequence — a copy that had drifted: it was missing the whole
+	// perception-latency block and every per-rally reset, so Team A's back player
+	// reacted to ball events with zero delay and carried stale commitment flags
+	// (bIntendSet, bOnTwoDecided, a plant that PLANVA measures settle time from)
+	// across rallies. It was also the player that logs nothing, since bDebugAI is
+	// only set on B1/B2. Shared, it cannot diverge again.
+	// Returns true if the caller should stop here for this frame.
+	protected bool RunAIBrain(float DeltaTime)
+	{
 		if (Ball == nullptr || !Ball.bInPlay)
 		{
 			bIMadeLastTouch = false;
@@ -91,7 +105,7 @@ class AAIPlayer : AVolleyballPlayer
 			bSpikeCueOn = false;    // a committed attack cue must not outlive its ball
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
-			return;
+			return true;
 		}
 
 		// PLAN vs ACTUAL bookkeeping: how long the hitter has stood planted
@@ -115,14 +129,15 @@ class AAIPlayer : AVolleyballPlayer
 		if (PerceptionTimer > 0.0f)
 		{
 			PerceptionTimer -= DeltaTime;
-			return;
+			return true;
 		}
 
 		ReactionTimer += DeltaTime;
-		if (ReactionTimer < ReactionDelay) return;
+		if (ReactionTimer < ReactionDelay) return true;
 		ReactionTimer = 0.0f;
 
 		UpdateAI(DeltaTime);
+		return false;
 	}
 
 	// Human visual reaction to an unanticipated event (~0.16s). Separate from
