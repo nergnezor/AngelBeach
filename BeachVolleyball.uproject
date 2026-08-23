@@ -43,6 +43,10 @@
 			"Name": "OnlineSubsystemGooglePlay",
 			"Enabled": false,
 			"PlatformAllowList": []
+		},
+		{
+			"Name": "Fab",
+			"Enabled": false
 		}
 	]
 }

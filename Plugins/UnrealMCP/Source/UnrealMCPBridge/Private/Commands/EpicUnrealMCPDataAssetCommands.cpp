@@ -1,0 +1,1534 @@
+#include "Commands/EpicUnrealMCPDataAssetCommands.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
+#include "Commands/EpicUnrealMCPPropertyUtils.h"
+
+#include "Engine/DataAsset.h"
+#include "Factories/DataAssetFactory.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "EditorAssetLibrary.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
+
+using PU = FEpicUnrealMCPPropertyUtils;
+
+FEpicUnrealMCPDataAssetCommands::FEpicUnrealMCPDataAssetCommands()
+{
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleCommand(
+	const FString& CommandType,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	if (CommandType == TEXT("list_data_asset_classes"))
+	{
+		return HandleListDataAssetClasses(Params);
+	}
+	if (CommandType == TEXT("create_data_asset"))
+	{
+		return HandleCreateDataAsset(Params);
+	}
+	if (CommandType == TEXT("get_data_asset_properties"))
+	{
+		return HandleGetDataAssetProperties(Params);
+	}
+	if (CommandType == TEXT("set_data_asset_property"))
+	{
+		return HandleSetDataAssetProperty(Params);
+	}
+	if (CommandType == TEXT("set_data_asset_properties"))
+	{
+		return HandleSetDataAssetProperties(Params);
+	}
+	if (CommandType == TEXT("list_data_assets"))
+	{
+		return HandleListDataAssets(Params);
+	}
+	if (CommandType == TEXT("get_property_valid_types"))
+	{
+		return HandleGetPropertyValidTypes(Params);
+	}
+	if (CommandType == TEXT("search_class_paths"))
+	{
+		return HandleSearchClassPaths(Params);
+	}
+	if (CommandType == TEXT("get_mass_config_traits"))
+	{
+		return HandleGetMassConfigTraits(Params);
+	}
+	if (CommandType == TEXT("add_mass_config_trait"))
+	{
+		return HandleAddMassConfigTrait(Params);
+	}
+	if (CommandType == TEXT("set_mass_config_trait_property"))
+	{
+		return HandleSetMassConfigTraitProperty(Params);
+	}
+	if (CommandType == TEXT("remove_mass_config_trait"))
+	{
+		return HandleRemoveMassConfigTrait(Params);
+	}
+
+	return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+		FString::Printf(TEXT("Unknown data asset command: %s"), *CommandType));
+}
+
+// Limited to UDataAsset subclasses. For any class use PU::ResolveAnyClass.
+UClass* FEpicUnrealMCPDataAssetCommands::ResolveDataAssetClass(const FString& ClassName)
+{
+	if (ClassName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	if (ClassName.Contains(TEXT(".")))
+	{
+		UClass* C = FindObject<UClass>(nullptr, *ClassName);
+		if (C)
+		{
+			return C;
+		}
+	}
+
+	TArray<UClass*> Derived;
+	GetDerivedClasses(UDataAsset::StaticClass(), Derived, true);
+	for (UClass* C : Derived)
+	{
+		if (!C)
+		{
+			continue;
+		}
+		if (C->GetName() == ClassName ||
+			C->GetName() == (TEXT("U") + ClassName) ||
+			C->GetName() == ClassName.RightChop(1))
+		{
+			return C;
+		}
+	}
+	return nullptr;
+}
+
+// Returns the valid classes/structs/enum-values for a given property slot,
+// mirroring what the editor dropdown would show. Optional "filter" param
+// trims results so the response stays small for large dropdowns.
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleGetPropertyValidTypes(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString ClassName;
+	FString PropertyPath;
+	if (!Params->TryGetStringField(TEXT("class_name"), ClassName))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'class_name'"));
+	}
+	if (!Params->TryGetStringField(TEXT("property_path"), PropertyPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_path'"));
+	}
+
+	bool bIncludeAbstract = false;
+	Params->TryGetBoolField(TEXT("include_abstract"), bIncludeAbstract);
+
+	FString Filter;
+	Params->TryGetStringField(TEXT("filter"), Filter);
+	const FString FilterLower = Filter.ToLower();
+
+	// Resolve the starting UStruct
+	UStruct* CurrentStruct = PU::ResolveAnyClass(ClassName);
+	if (!CurrentStruct)
+	{
+		for (TObjectIterator<UScriptStruct> It; It; ++It)
+		{
+			const FString N = (*It)->GetName();
+			if (N == ClassName || N == (TEXT("F") + ClassName) ||
+				(ClassName.StartsWith(TEXT("F")) && N == ClassName.RightChop(1)))
+			{
+				CurrentStruct = *It;
+				break;
+			}
+		}
+	}
+	if (!CurrentStruct)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Class/struct not found: '%s'"), *ClassName));
+	}
+
+	// Navigate dot-separated property path
+	TArray<FString> Parts;
+	PropertyPath.ParseIntoArray(Parts, TEXT("."), true);
+
+	FProperty* TargetProp = nullptr;
+	for (int32 i = 0; i < Parts.Num(); ++i)
+	{
+		TargetProp = CurrentStruct->FindPropertyByName(FName(*Parts[i]));
+		if (!TargetProp)
+		{
+			return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+				FString::Printf(TEXT("Property '%s' not found on '%s'"),
+					*Parts[i], *CurrentStruct->GetName()));
+		}
+
+		if (i < Parts.Num() - 1)
+		{
+			FProperty* Inner = TargetProp;
+			if (FArrayProperty* ArrProp = CastField<FArrayProperty>(TargetProp))
+			{
+				Inner = ArrProp->Inner;
+			}
+
+			if (FStructProperty* SP = CastField<FStructProperty>(Inner))
+			{
+				CurrentStruct = SP->Struct;
+			}
+			else if (FObjectProperty* OP = CastField<FObjectProperty>(Inner))
+			{
+				CurrentStruct = OP->PropertyClass;
+			}
+			else
+			{
+				return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+					FString::Printf(TEXT("Cannot navigate into '%s' (not struct/object)"),
+						*Parts[i]));
+			}
+		}
+	}
+	if (!TargetProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Property path '%s' resolved to null"), *PropertyPath));
+	}
+
+	// Unwrap outer array
+	FProperty* ElementProp = TargetProp;
+	bool bIsArray = false;
+	if (FArrayProperty* ArrProp = CastField<FArrayProperty>(TargetProp))
+	{
+		ElementProp = ArrProp->Inner;
+		bIsArray = true;
+	}
+
+	auto MakeClassEntry = [](UClass* C) -> TSharedPtr<FJsonObject>
+	{
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), C->GetName());
+		Obj->SetStringField(TEXT("path"), C->GetPathName());
+		Obj->SetStringField(TEXT("parent"),
+			C->GetSuperClass() ? C->GetSuperClass()->GetName() : TEXT("None"));
+		Obj->SetBoolField(TEXT("is_abstract"), C->HasAnyClassFlags(CLASS_Abstract));
+		Obj->SetBoolField(TEXT("is_deprecated"), C->HasAnyClassFlags(CLASS_Deprecated));
+		return Obj;
+	};
+
+	auto MakeStructEntry = [](UScriptStruct* S) -> TSharedPtr<FJsonObject>
+	{
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), S->GetName());
+		Obj->SetStringField(TEXT("path"), S->GetPathName());
+		Obj->SetStringField(TEXT("parent"),
+			S->GetSuperStruct() ? S->GetSuperStruct()->GetName() : TEXT("None"));
+		return Obj;
+	};
+
+	auto PassesFilter = [&](const FString& Name, const FString& Path) -> bool
+	{
+		if (FilterLower.IsEmpty())
+		{
+			return true;
+		}
+		return Name.ToLower().Contains(FilterLower) || Path.ToLower().Contains(FilterLower);
+	};
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("class_name"), ClassName);
+	Result->SetStringField(TEXT("property_path"), PropertyPath);
+	Result->SetBoolField(TEXT("is_array"), bIsArray);
+	if (!FilterLower.IsEmpty())
+	{
+		Result->SetStringField(TEXT("filter"), Filter);
+	}
+
+	// FClassProperty (TSubclassOf<T>)
+	if (FClassProperty* ClassProp = CastField<FClassProperty>(ElementProp))
+	{
+		Result->SetStringField(TEXT("kind"), TEXT("subclass"));
+		Result->SetStringField(TEXT("base_class"),
+			ClassProp->MetaClass ? ClassProp->MetaClass->GetName() : TEXT("UObject"));
+
+		TArray<UClass*> Derived;
+		if (ClassProp->MetaClass)
+		{
+			GetDerivedClasses(ClassProp->MetaClass, Derived, true);
+		}
+
+		TArray<TSharedPtr<FJsonValue>> Items;
+		for (UClass* C : Derived)
+		{
+			if (!C || (!bIncludeAbstract && C->HasAnyClassFlags(CLASS_Abstract))
+				|| C->HasAnyClassFlags(CLASS_Deprecated))
+			{
+				continue;
+			}
+			if (!PassesFilter(C->GetName(), C->GetPathName()))
+			{
+				continue;
+			}
+			Items.Add(MakeShared<FJsonValueObject>(MakeClassEntry(C)));
+		}
+		Result->SetNumberField(TEXT("count"), Items.Num());
+		Result->SetArrayField(TEXT("valid_types"), Items);
+		return Result;
+	}
+
+	// FObjectProperty (instanced or plain)
+	if (FObjectProperty* ObjProp = CastField<FObjectProperty>(ElementProp))
+	{
+		const bool bInstanced = ObjProp->HasAnyPropertyFlags(
+			CPF_PersistentInstance | CPF_InstancedReference);
+		Result->SetStringField(TEXT("kind"),
+			bInstanced ? TEXT("instanced_object") : TEXT("object_reference"));
+		Result->SetStringField(TEXT("base_class"),
+			ObjProp->PropertyClass ? ObjProp->PropertyClass->GetName() : TEXT("UObject"));
+
+		TArray<UClass*> Derived;
+		if (ObjProp->PropertyClass)
+		{
+			GetDerivedClasses(ObjProp->PropertyClass, Derived, true);
+		}
+		if (ObjProp->PropertyClass && !ObjProp->PropertyClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			Derived.AddUnique(ObjProp->PropertyClass);
+		}
+
+		TArray<TSharedPtr<FJsonValue>> Items;
+		for (UClass* C : Derived)
+		{
+			if (!C || (!bIncludeAbstract && C->HasAnyClassFlags(CLASS_Abstract))
+				|| C->HasAnyClassFlags(CLASS_Deprecated))
+			{
+				continue;
+			}
+			if (!PassesFilter(C->GetName(), C->GetPathName()))
+			{
+				continue;
+			}
+			Items.Add(MakeShared<FJsonValueObject>(MakeClassEntry(C)));
+		}
+		Result->SetNumberField(TEXT("count"), Items.Num());
+		Result->SetArrayField(TEXT("valid_types"), Items);
+		return Result;
+	}
+
+	// FStructProperty where Struct == FInstancedStruct
+	if (FStructProperty* StructProp = CastField<FStructProperty>(ElementProp))
+	{
+		if (StructProp->Struct && StructProp->Struct->GetName() == TEXT("InstancedStruct"))
+		{
+			FString BaseStructMeta = TargetProp->GetMetaData(TEXT("BaseStruct"));
+			const bool bExcludeBase = TargetProp->HasMetaData(TEXT("ExcludeBaseStruct"));
+
+			UScriptStruct* BaseStruct = nullptr;
+			if (!BaseStructMeta.IsEmpty())
+			{
+				BaseStruct = FindObject<UScriptStruct>(nullptr, *BaseStructMeta);
+				if (!BaseStruct)
+				{
+					for (TObjectIterator<UScriptStruct> It; It; ++It)
+					{
+						const FString N = (*It)->GetName();
+						if (N == BaseStructMeta || N == (TEXT("F") + BaseStructMeta) ||
+							(*It)->GetPathName() == BaseStructMeta)
+						{
+							BaseStruct = *It;
+							break;
+						}
+					}
+				}
+			}
+
+			Result->SetStringField(TEXT("kind"), TEXT("instanced_struct"));
+			Result->SetStringField(TEXT("base_struct"),
+				BaseStruct ? BaseStruct->GetName() : TEXT("(any)"));
+
+			TArray<TSharedPtr<FJsonValue>> Items;
+			for (TObjectIterator<UScriptStruct> It; It; ++It)
+			{
+				UScriptStruct* S = *It;
+				if (!S || S->GetOutermost() == GetTransientPackage())
+				{
+					continue;
+				}
+				if (BaseStruct && !S->IsChildOf(BaseStruct))
+				{
+					continue;
+				}
+				if (bExcludeBase && S == BaseStruct)
+				{
+					continue;
+				}
+				if (!PassesFilter(S->GetName(), S->GetPathName()))
+				{
+					continue;
+				}
+				Items.Add(MakeShared<FJsonValueObject>(MakeStructEntry(S)));
+			}
+			Result->SetNumberField(TEXT("count"), Items.Num());
+			Result->SetArrayField(TEXT("valid_types"), Items);
+			return Result;
+		}
+
+		Result->SetStringField(TEXT("kind"), TEXT("struct"));
+		Result->SetStringField(TEXT("struct_type"),
+			StructProp->Struct ? StructProp->Struct->GetName() : TEXT("unknown"));
+		Result->SetNumberField(TEXT("count"), 0);
+		Result->SetArrayField(TEXT("valid_types"), TArray<TSharedPtr<FJsonValue>>());
+		return Result;
+	}
+
+	// Enum
+	auto SerialiseEnum = [&](UEnum* Enum) -> TSharedPtr<FJsonObject>
+	{
+		TArray<TSharedPtr<FJsonValue>> Items;
+		for (int32 i = 0; i < Enum->NumEnums() - 1; ++i)
+		{
+			const FString EntryName = Enum->GetNameStringByIndex(i);
+			if (!PassesFilter(EntryName, TEXT("")))
+			{
+				continue;
+			}
+			TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+			Obj->SetStringField(TEXT("name"), EntryName);
+			Obj->SetStringField(TEXT("display_name"),
+				Enum->GetDisplayNameTextByIndex(i).ToString());
+			Obj->SetNumberField(TEXT("value"),
+				static_cast<double>(Enum->GetValueByIndex(i)));
+			Items.Add(MakeShared<FJsonValueObject>(Obj));
+		}
+		Result->SetStringField(TEXT("kind"), TEXT("enum"));
+		Result->SetStringField(TEXT("enum_name"), Enum->GetName());
+		Result->SetNumberField(TEXT("count"), Items.Num());
+		Result->SetArrayField(TEXT("valid_types"), Items);
+		return Result;
+	};
+
+	if (FEnumProperty* EnumProp = CastField<FEnumProperty>(ElementProp))
+	{
+		return SerialiseEnum(EnumProp->GetEnum());
+	}
+	if (FByteProperty* ByteProp = CastField<FByteProperty>(ElementProp))
+	{
+		UEnum* Enum = ByteProp->GetIntPropertyEnum();
+		if (Enum)
+		{
+			return SerialiseEnum(Enum);
+		}
+	}
+
+	// Primitive / unsupported
+	Result->SetStringField(TEXT("kind"),
+		FString::Printf(TEXT("primitive_%s"), *ElementProp->GetClass()->GetName()));
+	Result->SetNumberField(TEXT("count"), 0);
+	Result->SetArrayField(TEXT("valid_types"), TArray<TSharedPtr<FJsonValue>>());
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleListDataAssetClasses(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString Filter;
+	Params->TryGetStringField(TEXT("filter"), Filter);
+	const FString FilterLower = Filter.ToLower();
+
+	bool bIncludeAbstract = false;
+	Params->TryGetBoolField(TEXT("include_abstract"), bIncludeAbstract);
+
+	TArray<UClass*> Derived;
+	GetDerivedClasses(UDataAsset::StaticClass(), Derived, true);
+
+	TArray<TSharedPtr<FJsonValue>> ClassArray;
+	for (UClass* C : Derived)
+	{
+		if (!C || (!bIncludeAbstract && C->HasAnyClassFlags(CLASS_Abstract)))
+		{
+			continue;
+		}
+
+		const FString Name = C->GetName();
+		if (!FilterLower.IsEmpty() && !Name.ToLower().Contains(FilterLower))
+		{
+			continue;
+		}
+
+		int32 PropCount = 0;
+		for (TFieldIterator<FProperty> It(C, EFieldIteratorFlags::IncludeSuper); It; ++It)
+		{
+			if ((*It)->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible))
+			{
+				++PropCount;
+			}
+		}
+
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), Name);
+		Obj->SetStringField(TEXT("path"), C->GetPathName());
+		Obj->SetStringField(TEXT("parent_class"),
+			C->GetSuperClass() ? C->GetSuperClass()->GetName() : TEXT("None"));
+		Obj->SetBoolField(TEXT("is_abstract"), C->HasAnyClassFlags(CLASS_Abstract));
+		Obj->SetBoolField(TEXT("is_primary"), C->IsChildOf(UPrimaryDataAsset::StaticClass()));
+		Obj->SetNumberField(TEXT("property_count"), PropCount);
+		ClassArray.Add(MakeShared<FJsonValueObject>(Obj));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("count"), ClassArray.Num());
+	Result->SetArrayField(TEXT("classes"), ClassArray);
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleCreateDataAsset(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString ClassName;
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("class_name"), ClassName))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'class_name' parameter"));
+	}
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	UClass* AssetClass = ResolveDataAssetClass(ClassName);
+	if (!AssetClass)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Data asset class not found: '%s'"), *ClassName));
+	}
+	if (!AssetClass->IsChildOf(UDataAsset::StaticClass()))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Class '%s' is not a UDataAsset subclass"), *ClassName));
+	}
+
+	FString PackagePath;
+	FString AssetName;
+	int32 LastSlash = INDEX_NONE;
+	if (AssetPath.FindLastChar('/', LastSlash) && LastSlash != INDEX_NONE)
+	{
+		PackagePath = AssetPath.Left(LastSlash);
+		AssetName = AssetPath.Mid(LastSlash + 1);
+	}
+	else
+	{
+		AssetName = AssetPath;
+		PackagePath = TEXT("/Game");
+	}
+
+	const FString FullPath = PackagePath + TEXT("/") + AssetName;
+	if (UEditorAssetLibrary::DoesAssetExist(FullPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset already exists: %s"), *FullPath));
+	}
+
+	UDataAssetFactory* Factory = NewObject<UDataAssetFactory>();
+	Factory->DataAssetClass = AssetClass;
+
+	IAssetTools& AssetTools =
+		FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+
+	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, AssetClass, Factory);
+	if (!NewAsset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Failed to create data asset '%s'"), *FullPath));
+	}
+
+	const TSharedPtr<FJsonObject>* InitialProps = nullptr;
+	if (Params->TryGetObjectField(TEXT("initial_properties"), InitialProps) && InitialProps)
+	{
+		TArray<FString> FailedProps;
+		for (const auto& Pair : (*InitialProps)->Values)
+		{
+			FString Err;
+			if (!PU::SetProperty(NewAsset, Pair.Key, Pair.Value, Err))
+			{
+				FailedProps.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+			}
+		}
+		NewAsset->MarkPackageDirty();
+		UEditorAssetLibrary::SaveAsset(FullPath);
+
+		if (FailedProps.Num() > 0)
+		{
+			TSharedPtr<FJsonObject> Res = MakeShared<FJsonObject>();
+			Res->SetBoolField(TEXT("success"), true);
+			Res->SetStringField(TEXT("path"), FullPath);
+			Res->SetStringField(TEXT("class"), AssetClass->GetName());
+
+			TArray<TSharedPtr<FJsonValue>> WarnArr;
+			for (const FString& W : FailedProps)
+			{
+				WarnArr.Add(MakeShared<FJsonValueString>(W));
+			}
+			Res->SetArrayField(TEXT("property_warnings"), WarnArr);
+			return Res;
+		}
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("path"), FullPath);
+	Result->SetStringField(TEXT("class"), AssetClass->GetName());
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleGetDataAssetProperties(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	FString Filter;
+	Params->TryGetStringField(TEXT("filter"), Filter);
+
+	bool bIncludeInherited = true;
+	Params->TryGetBoolField(TEXT("include_inherited"), bIncludeInherited);
+
+	UObject* Asset = UEditorAssetLibrary::LoadAsset(AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+	if (!Asset->IsA(UDataAsset::StaticClass()))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset '%s' is not a UDataAsset"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetStringField(TEXT("class"), Asset->GetClass()->GetName());
+	Result->SetStringField(TEXT("parent_class"),
+		Asset->GetClass()->GetSuperClass()
+			? Asset->GetClass()->GetSuperClass()->GetName()
+			: TEXT("None"));
+	Result->SetObjectField(TEXT("properties"),
+		PU::SerializeAllProperties(Asset, Filter.ToLower(), bIncludeInherited));
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetDataAssetProperty(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	FString PropertyName;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+	if (!Params->TryGetStringField(TEXT("property_name"), PropertyName))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+	}
+
+	TSharedPtr<FJsonValue> PropertyValue = Params->TryGetField(TEXT("property_value"));
+	if (!PropertyValue.IsValid())
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
+	}
+
+	UObject* Asset = UEditorAssetLibrary::LoadAsset(AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	FString Err;
+	if (!PU::SetProperty(Asset, PropertyName, PropertyValue, Err))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+	}
+
+	Asset->MarkPackageDirty();
+	UEditorAssetLibrary::SaveAsset(AssetPath);
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetStringField(TEXT("property_name"), PropertyName);
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetDataAssetProperties(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+	}
+
+	const TSharedPtr<FJsonObject>* PropsObj = nullptr;
+	if (!Params->TryGetObjectField(TEXT("properties"), PropsObj) || !PropsObj)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'properties' object parameter"));
+	}
+
+	UObject* Asset = UEditorAssetLibrary::LoadAsset(AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	TArray<FString> Set;
+	TArray<FString> Failed;
+	for (const auto& Pair : (*PropsObj)->Values)
+	{
+		FString Err;
+		if (PU::SetProperty(Asset, Pair.Key, Pair.Value, Err))
+		{
+			Set.Add(Pair.Key);
+		}
+		else
+		{
+			Failed.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+		}
+	}
+
+	Asset->MarkPackageDirty();
+	UEditorAssetLibrary::SaveAsset(AssetPath);
+
+	TArray<TSharedPtr<FJsonValue>> SetArr;
+	TArray<TSharedPtr<FJsonValue>> FailArr;
+	for (const FString& S : Set)
+	{
+		SetArr.Add(MakeShared<FJsonValueString>(S));
+	}
+	for (const FString& F : Failed)
+	{
+		FailArr.Add(MakeShared<FJsonValueString>(F));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), Failed.IsEmpty());
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetNumberField(TEXT("set_count"), Set.Num());
+	Result->SetNumberField(TEXT("failed_count"), Failed.Num());
+	Result->SetArrayField(TEXT("set"), SetArr);
+	if (!FailArr.IsEmpty())
+	{
+		Result->SetArrayField(TEXT("failed"), FailArr);
+	}
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleListDataAssets(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString SearchPath = TEXT("/Game");
+	bool bRecursive = true;
+	FString ClassFilter;
+	double MaxResultsD = 200.0;
+	int32 MaxResults = 200;
+
+	Params->TryGetStringField(TEXT("path"), SearchPath);
+	Params->TryGetBoolField(TEXT("recursive"), bRecursive);
+	Params->TryGetStringField(TEXT("class_filter"), ClassFilter);
+	if (Params->TryGetNumberField(TEXT("max_results"), MaxResultsD))
+	{
+		MaxResults = static_cast<int32>(MaxResultsD);
+	}
+
+	IAssetRegistry& Registry =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(*SearchPath));
+	Filter.bRecursivePaths = bRecursive;
+	Filter.bRecursiveClasses = true;
+
+	if (!ClassFilter.IsEmpty())
+	{
+		UClass* FilterClass = ResolveDataAssetClass(ClassFilter);
+		if (FilterClass)
+		{
+			Filter.ClassPaths.Add(FilterClass->GetClassPathName());
+		}
+		else
+		{
+			Filter.ClassPaths.Add(FTopLevelAssetPath(TEXT("/Script/Engine"), FName(*ClassFilter)));
+		}
+	}
+	else
+	{
+		Filter.ClassPaths.Add(UDataAsset::StaticClass()->GetClassPathName());
+	}
+
+	TArray<FAssetData> Assets;
+	Registry.GetAssets(Filter, Assets);
+	if (Assets.Num() > MaxResults)
+	{
+		Assets.SetNum(MaxResults);
+	}
+
+	TArray<TSharedPtr<FJsonValue>> AssetArray;
+	for (const FAssetData& AD : Assets)
+	{
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), AD.AssetName.ToString());
+		Obj->SetStringField(TEXT("path"), AD.GetObjectPathString());
+		Obj->SetStringField(TEXT("class"), AD.AssetClassPath.GetAssetName().ToString());
+		AssetArray.Add(MakeShared<FJsonValueObject>(Obj));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("count"), Assets.Num());
+	Result->SetArrayField(TEXT("assets"), AssetArray);
+	return Result;
+}
+
+// ============================================================================
+// search_class_paths — Search UClass by name filter + parent class constraint
+// ============================================================================
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSearchClassPaths(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString Filter;
+	Params->TryGetStringField(TEXT("filter"), Filter);
+
+	FString ParentClassName;
+	Params->TryGetStringField(TEXT("parent_class"), ParentClassName);
+
+	int32 MaxResults = 50;
+	if (Params->HasField(TEXT("max_results")))
+	{
+		MaxResults = static_cast<int32>(Params->GetNumberField(TEXT("max_results")));
+	}
+
+	bool bIncludeProperties = false;
+	if (Params->HasField(TEXT("include_properties")))
+	{
+		bIncludeProperties = Params->GetBoolField(TEXT("include_properties"));
+	}
+
+	// Resolve parent class constraint
+	UClass* ParentClass = UObject::StaticClass(); // Default: search everything
+	if (!ParentClassName.IsEmpty())
+	{
+		// Try direct path first (e.g., "/Script/MassEntity.MassEntityTraitBase")
+		UClass* Found = FindObject<UClass>(nullptr, *ParentClassName);
+
+		// Try common patterns
+		if (!Found)
+		{
+			// Search all classes for name match
+			for (TObjectIterator<UClass> It; It; ++It)
+			{
+				UClass* C = *It;
+				if (!C)
+				{
+					continue;
+				}
+
+				const FString Name = C->GetName();
+				if (Name == ParentClassName ||
+					Name == (TEXT("U") + ParentClassName) ||
+					Name == (TEXT("F") + ParentClassName) ||
+					Name == ParentClassName.RightChop(1))
+				{
+					Found = C;
+					break;
+				}
+			}
+		}
+
+		if (!Found)
+		{
+			return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+				FString::Printf(TEXT("Parent class not found: %s"), *ParentClassName));
+		}
+		ParentClass = Found;
+	}
+
+	// Get all derived classes
+	TArray<UClass*> Derived;
+	GetDerivedClasses(ParentClass, Derived, true);
+
+	// Also include the parent class itself if it matches
+	if (!ParentClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		Derived.Insert(ParentClass, 0);
+	}
+
+	// Filter by name keyword
+	TArray<TSharedPtr<FJsonValue>> ResultArray;
+	const FString FilterLower = Filter.ToLower();
+
+	for (UClass* C : Derived)
+	{
+		if (!C || C->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+		{
+			continue;
+		}
+
+		const FString ClassName = C->GetName();
+
+		// Apply name filter
+		if (!Filter.IsEmpty() && !ClassName.ToLower().Contains(FilterLower))
+		{
+			continue;
+		}
+
+		TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+		Entry->SetStringField(TEXT("name"), ClassName);
+		Entry->SetStringField(TEXT("class_path"), C->GetPathName());
+
+		// Include editable properties if requested
+		if (bIncludeProperties)
+		{
+			TArray<TSharedPtr<FJsonValue>> PropsArray;
+			for (TFieldIterator<FProperty> PropIt(C, EFieldIteratorFlags::ExcludeSuper); PropIt; ++PropIt)
+			{
+				FProperty* Prop = *PropIt;
+				if (!Prop || !Prop->HasAnyPropertyFlags(CPF_Edit))
+				{
+					continue;
+				}
+
+				TSharedPtr<FJsonObject> PropObj = MakeShared<FJsonObject>();
+				PropObj->SetStringField(TEXT("name"), Prop->GetName());
+				PropObj->SetStringField(TEXT("type"), Prop->GetCPPType());
+
+				// Get default value
+				const UObject* CDO = C->GetDefaultObject();
+				if (CDO)
+				{
+					const void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(CDO);
+					FString DefaultStr;
+					Prop->ExportTextItem_Direct(DefaultStr, ValuePtr, nullptr, nullptr, PPF_None);
+					if (!DefaultStr.IsEmpty())
+					{
+						PropObj->SetStringField(TEXT("default"), DefaultStr);
+					}
+				}
+
+				PropsArray.Add(MakeShared<FJsonValueObject>(PropObj));
+			}
+			Entry->SetArrayField(TEXT("properties"), PropsArray);
+		}
+
+		ResultArray.Add(MakeShared<FJsonValueObject>(Entry));
+
+		if (ResultArray.Num() >= MaxResults)
+		{
+			break;
+		}
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("count"), ResultArray.Num());
+	Result->SetStringField(TEXT("parent_class"), ParentClass->GetName());
+	if (!Filter.IsEmpty())
+	{
+		Result->SetStringField(TEXT("filter"), Filter);
+	}
+	Result->SetArrayField(TEXT("classes"), ResultArray);
+	return Result;
+}
+
+// ============================================================================
+// get_mass_config_traits — Read all traits from a Mass Entity Config with
+// their properties expanded (not just object paths)
+// ============================================================================
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleGetMassConfigTraits(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path'"));
+	}
+
+	UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	// Find the Config struct property
+	FStructProperty* ConfigProp = nullptr;
+	for (TFieldIterator<FStructProperty> It(Asset->GetClass()); It; ++It)
+	{
+		if (It->GetName() == TEXT("Config"))
+		{
+			ConfigProp = *It;
+			break;
+		}
+	}
+
+	if (!ConfigProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Asset has no 'Config' struct property (not a MassEntityConfigAsset?)"));
+	}
+
+	const void* ConfigPtr = ConfigProp->ContainerPtrToValuePtr<void>(Asset);
+
+	// Find the Traits array inside the Config struct
+	FArrayProperty* TraitsArrayProp = nullptr;
+	for (TFieldIterator<FArrayProperty> It(ConfigProp->Struct); It; ++It)
+	{
+		if (It->GetName() == TEXT("Traits"))
+		{
+			TraitsArrayProp = *It;
+			break;
+		}
+	}
+
+	if (!TraitsArrayProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Config struct has no 'Traits' array"));
+	}
+
+	FObjectProperty* InnerObjProp = CastField<FObjectProperty>(TraitsArrayProp->Inner);
+	if (!InnerObjProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Traits array inner type is not an object"));
+	}
+
+	// Read the array
+	FScriptArrayHelper ArrayHelper(TraitsArrayProp, TraitsArrayProp->ContainerPtrToValuePtr<void>(ConfigPtr));
+
+	TArray<TSharedPtr<FJsonValue>> TraitsArray;
+	for (int32 i = 0; i < ArrayHelper.Num(); ++i)
+	{
+		UObject* TraitObj = InnerObjProp->GetObjectPropertyValue(ArrayHelper.GetRawPtr(i));
+		if (!TraitObj)
+		{
+			continue;
+		}
+
+		TSharedPtr<FJsonObject> TraitJson = MakeShared<FJsonObject>();
+		TraitJson->SetNumberField(TEXT("index"), i);
+		TraitJson->SetStringField(TEXT("name"), TraitObj->GetName());
+		TraitJson->SetStringField(TEXT("class"), TraitObj->GetClass()->GetName());
+		TraitJson->SetStringField(TEXT("class_path"), TraitObj->GetClass()->GetPathName());
+
+		// Serialize all editable properties (include inherited — traits like
+		// MassCrowdVisualizationTrait inherit HighResTemplateActor from parent)
+		TSharedPtr<FJsonObject> PropsJson = MakeShared<FJsonObject>();
+		for (TFieldIterator<FProperty> PropIt(TraitObj->GetClass()); PropIt; ++PropIt)
+		{
+			FProperty* Prop = *PropIt;
+			if (!Prop || !Prop->HasAnyPropertyFlags(CPF_Edit))
+			{
+				continue;
+			}
+
+			// Skip UObject/UMassEntityTraitBase base properties (noise)
+			if (Prop->GetOwnerClass() == UObject::StaticClass())
+			{
+				continue;
+			}
+
+			const void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(TraitObj);
+			FString ValueStr;
+			Prop->ExportTextItem_Direct(ValueStr, ValuePtr, nullptr, nullptr, PPF_None);
+			PropsJson->SetStringField(Prop->GetName(), ValueStr);
+		}
+		TraitJson->SetObjectField(TEXT("properties"), PropsJson);
+
+		TraitsArray.Add(MakeShared<FJsonValueObject>(TraitJson));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetNumberField(TEXT("trait_count"), TraitsArray.Num());
+	Result->SetArrayField(TEXT("traits"), TraitsArray);
+	return Result;
+}
+
+// ============================================================================
+// add_mass_config_trait — Add a SINGLE trait to a Mass Entity Config without
+// replacing existing traits. Safe for configs with complex replicator settings.
+// ============================================================================
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleAddMassConfigTrait(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path'"));
+	}
+
+	FString TraitClassName;
+	if (!Params->TryGetStringField(TEXT("trait_class"), TraitClassName))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'trait_class' (e.g. '/Script/Jiggify.MassBuildingHealthTrait')"));
+	}
+
+	UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	// Resolve trait class
+	UClass* TraitClass = StaticLoadClass(UObject::StaticClass(), nullptr, *TraitClassName);
+	if (!TraitClass)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Trait class not found: %s"), *TraitClassName));
+	}
+
+	// Find Config struct property
+	FStructProperty* ConfigProp = nullptr;
+	for (TFieldIterator<FStructProperty> It(Asset->GetClass()); It; ++It)
+	{
+		if (It->GetName() == TEXT("Config"))
+		{
+			ConfigProp = *It;
+			break;
+		}
+	}
+
+	if (!ConfigProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Asset has no 'Config' struct property"));
+	}
+
+	void* ConfigPtr = ConfigProp->ContainerPtrToValuePtr<void>(Asset);
+
+	// Find Traits array
+	FArrayProperty* TraitsArrayProp = nullptr;
+	for (TFieldIterator<FArrayProperty> It(ConfigProp->Struct); It; ++It)
+	{
+		if (It->GetName() == TEXT("Traits"))
+		{
+			TraitsArrayProp = *It;
+			break;
+		}
+	}
+
+	if (!TraitsArrayProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Config has no 'Traits' array"));
+	}
+
+	FObjectProperty* InnerObjProp = CastField<FObjectProperty>(TraitsArrayProp->Inner);
+	if (!InnerObjProp)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Traits array inner type is not an object"));
+	}
+
+	// Check if trait already exists
+	FScriptArrayHelper ArrayHelper(TraitsArrayProp, TraitsArrayProp->ContainerPtrToValuePtr<void>(ConfigPtr));
+	for (int32 i = 0; i < ArrayHelper.Num(); ++i)
+	{
+		UObject* Existing = InnerObjProp->GetObjectPropertyValue(ArrayHelper.GetRawPtr(i));
+		if (Existing && Existing->GetClass() == TraitClass)
+		{
+			return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+				FString::Printf(TEXT("Trait '%s' already exists at index %d"), *TraitClass->GetName(), i));
+		}
+	}
+
+	// Create new trait instance
+	UObject* NewTrait = NewObject<UObject>(Asset, TraitClass);
+	if (!NewTrait)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create trait instance"));
+	}
+
+	// Set properties if provided
+	const TSharedPtr<FJsonObject>* PropertiesObj = nullptr;
+	if (Params->TryGetObjectField(TEXT("properties"), PropertiesObj) && PropertiesObj)
+	{
+		for (auto& Pair : (*PropertiesObj)->Values)
+		{
+			FProperty* Prop = NewTrait->GetClass()->FindPropertyByName(*Pair.Key);
+			if (Prop)
+			{
+				void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(NewTrait);
+				FString ValueStr;
+				if (Pair.Value->TryGetString(ValueStr))
+				{
+					Prop->ImportText_Direct(*ValueStr, ValuePtr, nullptr, PPF_None);
+				}
+				else if (Pair.Value->Type == EJson::Number)
+				{
+					// Handle numeric values
+					double NumVal = Pair.Value->AsNumber();
+					if (FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
+					{
+						FloatProp->SetPropertyValue(ValuePtr, static_cast<float>(NumVal));
+					}
+					else if (FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
+					{
+						DoubleProp->SetPropertyValue(ValuePtr, NumVal);
+					}
+					else if (FIntProperty* IntProp = CastField<FIntProperty>(Prop))
+					{
+						IntProp->SetPropertyValue(ValuePtr, static_cast<int32>(NumVal));
+					}
+				}
+				else if (Pair.Value->Type == EJson::Boolean)
+				{
+					if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+					{
+						BoolProp->SetPropertyValue(ValuePtr, Pair.Value->AsBool());
+					}
+				}
+			}
+		}
+	}
+
+	// Add to array
+	int32 NewIndex = ArrayHelper.AddValue();
+	InnerObjProp->SetObjectPropertyValue(ArrayHelper.GetRawPtr(NewIndex), NewTrait);
+
+	// Mark dirty
+	Asset->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetStringField(TEXT("trait_class"), TraitClass->GetName());
+	Result->SetNumberField(TEXT("trait_index"), NewIndex);
+	Result->SetNumberField(TEXT("total_traits"), ArrayHelper.Num());
+	return Result;
+}
+
+// ============================================================================
+// Shared helper: locate the Config → Traits array and resolve a trait UObject
+// by index or class name. Returns nullptr and sets ErrorResponse on failure.
+// ============================================================================
+
+static UObject* ResolveMassConfigTrait(
+	UObject* Asset,
+	const TSharedPtr<FJsonObject>& Params,
+	FScriptArrayHelper*& OutArrayHelper,
+	FArrayProperty*& OutTraitsArrayProp,
+	FObjectProperty*& OutInnerObjProp,
+	int32& OutTraitIndex,
+	TSharedPtr<FJsonObject>& ErrorResponse)
+{
+	// Find Config struct property
+	FStructProperty* ConfigProp = nullptr;
+	for (TFieldIterator<FStructProperty> It(Asset->GetClass()); It; ++It)
+	{
+		if (It->GetName() == TEXT("Config"))
+		{
+			ConfigProp = *It;
+			break;
+		}
+	}
+
+	if (!ConfigProp)
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			TEXT("Asset has no 'Config' struct property (not a MassEntityConfigAsset?)"));
+		return nullptr;
+	}
+
+	void* ConfigPtr = ConfigProp->ContainerPtrToValuePtr<void>(Asset);
+
+	// Find Traits array
+	OutTraitsArrayProp = nullptr;
+	for (TFieldIterator<FArrayProperty> It(ConfigProp->Struct); It; ++It)
+	{
+		if (It->GetName() == TEXT("Traits"))
+		{
+			OutTraitsArrayProp = *It;
+			break;
+		}
+	}
+
+	if (!OutTraitsArrayProp)
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			TEXT("Config struct has no 'Traits' array"));
+		return nullptr;
+	}
+
+	OutInnerObjProp = CastField<FObjectProperty>(OutTraitsArrayProp->Inner);
+	if (!OutInnerObjProp)
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			TEXT("Traits array inner type is not an object"));
+		return nullptr;
+	}
+
+	OutArrayHelper = new FScriptArrayHelper(
+		OutTraitsArrayProp,
+		OutTraitsArrayProp->ContainerPtrToValuePtr<void>(ConfigPtr));
+
+	// Resolve trait by index or class name
+	int32 TraitIndex = INDEX_NONE;
+	if (Params->HasField(TEXT("trait_index")))
+	{
+		TraitIndex = static_cast<int32>(Params->GetNumberField(TEXT("trait_index")));
+	}
+
+	FString TraitClass;
+	Params->TryGetStringField(TEXT("trait_class"), TraitClass);
+
+	if (TraitIndex == INDEX_NONE && TraitClass.IsEmpty())
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			TEXT("Must provide 'trait_index' (int) or 'trait_class' (string, e.g. '/Script/MassCrowd.MassCrowdVisualizationTrait' or 'MassCrowdVisualizationTrait')"));
+		delete OutArrayHelper;
+		OutArrayHelper = nullptr;
+		return nullptr;
+	}
+
+	// If class name given, find the trait by class
+	if (TraitIndex == INDEX_NONE && !TraitClass.IsEmpty())
+	{
+		for (int32 i = 0; i < OutArrayHelper->Num(); ++i)
+		{
+			UObject* TraitObj = OutInnerObjProp->GetObjectPropertyValue(OutArrayHelper->GetRawPtr(i));
+			if (!TraitObj)
+			{
+				continue;
+			}
+
+			const FString ClassName = TraitObj->GetClass()->GetName();
+			const FString ClassPathName = TraitObj->GetClass()->GetPathName();
+
+			if (ClassPathName == TraitClass
+				|| ClassName == TraitClass
+				|| (TraitClass.StartsWith(TEXT("U")) && ClassName == TraitClass.RightChop(1)))
+			{
+				TraitIndex = i;
+				break;
+			}
+		}
+
+		if (TraitIndex == INDEX_NONE)
+		{
+			ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+				FString::Printf(TEXT("No trait matching class '%s' found in config"), *TraitClass));
+			delete OutArrayHelper;
+			OutArrayHelper = nullptr;
+			return nullptr;
+		}
+	}
+
+	if (TraitIndex < 0 || TraitIndex >= OutArrayHelper->Num())
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("trait_index %d out of range [0, %d)"), TraitIndex, OutArrayHelper->Num()));
+		delete OutArrayHelper;
+		OutArrayHelper = nullptr;
+		return nullptr;
+	}
+
+	OutTraitIndex = TraitIndex;
+	UObject* TraitObj = OutInnerObjProp->GetObjectPropertyValue(OutArrayHelper->GetRawPtr(TraitIndex));
+	if (!TraitObj)
+	{
+		ErrorResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Trait at index %d is null"), TraitIndex));
+		delete OutArrayHelper;
+		OutArrayHelper = nullptr;
+		return nullptr;
+	}
+
+	return TraitObj;
+}
+
+// ============================================================================
+// set_mass_config_trait_property — Modify properties on an EXISTING trait
+// in-place. Never replaces the Traits array, never creates new UObjects.
+// Uses Unreal's own ImportText reflection for maximum type compatibility.
+//
+// Params:
+//   asset_path   — path to the MassEntityConfigAsset
+//   trait_index   — (int) index of the trait, OR
+//   trait_class   — (string) class name or full path (e.g. "MassMovementTrait")
+//   property_name  — (string) single property to set (with property_value)
+//   property_value — (any) value for that property
+//   properties    — (object) multiple properties to set at once {name: value, ...}
+// ============================================================================
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetMassConfigTraitProperty(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path'"));
+	}
+
+	UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	FScriptArrayHelper* ArrayHelper = nullptr;
+	FArrayProperty* TraitsArrayProp = nullptr;
+	FObjectProperty* InnerObjProp = nullptr;
+	int32 TraitIndex = INDEX_NONE;
+	TSharedPtr<FJsonObject> ErrorResponse;
+
+	UObject* TraitObj = ResolveMassConfigTrait(
+		Asset, Params, ArrayHelper, TraitsArrayProp, InnerObjProp, TraitIndex, ErrorResponse);
+
+	if (!TraitObj)
+	{
+		return ErrorResponse;
+	}
+
+	// Collect properties to set — either single (property_name + property_value)
+	// or batch (properties object)
+	TSharedPtr<FJsonObject> PropsToSet = MakeShared<FJsonObject>();
+
+	FString SinglePropName;
+	if (Params->TryGetStringField(TEXT("property_name"), SinglePropName))
+	{
+		if (!Params->HasField(TEXT("property_value")))
+		{
+			delete ArrayHelper;
+			return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+				TEXT("'property_name' requires 'property_value'"));
+		}
+		PropsToSet->SetField(SinglePropName, Params->TryGetField(TEXT("property_value")));
+	}
+
+	const TSharedPtr<FJsonObject>* BatchProps = nullptr;
+	if (Params->TryGetObjectField(TEXT("properties"), BatchProps) && BatchProps)
+	{
+		for (const auto& Pair : (*BatchProps)->Values)
+		{
+			PropsToSet->SetField(Pair.Key, Pair.Value);
+		}
+	}
+
+	if (PropsToSet->Values.Num() == 0)
+	{
+		delete ArrayHelper;
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			TEXT("No properties to set. Provide 'property_name'+'property_value' or 'properties' object"));
+	}
+
+	// Apply each property using the existing PropertyUtils — handles ALL UE types
+	TArray<FString> SucceededProps;
+	TArray<FString> FailedProps;
+
+	for (const auto& Pair : PropsToSet->Values)
+	{
+		FString SetError;
+		if (PU::SetProperty(TraitObj, Pair.Key, Pair.Value, SetError))
+		{
+			SucceededProps.Add(Pair.Key);
+		}
+		else
+		{
+			FailedProps.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *SetError));
+		}
+	}
+
+	delete ArrayHelper;
+
+	// Mark dirty
+	Asset->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), FailedProps.Num() == 0);
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetStringField(TEXT("trait_class"), TraitObj->GetClass()->GetName());
+	Result->SetNumberField(TEXT("trait_index"), TraitIndex);
+
+	TArray<TSharedPtr<FJsonValue>> SuccArr;
+	for (const FString& S : SucceededProps)
+	{
+		SuccArr.Add(MakeShared<FJsonValueString>(S));
+	}
+	Result->SetArrayField(TEXT("properties_set"), SuccArr);
+
+	if (FailedProps.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> FailArr;
+		for (const FString& S : FailedProps)
+		{
+			FailArr.Add(MakeShared<FJsonValueString>(S));
+		}
+		Result->SetArrayField(TEXT("errors"), FailArr);
+	}
+
+	return Result;
+}
+
+// ============================================================================
+// remove_mass_config_trait — Remove a single trait from the Traits array
+// without affecting other traits. Identifies by index or class name.
+//
+// Params:
+//   asset_path  — path to the MassEntityConfigAsset
+//   trait_index  — (int) index of the trait to remove, OR
+//   trait_class  — (string) class name or full path
+// ============================================================================
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleRemoveMassConfigTrait(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path'"));
+	}
+
+	UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *AssetPath);
+	if (!Asset)
+	{
+		return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+			FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	FScriptArrayHelper* ArrayHelper = nullptr;
+	FArrayProperty* TraitsArrayProp = nullptr;
+	FObjectProperty* InnerObjProp = nullptr;
+	int32 TraitIndex = INDEX_NONE;
+	TSharedPtr<FJsonObject> ErrorResponse;
+
+	UObject* TraitObj = ResolveMassConfigTrait(
+		Asset, Params, ArrayHelper, TraitsArrayProp, InnerObjProp, TraitIndex, ErrorResponse);
+
+	if (!TraitObj)
+	{
+		return ErrorResponse;
+	}
+
+	FString RemovedClass = TraitObj->GetClass()->GetName();
+
+	// Remove the trait at the resolved index
+	ArrayHelper->RemoveValues(TraitIndex, 1);
+
+	delete ArrayHelper;
+
+	Asset->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("asset_path"), AssetPath);
+	Result->SetStringField(TEXT("removed_trait_class"), RemovedClass);
+	Result->SetNumberField(TEXT("removed_index"), TraitIndex);
+	return Result;
+}

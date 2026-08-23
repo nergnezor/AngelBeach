@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+Binaries/
+Intermediate/
+Content/
+
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+
+# Go CLI build artifacts
+cli/ue-cli
+cli/ue-cli.exe
+
+# Embedded plugin copy (built from Source/ at build time)
+cli/internal/project/plugin/
