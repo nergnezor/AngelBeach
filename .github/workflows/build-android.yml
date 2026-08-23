@@ -48,9 +48,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Content/Characters/ (Manny mesh/skeleton/anims) is tracked via Git LFS —
-          # without lfs: true, checkout only pulls the small pointer files, and cook
-          # sees corrupt/unreadable .uasset files instead of the real binary content.
+          # lfs: true is a no-op today but harmless to keep: Content/Characters/
+          # (Manny mesh/skeleton/anims + ABP_VolleyballPlayer) is gitignored, not
+          # tracked (see .gitignore) — this checkout provides none of it. It must
+          # already exist on the runner's workspace; the clean step below is what
+          # actually determines whether it survives from run to run.
           lfs: true
           # The default clean runs `git clean -ffdx`, which deletes Intermediate/
           # and Binaries/ and forces a ~20 min full C++ recompile of the Android
@@ -59,12 +61,19 @@ jobs:
 
       - name: Clean workspace (keep build caches)
         run: |
+          # -e Content/: Content/Characters/ (Manny mesh/skeleton/anims + the
+          # authored ABP_VolleyballPlayer Anim BP) is gitignored — not tracked —
+          # so without this exclude, -x here deletes it on every run even when
+          # it's already sitting on the runner, and the game falls back to
+          # SpawnFallbackBox() (players render as plain boxes). See VolleyballPlayer.as
+          # SetupMesh() and .gitignore's Content/Characters/ comment.
           git clean -ffdx \
             -e Binaries/ \
             -e Intermediate/ \
             -e Saved/ \
             -e DerivedDataCache/ \
             -e Build/ \
+            -e Content/ \
             -e "Script/Binds.Cache*"
 
       - name: Resolve Unreal Engine

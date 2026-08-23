@@ -32,9 +32,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Content/Characters/ (Manny mesh/skeleton/anims) is tracked via Git LFS —
-          # without lfs: true, the headless run loads corrupt/unreadable .uasset
-          # pointer files instead of the real binary content.
+          # lfs: true is a no-op today but harmless to keep: Content/Characters/
+          # (Manny mesh/skeleton/anims + ABP_VolleyballPlayer) is gitignored, not
+          # tracked (see .gitignore), so this checkout provides none of it. This
+          # workflow's default `clean: true` also runs `git clean -ffdx`, which
+          # deletes those gitignored files if they exist on the runner from a
+          # prior run — same failure mode as build-android.yml/build-linux.yml
+          # (players fall back to SpawnFallbackBox(), i.e. plain boxes) unless
+          # this step is given a Content/-preserving clean like those workflows.
           lfs: true
 
       - name: Resolve Unreal Engine
