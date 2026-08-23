@@ -18,8 +18,24 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	FVector Head  = Self.Mesh.GetBoneTransform(n"head").Location;
 	FVector ShR   = Self.Mesh.GetBoneTransform(n"upperarm_r").Location;
 	FVector ShL   = Self.Mesh.GetBoneTransform(n"upperarm_l").Location;
+	// Last frame's solved foot position — this frame's Two Bone IK target, so a
+	// moving pelvis (crouch) doesn't drag the feet through the ground with it.
+	FVector FootL = Self.Mesh.GetBoneTransform(n"foot_l").Location;
+	FVector FootR = Self.Mesh.GetBoneTransform(n"foot_r").Location;
 	FVector Fwd   = Self.GetActorForwardVector();
 	FVector Right = Self.GetActorRightVector();
+	// Guard against a not-yet-posed mesh: before the very first Anim Blueprint
+	// evaluation, GetBoneTransform returns the zero vector, which (being far
+	// from the actor, wherever it's spawned) is a wildly degenerate Two Bone IK
+	// target — the leg stretches toward world origin, and because the target
+	// is "read last frame's result", that bad pose is then self-reinforcing
+	// instead of self-correcting. Fall back to an approximate ground position
+	// under the actor whenever the read foot is implausibly far away.
+	FVector FootFallback = Self.GetActorLocation() - FVector(0, 0, 90.0f);
+	if ((FootL - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
+		FootL = FootFallback;
+	if ((FootR - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
+		FootR = FootFallback;
 	FVector Up    = FVector(0, 0, 1);
 
 	// Where the player is sending the ball. Falls back to "up and forward".
@@ -509,6 +525,28 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	Self.Anim.HandRotR     = Self.SmRotR;
 	Self.Anim.HandRotL     = Self.SmRotL;
 	Self.Anim.CrouchAmount = Self.SmCrouch;
+
+	// Pelvis sink target: lower it from its rest height by CrouchAmount. Anchored
+	// to ActorLocation (physics-authoritative), NOT a live pelvis bone — the same
+	// reason ReadyShR/L anchor to the actor instead of the shoulder bones above:
+	// bone-anchoring here would close a loop through the Modify Bone node's own
+	// output (pelvis moves -> next frame reads a lower pelvis -> target drops
+	// further). +5.9cm is the measured rest offset from actor origin to the
+	// pelvis bone in the reference pose (capsule origin sits at hip height,
+	// pelvis is a hair above it).
+	//
+	// The ABP pulls the pelvis rigidly to this point (Modify Bone, world space,
+	// Replace) which on its own would drag the whole skeleton down and sink the
+	// feet through the floor. FootTargetL/R above hold the *previous* frame's
+	// solved foot position; Two Bone IK re-targets each leg back to that fixed
+	// point after the pelvis moves, so the knees bend to keep the foot planted
+	// instead of the foot sliding with the hip. One frame of lag is invisible
+	// at crouch speed and self-stabilizes once the pelvis stops moving.
+	const float PelvisRestZ = 5.9f;
+	const float PelvisSinkDepth = 35.0f;  // cm of hip drop at full CrouchAmount
+	Self.Anim.PelvisTarget = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
+	Self.Anim.FootTargetL = FootL;
+	Self.Anim.FootTargetR = FootR;
 }
 
 // --- FIRST-PRINCIPLES MOTION SHAPING ---------------------------------------

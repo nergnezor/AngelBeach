@@ -68,6 +68,16 @@ class UVolleyballAnimInstance : UAnimInstance
 
 	// Lower body: hip height offset (negative = crouch) and dive hand plant.
 	UPROPERTY(BlueprintReadWrite) float    CrouchAmount = 0.0f;  // 0..1, drives knee bend
+	// WORLD-space pelvis target the Modify Bone node pulls the pelvis to. Feet
+	// would sink into the ground with the pelvis were it not for FootTargetL/R
+	// below re-planting them via Two Bone IK, which is what actually bends the
+	// knees (the pelvis moves rigidly; the legs solve to keep the foot fixed).
+	UPROPERTY(BlueprintReadWrite) FVector   PelvisTarget = FVector::ZeroVector;
+	// WORLD-space foot targets for the leg Two Bone IK nodes: last frame's
+	// solved foot position, read fresh each tick (see UpdateIKTargets) so the
+	// foot holds still under a moving pelvis instead of sliding with it.
+	UPROPERTY(BlueprintReadWrite) FVector   FootTargetL = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FVector   FootTargetR = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) bool     bDiving = false;      // play dive montage
 
 	// Head look-at: a WORLD-space point the head should turn toward (the ball), fed
