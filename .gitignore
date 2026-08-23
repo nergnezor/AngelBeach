@@ -9,6 +9,10 @@ PackagedBuilds/
 Content/Collections/
 Content/Developers/
 Content/*.uasset
+# Mesh/skeleton/anim sources — pulled from engine plugins, not committed.
+# (Recursive: a bare Content/*.uasset above only matches Content/'s direct
+# children, so this leaked into git+LFS once before — see commit history.)
+Content/Characters/
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
 !Content/CourtLevel.umap
