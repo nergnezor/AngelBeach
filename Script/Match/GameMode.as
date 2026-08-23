@@ -40,8 +40,15 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// picture: it put the body average at (68,44,26) while the actual desktop build
 	// renders (71,49,40) in the same shot, so tuning to the preview aims at the wrong
 	// target. Mobile currently lands on (68,54,38) against that (71,49,40).
+	// NOTE 2026-08-23: confirmed on device that this hemisphere-override trick
+	// does not reach mobile character shading at all any more (a 6x-HDR magenta
+	// test produced zero tint on the bodies) — mobile's SkyLight needs a real
+	// ProcessedTexture cubemap that this fully-dynamic scene never builds. Left
+	// in place since it's harmless (still colours the sand/court fine, presumably
+	// via a different, non-character path) but don't expect it to touch bodies;
+	// the sun-angle change above is what actually fixes body visibility now.
 	const FLinearColor SandBounceColor         = FLinearColor(0.55f, 0.30f, 0.12f, 1.0f);
-	const float        MobileSkyLightIntensity = 5.2f;
+	const float        MobileSkyLightIntensity = 8.0f;  // was 5.2 for the old low sun; some headroom for the new one, not the 16 used to isolate the intensity-alone experiment
 	// The SkyLight's UPPER hemisphere captures the dome, which is blue-violet, so a
 	// plain intensity boost fills the bodies with cool light. Tinting the SkyLight warm
 	// biases it back toward the sand-bounce cast desktop gets from Lumen. Measured on
@@ -94,8 +101,26 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// the old sun angle and have not been re-measured against this one.
 		bool bMobile = IsMobilePlatform();
 
+		// Dead-vertical (-90) leaves every camera-facing (roughly horizontal-
+		// normal) surface with ZERO direct light, and confirmed on device, ZERO
+		// usable indirect light either — mobile's SkyLight does not reach movable
+		// skeletal meshes here at all (a magenta LowerHemisphereColor test at 6x
+		// HDR produced literally no tint on the bodies: mobile needs a real
+		// ProcessedTexture cubemap this fully-dynamic scene never builds).
+		// Desktop's Lumen GI papers over the same gap; mobile has nothing to.
+		// Regression measured on device: body torso ~(6-28,...) out of 255,
+		// i.e. near-black, vs sand/sky rendering correctly the whole time.
+		//
+		// Tilting the mobile sun 20 degrees off the zenith gives direct light a
+		// horizontal component again (sin(20 deg) ~= 0.34 of full) without
+		// reverting to the old grazing backlit angle that caused the *original*
+		// black-body bug. Yaw 180 matches that old, already-proven sun's facing
+		// so the lit side matches the camera's usual framing. Desktop is
+		// untouched (still exactly -90) since it was not broken.
+		// Fixed, measured on device: body torso ~(89-102,...) out of 255.
+		FRotator SunRotation = bMobile ? FRotator(-70, 180, 0) : FRotator(-90, 0, 0);
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
-			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), FRotator(-90, 0, 0)));
+			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), SunRotation));
 		if (SunActor != nullptr)
 		{
 			UDirectionalLightComponent LC = Cast<UDirectionalLightComponent>(
