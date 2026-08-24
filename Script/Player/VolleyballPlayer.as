@@ -1037,6 +1037,12 @@ class AVolleyballPlayer : APawn
 	float SmCrouch = 0.0f;
 	bool bSmInit = false;
 
+	// FOOT YAW-LAG FIX: the echoed foot IK target is rotated by the actor's
+	// frame-to-frame yaw change before reuse — see UpdateIKTargets. Public:
+	// the mixin owns them.
+	float PrevYawForFeet = 0.0f;
+	bool bFootYawInit = false;
+
 	// Extra crouch (0..1) from FRAME-RATE transient envelopes (split step, dive,
 	// jump load, landing absorb, air tuck). Written by Max every frame while the
 	// envelope is active; decays every frame (top of UpdatePlayer) so it releases

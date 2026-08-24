@@ -560,7 +560,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	//
 	// The ABP pulls the pelvis rigidly to this point (Modify Bone, world space,
 	// Replace) which on its own would drag the whole skeleton down and sink the
-	// feet through the floor. FootTargetL/R above hold the *previous* frame's
+	// feet through the floor. FootTargetL/R below hold the *previous* frame's
 	// solved foot position; Two Bone IK re-targets each leg back to that fixed
 	// point after the pelvis moves, so the knees bend to keep the foot planted
 	// instead of the foot sliding with the hip. One frame of lag is invisible
@@ -568,8 +568,38 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	const float PelvisRestZ = 5.9f;
 	const float PelvisSinkDepth = 35.0f;  // cm of hip drop at full CrouchAmount
 	Self.Anim.PelvisTarget = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
-	Self.Anim.FootTargetL = FootL;
-	Self.Anim.FootTargetR = FootR;
+	// Echo last frame's solved foot position back as this frame's target (as
+	// above) — EXCEPT rotate the actor-relative offset by this frame's yaw
+	// change first. A pure echo (no rotation correction) pins the feet in
+	// WORLD space: fine while standing still, but a fast yaw turn (AI
+	// "DEFEND SPLIT" repositioning hits 300+ deg/s) rotates the torso out from
+	// under feet that don't follow, dragging the leg across the body every
+	// frame it's turning — the reported "legs crossing" bug, measured as
+	// pelvisFlips up to 32/rally on exactly those players.
+	//
+	// Pivoting the echoed point around the actor's CURRENT location (not
+	// tracking the actor's translation separately) makes this a no-op when
+	// DYaw is 0 — FootTarget reduces to exactly FootL, byte-for-byte the
+	// original echo — so straight-line movement keeps that system's already
+	// -verified translation behavior untouched. Two tried alternatives that
+	// derived the foot target fresh from the actor's transform every frame
+	// (zero lag on translation too, not just rotation) instead measured
+	// footSlide 900-3900/rally, i.e. skating: Two Bone IK's own reach limit is
+	// what gives a plain echo its "foot holds still while planted, body moves
+	// over it, catches up only once the leg is fully stretched" behavior, and
+	// both alternatives threw that away along with the rotation bug.
+	if (!Self.bFootYawInit)
+	{
+		Self.bFootYawInit = true;
+		Self.PrevYawForFeet = Self.GetActorRotation().Yaw;
+	}
+	float CurYaw = Self.GetActorRotation().Yaw;
+	float DYaw = Math::FindDeltaAngleDegrees(Self.PrevYawForFeet, CurYaw);
+	FRotator YawDelta = FRotator(0.0f, DYaw, 0.0f);
+	FVector ActorLoc = Self.GetActorLocation();
+	Self.Anim.FootTargetL = ActorLoc + YawDelta.RotateVector(FootL - ActorLoc);
+	Self.Anim.FootTargetR = ActorLoc + YawDelta.RotateVector(FootR - ActorLoc);
+	Self.PrevYawForFeet = CurYaw;
 }
 
 // --- FIRST-PRINCIPLES MOTION SHAPING ---------------------------------------

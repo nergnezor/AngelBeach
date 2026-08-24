@@ -75,7 +75,9 @@ class UVolleyballAnimInstance : UAnimInstance
 	UPROPERTY(BlueprintReadWrite) FVector   PelvisTarget = FVector::ZeroVector;
 	// WORLD-space foot targets for the leg Two Bone IK nodes: last frame's
 	// solved foot position, read fresh each tick (see UpdateIKTargets) so the
-	// foot holds still under a moving pelvis instead of sliding with it.
+	// foot holds still under a moving pelvis instead of sliding with it —
+	// rotated by the actor's yaw change each frame so a fast turn carries the
+	// foot around with the body instead of leaving it pinned in world space.
 	UPROPERTY(BlueprintReadWrite) FVector   FootTargetL = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) FVector   FootTargetR = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) bool     bDiving = false;      // play dive montage
