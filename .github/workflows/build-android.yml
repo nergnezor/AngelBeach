@@ -112,6 +112,28 @@ jobs:
           echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
           exit 1
 
+      - name: Resolve JAVA_HOME
+        shell: bash
+        run: |
+          # The repo variable JAVA_HOME points at /home/erik/jdk17, which exists on
+          # the 5.7 runner and not on the 5.8 one, so Gradle died there with
+          # "JAVA_HOME is set to an invalid directory". Resolve it the same way the
+          # engine is resolved above — take the configured value if it is real, else
+          # fall back to the usual system locations — so adding a runner does not
+          # mean hand-provisioning it to match a hardcoded path.
+          for candidate in "${JAVA_HOME:-}" \
+                           /usr/lib/jvm/java-17-openjdk-amd64 \
+                           /usr/lib/jvm/openjdk-17 \
+                           "$HOME/jdk17"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/bin/javac" ]; then
+              echo "JAVA_HOME=$candidate" >> "$GITHUB_ENV"
+              echo "JAVA_HOME OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: no usable JDK 17 found (tried JAVA_HOME='${JAVA_HOME:-}' and the usual locations)."
+          exit 1
+
       - name: Ensure engine-required Android NDK (r27c)
         run: |
           test -d "$ANDROID_HOME" || { echo "ERROR: ANDROID_HOME not found: $ANDROID_HOME"; exit 1; }
