@@ -76,6 +76,25 @@ jobs:
             -e Content/ \
             -e "Script/Binds.Cache*"
 
+      - name: Kill stale AutomationTool processes
+        run: |
+          # UAT's ProcessSingleton refuses to start a second instance and just
+          # dies with "A conflicting instance of AutomationTool is already
+          # running" — seen twice in a row (runs 210 attempts 1-2, 2026-08-24)
+          # against a runner that had nothing else legitimately building. A
+          # previous run's AutomationTool.dll process (or one of the dotnet
+          # children it spawns while resolving UnrealBuildTool/itself) can
+          # outlive its own job on this self-hosted runner, and each doomed
+          # relaunch spawns ~15 more short-lived dotnet processes that only
+          # get swept up by the runner's post-job "orphan" cleanup — which
+          # runs too late to help the run that just failed. Clear the decks
+          # before every Package step instead of hoping the previous job's
+          # cleanup already did.
+          pkill -f "AutomationTool.dll" 2>/dev/null || true
+          sleep 2
+          pkill -9 -f "AutomationTool.dll" 2>/dev/null || true
+          echo "Done (pkill exit status is not meaningful — 'no matching process' is the common/expected case)."
+
       - name: Resolve Unreal Engine
         shell: bash
         run: |
