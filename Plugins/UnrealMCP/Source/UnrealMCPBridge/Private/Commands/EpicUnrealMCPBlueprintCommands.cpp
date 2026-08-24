@@ -1866,13 +1866,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintClass
 		for (const auto& Pair : (*PropertiesObj)->Values)
 		{
 			FString ErrMsg;
-			if (FEpicUnrealMCPPropertyUtils::SetProperty(CDO, Pair.Key, Pair.Value, ErrMsg))
+			if (FEpicUnrealMCPPropertyUtils::SetProperty(CDO, FString(Pair.Key.ToView()), Pair.Value, ErrMsg))
 			{
-				SetProperties.Add(Pair.Key);
+				SetProperties.Add(FString(Pair.Key.ToView()));
 			}
 			else
 			{
-				Errors += FString::Printf(TEXT("%s: %s; "), *Pair.Key, *ErrMsg);
+				Errors += FString::Printf(TEXT("%s: %s; "), *FString(Pair.Key.ToView()), *ErrMsg);
 			}
 		}
 	}

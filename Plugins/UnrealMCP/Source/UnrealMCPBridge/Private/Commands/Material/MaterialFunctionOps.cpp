@@ -542,9 +542,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleBuildMaterialFunct
 			for (const auto& Pair : (*PropsObj)->Values)
 			{
 				FString PropErr;
-				if (!SetExpressionProperty(Expr, Pair.Key, Pair.Value, PropErr))
+				if (!SetExpressionProperty(Expr, FString(Pair.Key.ToView()), Pair.Value, PropErr))
 				{
-					Errors.Add(FString::Printf(TEXT("Node %d prop '%s': %s"), Idx, *Pair.Key, *PropErr));
+					Errors.Add(FString::Printf(TEXT("Node %d prop '%s': %s"), Idx, *FString(Pair.Key.ToView()), *PropErr));
 				}
 			}
 		}

@@ -694,17 +694,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPNiagaraCommands::HandleSetNiagaraScriptPro
     Script->Modify();
 
     TArray<TSharedPtr<FJsonValue>> Applied, Failed;
-    for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*PropsObj)->Values)
+    for (const auto& Pair : (*PropsObj)->Values)
     {
         FString WriteErr;
-        if (WriteScriptProperty(Data, DataStruct, Pair.Key, Pair.Value, WriteErr))
+        if (WriteScriptProperty(Data, DataStruct, FString(Pair.Key.ToView()), Pair.Value, WriteErr))
         {
-            Applied.Add(MakeShared<FJsonValueString>(Pair.Key));
+            Applied.Add(MakeShared<FJsonValueString>(FString(Pair.Key.ToView())));
         }
         else
         {
             auto F = MakeShared<FJsonObject>();
-            F->SetStringField(TEXT("name"), Pair.Key);
+            F->SetStringField(TEXT("name"), FString(Pair.Key.ToView()));
             F->SetStringField(TEXT("error"), WriteErr);
             Failed.Add(MakeShared<FJsonValueObject>(F));
         }

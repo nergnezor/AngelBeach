@@ -122,10 +122,10 @@ static TArray<FString> ApplyPropertiesToInstancedStruct(
 
 	for (const auto& Pair : PropsJson->Values)
 	{
-		FProperty* Prop = ScriptStruct->FindPropertyByName(FName(*Pair.Key));
+		FProperty* Prop = ScriptStruct->FindPropertyByName(FName(*FString(FString(Pair.Key.ToView()).ToView())));
 		if (!Prop)
 		{
-			Failures.Add(FString::Printf(TEXT("%s: property not found on %s"), *Pair.Key, *ScriptStruct->GetName()));
+			Failures.Add(FString::Printf(TEXT("%s: property not found on %s"), *FString(FString(Pair.Key.ToView()).ToView()), *ScriptStruct->GetName()));
 			continue;
 		}
 
@@ -157,7 +157,7 @@ static TArray<FString> ApplyPropertiesToInstancedStruct(
 		const TCHAR* Result = Prop->ImportText_Direct(*ValueStr, PropertyAddress, nullptr, PPF_None);
 		if (!Result)
 		{
-			Failures.Add(FString::Printf(TEXT("%s: ImportText failed for value '%s'"), *Pair.Key, *ValueStr));
+			Failures.Add(FString::Printf(TEXT("%s: ImportText failed for value '%s'"), *FString(FString(Pair.Key.ToView()).ToView()), *ValueStr));
 		}
 	}
 

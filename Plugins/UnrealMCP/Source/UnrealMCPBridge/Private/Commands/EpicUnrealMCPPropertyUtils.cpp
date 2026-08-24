@@ -67,15 +67,15 @@ void FEpicUnrealMCPPropertyUtils::SetPropertiesFromJson(
 
 	for (const auto& Pair : Json->Values)
 	{
-		if (Pair.Key == TEXT("_ClassName"))
+		if (FString(FString(Pair.Key.ToView()).ToView()) == TEXT("_ClassName"))
 		{
 			continue;
 		}
 
 		FString Err;
-		if (!SetProperty(Target, Pair.Key, Pair.Value, Err))
+		if (!SetProperty(Target, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, Err))
 		{
-			OutErrors += FString::Printf(TEXT("[%s: %s] "), *Pair.Key, *Err);
+			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(FString(Pair.Key.ToView()).ToView()), *Err);
 		}
 	}
 }
@@ -91,7 +91,7 @@ void FEpicUnrealMCPPropertyUtils::SetStructFieldsFromJson(
 
 	for (const auto& Pair : Json->Values)
 	{
-		if (Pair.Key == TEXT("_ClassName"))
+		if (FString(FString(Pair.Key.ToView()).ToView()) == TEXT("_ClassName"))
 		{
 			continue;
 		}
@@ -99,21 +99,21 @@ void FEpicUnrealMCPPropertyUtils::SetStructFieldsFromJson(
 		FProperty* FieldProp = nullptr;
 		for (UStruct* S = Struct; S && !FieldProp; S = S->GetSuperStruct())
 		{
-			FieldProp = S->FindPropertyByName(*Pair.Key);
+			FieldProp = S->FindPropertyByName(*FString(FString(Pair.Key.ToView()).ToView()));
 		}
 
 		if (!FieldProp)
 		{
 			OutErrors += FString::Printf(TEXT("[field '%s' not found on struct '%s'] "),
-				*Pair.Key, *Struct->GetName());
+				*FString(FString(Pair.Key.ToView()).ToView()), *Struct->GetName());
 			continue;
 		}
 
 		void* FieldAddr = FieldProp->ContainerPtrToValuePtr<void>(StructData);
 		FString FieldErr;
-		if (!SetPropertyValueAtAddr(FieldProp, FieldAddr, Outer, Pair.Key, Pair.Value, FieldErr))
+		if (!SetPropertyValueAtAddr(FieldProp, FieldAddr, Outer, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, FieldErr))
 		{
-			OutErrors += FString::Printf(TEXT("[%s: %s] "), *Pair.Key, *FieldErr);
+			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(FString(Pair.Key.ToView()).ToView()), *FieldErr);
 		}
 	}
 }
@@ -574,11 +574,11 @@ bool FEpicUnrealMCPPropertyUtils::SetPropertyValueAtAddr(
 						{
 							for (const auto& InnerPair : ElemJson->Values)
 							{
-								if (InnerPair.Key == TEXT("_ClassName"))
+								if (FString(FString(InnerPair.Key.ToView()).ToView()) == TEXT("_ClassName"))
 								{
 									continue;
 								}
-								FProperty* FieldProp = TargetStruct->FindPropertyByName(*InnerPair.Key);
+								FProperty* FieldProp = TargetStruct->FindPropertyByName(*FString(FString(InnerPair.Key.ToView()).ToView()));
 								if (!FieldProp)
 								{
 									continue;

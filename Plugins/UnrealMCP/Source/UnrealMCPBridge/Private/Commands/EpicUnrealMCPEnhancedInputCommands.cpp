@@ -518,13 +518,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEnhancedInputCommands::HandleSetInputActio
 		for (const auto& Pair : (*PropsObj)->Values)
 		{
 			FString Err;
-			if (PU::SetProperty(Action, Pair.Key, Pair.Value, Err))
+			if (PU::SetProperty(Action, FString(Pair.Key.ToView()), Pair.Value, Err))
 			{
-				Set.Add(Pair.Key);
+				Set.Add(FString(Pair.Key.ToView()));
 			}
 			else
 			{
-				Failed.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+				Failed.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *Err));
 			}
 		}
 	}

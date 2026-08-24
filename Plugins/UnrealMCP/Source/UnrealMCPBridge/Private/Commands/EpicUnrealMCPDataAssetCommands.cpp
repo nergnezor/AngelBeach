@@ -553,9 +553,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleCreateDataAsset(
 		for (const auto& Pair : (*InitialProps)->Values)
 		{
 			FString Err;
-			if (!PU::SetProperty(NewAsset, Pair.Key, Pair.Value, Err))
+			if (!PU::SetProperty(NewAsset, FString(Pair.Key.ToView()), Pair.Value, Err))
 			{
-				FailedProps.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+				FailedProps.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *Err));
 			}
 		}
 		NewAsset->MarkPackageDirty();
@@ -695,13 +695,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetDataAssetPrope
 	for (const auto& Pair : (*PropsObj)->Values)
 	{
 		FString Err;
-		if (PU::SetProperty(Asset, Pair.Key, Pair.Value, Err))
+		if (PU::SetProperty(Asset, FString(Pair.Key.ToView()), Pair.Value, Err))
 		{
-			Set.Add(Pair.Key);
+			Set.Add(FString(Pair.Key.ToView()));
 		}
 		else
 		{
-			Failed.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+			Failed.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *Err));
 		}
 	}
 
@@ -1417,7 +1417,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetMassConfigTrai
 	{
 		for (const auto& Pair : (*BatchProps)->Values)
 		{
-			PropsToSet->SetField(Pair.Key, Pair.Value);
+			PropsToSet->SetField(FString(Pair.Key.ToView()), Pair.Value);
 		}
 	}
 
@@ -1435,13 +1435,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetMassConfigTrai
 	for (const auto& Pair : PropsToSet->Values)
 	{
 		FString SetError;
-		if (PU::SetProperty(TraitObj, Pair.Key, Pair.Value, SetError))
+		if (PU::SetProperty(TraitObj, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, SetError))
 		{
-			SucceededProps.Add(Pair.Key);
+			SucceededProps.Add(FString(FString(Pair.Key.ToView()).ToView()));
 		}
 		else
 		{
-			FailedProps.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *SetError));
+			FailedProps.Add(FString::Printf(TEXT("%s: %s"), *FString(FString(Pair.Key.ToView()).ToView()), *SetError));
 		}
 	}
 

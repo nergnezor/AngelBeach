@@ -423,7 +423,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleAddWidget(
 		for (const auto& Pair : (*WidgetProps)->Values)
 		{
 			FString Err;
-			PU::SetProperty(NewWidget, Pair.Key, Pair.Value, Err);
+			PU::SetProperty(NewWidget, FString(Pair.Key.ToView()), Pair.Value, Err);
 		}
 	}
 
@@ -434,7 +434,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleAddWidget(
 		for (const auto& Pair : (*SlotProps)->Values)
 		{
 			FString Err;
-			PU::SetProperty(NewSlot, Pair.Key, Pair.Value, Err);
+			PU::SetProperty(NewSlot, FString(Pair.Key.ToView()), Pair.Value, Err);
 		}
 	}
 
@@ -899,10 +899,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleSetWidgetProperties(
 	for (const auto& Pair : (*PropsObj)->Values)
 	{
 		FString Err;
-		if (PU::SetProperty(Widget, Pair.Key, Pair.Value, Err))
-			Set.Add(Pair.Key);
+		if (PU::SetProperty(Widget, FString(Pair.Key.ToView()), Pair.Value, Err))
+			Set.Add(FString(Pair.Key.ToView()));
 		else
-			Failed.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+			Failed.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *Err));
 	}
 
 	MarkPropertyModifiedAndSave(WBP);
@@ -969,8 +969,8 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleGetSlotProperties(
 		TSharedPtr<FJsonObject> Filtered = MakeShared<FJsonObject>();
 		for (const auto& Pair : SlotProps->Values)
 		{
-			if (Pair.Key.ToLower().Contains(FilterLower))
-				Filtered->SetField(Pair.Key, Pair.Value);
+			if (FString(FString(Pair.Key.ToView()).ToView()).ToLower().Contains(FilterLower))
+				Filtered->SetField(FString(FString(Pair.Key.ToView()).ToView()), Pair.Value);
 		}
 		SlotProps = Filtered;
 	}
@@ -1019,10 +1019,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleSetSlotProperties(
 	for (const auto& Pair : (*PropsObj)->Values)
 	{
 		FString Err;
-		if (PU::SetProperty(Widget->Slot, Pair.Key, Pair.Value, Err))
-			Set.Add(Pair.Key);
+		if (PU::SetProperty(Widget->Slot, FString(Pair.Key.ToView()), Pair.Value, Err))
+			Set.Add(FString(Pair.Key.ToView()));
 		else
-			Failed.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));
+			Failed.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *Err));
 	}
 
 	Widget->Slot->SynchronizeProperties();

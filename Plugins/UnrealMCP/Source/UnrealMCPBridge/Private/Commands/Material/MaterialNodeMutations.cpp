@@ -73,9 +73,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleAddMaterialExpress
 		for (const auto& Pair : (*PropsObj)->Values)
 		{
 			FString PropErr;
-			if (!SetExpressionProperty(NewExpr, Pair.Key, Pair.Value, PropErr))
+			if (!SetExpressionProperty(NewExpr, FString(Pair.Key.ToView()), Pair.Value, PropErr))
 			{
-				PropErrors.Add(FString::Printf(TEXT("'%s': %s"), *Pair.Key, *PropErr));
+				PropErrors.Add(FString::Printf(TEXT("'%s': %s"), *FString(Pair.Key.ToView()), *PropErr));
 			}
 		}
 	}
@@ -218,9 +218,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleSetMaterialExpress
 		for (const auto& Pair : (*PropsObj)->Values)
 		{
 			FString PropErr;
-			if (!SetExpressionProperty(Expr, Pair.Key, Pair.Value, PropErr))
+			if (!SetExpressionProperty(Expr, FString(Pair.Key.ToView()), Pair.Value, PropErr))
 			{
-				PropErrors.Add(FString::Printf(TEXT("'%s': %s"), *Pair.Key, *PropErr));
+				PropErrors.Add(FString::Printf(TEXT("'%s': %s"), *FString(Pair.Key.ToView()), *PropErr));
 			}
 		}
 	}

@@ -108,7 +108,7 @@ TSharedPtr<FJsonObject> FFunctionIO::AddFunctionInput(const TSharedPtr<FJsonObje
 	// Copy all fields from original params
 	for (const auto& Field : Params->Values)
 	{
-		InputParams->SetField(Field.Key, Field.Value);
+		InputParams->SetField(FString(FString(Field.Key.ToView()).ToView()), Field.Value);
 	}
 
 	// Set direction to input
@@ -126,7 +126,7 @@ TSharedPtr<FJsonObject> FFunctionIO::AddFunctionOutput(const TSharedPtr<FJsonObj
 	// Copy all fields from original params
 	for (const auto& Field : Params->Values)
 	{
-		OutputParams->SetField(Field.Key, Field.Value);
+		OutputParams->SetField(FString(FString(Field.Key.ToView()).ToView()), Field.Value);
 	}
 
 	// Set direction to output

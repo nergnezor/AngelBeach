@@ -241,42 +241,6 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      - name: Disable the editor-only UnrealMCP plugin for packaging
-        run: |
-          # UnrealMCP (community plugin, "Unreal MCP Bridge" by Aadesh Yadav) is an
-          # Editor-type plugin: the shipped Android game never loads it. But an
-          # Android cook builds a Linux UnrealEditor target first, and THAT target
-          # pulls the plugin in, so its C++ has to compile even though the game does
-          # not need a line of it.
-          #
-          # On the 5.8 runner it does not compile — the FString -> FStringView /
-          # TSharedString migration broke it ("no viable conversion from
-          # 'const UE::TSharedString<char16_t>' to 'const FString'", "no member named
-          # 'ToLower'"), which is what turned Build - Android red the moment jobs
-          # started landing on that machine. Every previously green build ran on the
-          # 5.7 runner, where it still compiles.
-          #
-          # The plugin has "EnabledByDefault": true and no entry in the .uproject, so
-          # it is on simply by existing. Adding an explicit disabled entry here turns
-          # it off for the build only: the .uproject is tracked, so the next
-          # checkout restores it and nobody's editor loses the MCP bridge.
-          #
-          # (UBT's TargetRules.DisablePlugins cannot do this — it throws for targets
-          # that share a build environment, which the editor target does.)
-          python3 -c "
-          import json, pathlib
-          p = pathlib.Path('BeachVolleyball.uproject')
-          d = json.loads(p.read_text())
-          pl = d.setdefault('Plugins', [])
-          e = next((x for x in pl if x.get('Name') == 'UnrealMCP'), None)
-          if e is None:
-              pl.append({'Name': 'UnrealMCP', 'Enabled': False})
-          else:
-              e['Enabled'] = False
-          p.write_text(json.dumps(d, indent=4) + chr(10))
-          print('UnrealMCP disabled for this packaging run')
-          "
-
       - name: Package for Android (APK + AAB)
         run: |
           # Reverted the 2026-08 "iterative cooking" speed experiment (fc79e35):

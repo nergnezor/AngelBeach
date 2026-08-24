@@ -155,7 +155,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleCreateMaterialInst
 		for (const auto& Pair : (*ScalarObj)->Values)
 		{
 			UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(
-				MI, FName(*Pair.Key), (float)Pair.Value->AsNumber());
+				MI, FName(*FString(Pair.Key.ToView())), (float)Pair.Value->AsNumber());
 		}
 	}
 
@@ -170,7 +170,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleCreateMaterialInst
 				A.Num() > 1 ? (float)A[1]->AsNumber() : 0,
 				A.Num() > 2 ? (float)A[2]->AsNumber() : 0,
 				A.Num() > 3 ? (float)A[3]->AsNumber() : 1);
-			UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MI, FName(*Pair.Key), C);
+			UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MI, FName(*FString(Pair.Key.ToView())), C);
 		}
 	}
 
@@ -182,7 +182,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleCreateMaterialInst
 			UTexture* Tex = Cast<UTexture>(UEditorAssetLibrary::LoadAsset(Pair.Value->AsString()));
 			if (Tex)
 			{
-				UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MI, FName(*Pair.Key), Tex);
+				UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MI, FName(*FString(Pair.Key.ToView())), Tex);
 			}
 		}
 	}
@@ -290,9 +290,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialCommands::HandleBuildMaterialGraph
 			for (const auto& Pair : (*PropsObj)->Values)
 			{
 				FString PropErr;
-				if (!SetExpressionProperty(Expr, Pair.Key, Pair.Value, PropErr))
+				if (!SetExpressionProperty(Expr, FString(Pair.Key.ToView()), Pair.Value, PropErr))
 				{
-					Errors.Add(FString::Printf(TEXT("Node %d prop '%s': %s"), Idx, *Pair.Key, *PropErr));
+					Errors.Add(FString::Printf(TEXT("Node %d prop '%s': %s"), Idx, *FString(Pair.Key.ToView()), *PropErr));
 				}
 			}
 		}
