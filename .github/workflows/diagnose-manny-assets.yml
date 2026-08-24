@@ -1,0 +1,73 @@
+name: Diagnose – Manny asset availability on runner
+
+# Read-only. Players are rendering as SpawnFallbackBox() cubes in the
+# Android build (Play Internal) even after the git-clean fix in
+# ci(build): stop wiping Content/Characters/ every CI run (214c5a9), which
+# means SetupMesh()'s two LoadObject calls (/Game/Characters/... and the
+# /MoverExamples/... fallback) are BOTH failing. Deliberately does NOT run
+# actions/checkout, so this inspects exactly what's sitting in the runner's
+# persistent workspace and engine install right now, unmodified by any
+# clean step. Delete once the investigation is done.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, ue5]
+    timeout-minutes: 10
+
+    env:
+      ENGINE_DIR: ${{ vars.ENGINE_DIR }}
+
+    steps:
+      - name: Resolve Unreal Engine
+        shell: bash
+        run: |
+          for candidate in "${ENGINE_DIR:-}" "$HOME/UnrealEngine-Angelscript" "/home/erik/UnrealEngine-Angelscript" "/opt/UnrealEngine-Angelscript"; do
+            if [ -n "$candidate" ] && [ -x "$candidate/Engine/Binaries/Linux/UnrealEditor" ]; then
+              echo "ENGINE_DIR=$candidate" >> "$GITHUB_ENV"
+              echo "Engine OK: $candidate"
+              exit 0
+            fi
+          done
+          echo "ERROR: UnrealEditor was not found; set repository variable ENGINE_DIR."
+          exit 1
+
+      - name: Inspect workspace Content/Characters/ (no checkout — current on-disk state)
+        run: |
+          echo "############ 1. GITHUB_WORKSPACE ############"
+          echo "$GITHUB_WORKSPACE"
+
+          echo ""
+          echo "############ 2. Content/Characters/ tree (top 3 levels) ############"
+          find "$GITHUB_WORKSPACE/Content/Characters" -maxdepth 3 2>&1 | head -100 || echo "MISSING: Content/Characters/ does not exist"
+
+          echo ""
+          echo "############ 3. Every SKM_Manny_Simple / ABP_VolleyballPlayer file anywhere in the workspace ############"
+          find "$GITHUB_WORKSPACE" -iname "SKM_Manny_Simple*" -o -iname "ABP_VolleyballPlayer*" 2>/dev/null
+
+          echo ""
+          echo "############ 4. git status of Content/ in this workspace ############"
+          cd "$GITHUB_WORKSPACE" && git status --short Content/ 2>&1 | head -50
+          echo "(clean = nothing untracked/modified under Content/)"
+
+      - name: Inspect MoverExamples plugin content on the engine install
+        run: |
+          echo "############ 5. Is the MoverExamples plugin present at all? ############"
+          find "$ENGINE_DIR" -maxdepth 6 -ipath "*MoverExamples*" -name "*.uplugin" 2>/dev/null
+
+          echo ""
+          echo "############ 6. SKM_Manny_Simple under MoverExamples ############"
+          find "$ENGINE_DIR" -ipath "*MoverExamples*" -iname "SKM_Manny_Simple*" 2>/dev/null
+
+          echo ""
+          echo "############ 7. Is MoverExamples enabled for THIS project? ############"
+          grep -A2 -i "MoverExamples" "$GITHUB_WORKSPACE/BeachVolleyball.uproject" || echo "MoverExamples not referenced in BeachVolleyball.uproject"
+
+      - name: Check what actually got cooked/staged into the last Android package
+        run: |
+          echo "############ 8. Cooked Android content referencing Manny ############"
+          find "$GITHUB_WORKSPACE/Saved/Cooked" "$GITHUB_WORKSPACE/Saved/StagedBuilds" \
+            -iname "*Manny*" 2>/dev/null | head -50 || true
+          echo "(if step 2 is missing but this is non-empty, an earlier run cooked it before the asset vanished)"
