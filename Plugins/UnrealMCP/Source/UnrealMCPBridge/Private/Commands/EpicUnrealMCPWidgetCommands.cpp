@@ -969,8 +969,8 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPWidgetCommands::HandleGetSlotProperties(
 		TSharedPtr<FJsonObject> Filtered = MakeShared<FJsonObject>();
 		for (const auto& Pair : SlotProps->Values)
 		{
-			if (FString(FString(Pair.Key.ToView()).ToView()).ToLower().Contains(FilterLower))
-				Filtered->SetField(FString(FString(Pair.Key.ToView()).ToView()), Pair.Value);
+			if (FString(Pair.Key.ToView()).ToLower().Contains(FilterLower))
+				Filtered->SetField(FString(Pair.Key.ToView()), Pair.Value);
 		}
 		SlotProps = Filtered;
 	}

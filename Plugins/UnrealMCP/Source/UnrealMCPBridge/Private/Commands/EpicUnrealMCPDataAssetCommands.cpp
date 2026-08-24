@@ -1435,13 +1435,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPDataAssetCommands::HandleSetMassConfigTrai
 	for (const auto& Pair : PropsToSet->Values)
 	{
 		FString SetError;
-		if (PU::SetProperty(TraitObj, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, SetError))
+		if (PU::SetProperty(TraitObj, FString(Pair.Key.ToView()), Pair.Value, SetError))
 		{
-			SucceededProps.Add(FString(FString(Pair.Key.ToView()).ToView()));
+			SucceededProps.Add(FString(Pair.Key.ToView()));
 		}
 		else
 		{
-			FailedProps.Add(FString::Printf(TEXT("%s: %s"), *FString(FString(Pair.Key.ToView()).ToView()), *SetError));
+			FailedProps.Add(FString::Printf(TEXT("%s: %s"), *FString(Pair.Key.ToView()), *SetError));
 		}
 	}
 

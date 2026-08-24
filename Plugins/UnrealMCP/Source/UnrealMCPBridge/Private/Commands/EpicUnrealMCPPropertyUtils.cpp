@@ -67,15 +67,15 @@ void FEpicUnrealMCPPropertyUtils::SetPropertiesFromJson(
 
 	for (const auto& Pair : Json->Values)
 	{
-		if (FString(FString(Pair.Key.ToView()).ToView()) == TEXT("_ClassName"))
+		if (FString(Pair.Key.ToView()) == TEXT("_ClassName"))
 		{
 			continue;
 		}
 
 		FString Err;
-		if (!SetProperty(Target, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, Err))
+		if (!SetProperty(Target, FString(Pair.Key.ToView()), Pair.Value, Err))
 		{
-			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(FString(Pair.Key.ToView()).ToView()), *Err);
+			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(Pair.Key.ToView()), *Err);
 		}
 	}
 }
@@ -91,7 +91,7 @@ void FEpicUnrealMCPPropertyUtils::SetStructFieldsFromJson(
 
 	for (const auto& Pair : Json->Values)
 	{
-		if (FString(FString(Pair.Key.ToView()).ToView()) == TEXT("_ClassName"))
+		if (FString(Pair.Key.ToView()) == TEXT("_ClassName"))
 		{
 			continue;
 		}
@@ -99,21 +99,21 @@ void FEpicUnrealMCPPropertyUtils::SetStructFieldsFromJson(
 		FProperty* FieldProp = nullptr;
 		for (UStruct* S = Struct; S && !FieldProp; S = S->GetSuperStruct())
 		{
-			FieldProp = S->FindPropertyByName(*FString(FString(Pair.Key.ToView()).ToView()));
+			FieldProp = S->FindPropertyByName(*FString(Pair.Key.ToView()));
 		}
 
 		if (!FieldProp)
 		{
 			OutErrors += FString::Printf(TEXT("[field '%s' not found on struct '%s'] "),
-				*FString(FString(Pair.Key.ToView()).ToView()), *Struct->GetName());
+				*FString(Pair.Key.ToView()), *Struct->GetName());
 			continue;
 		}
 
 		void* FieldAddr = FieldProp->ContainerPtrToValuePtr<void>(StructData);
 		FString FieldErr;
-		if (!SetPropertyValueAtAddr(FieldProp, FieldAddr, Outer, FString(FString(Pair.Key.ToView()).ToView()), Pair.Value, FieldErr))
+		if (!SetPropertyValueAtAddr(FieldProp, FieldAddr, Outer, FString(Pair.Key.ToView()), Pair.Value, FieldErr))
 		{
-			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(FString(Pair.Key.ToView()).ToView()), *FieldErr);
+			OutErrors += FString::Printf(TEXT("[%s: %s] "), *FString(Pair.Key.ToView()), *FieldErr);
 		}
 	}
 }
@@ -574,11 +574,11 @@ bool FEpicUnrealMCPPropertyUtils::SetPropertyValueAtAddr(
 						{
 							for (const auto& InnerPair : ElemJson->Values)
 							{
-								if (FString(FString(InnerPair.Key.ToView()).ToView()) == TEXT("_ClassName"))
+								if (FString(InnerPair.Key.ToView()) == TEXT("_ClassName"))
 								{
 									continue;
 								}
-								FProperty* FieldProp = TargetStruct->FindPropertyByName(*FString(FString(InnerPair.Key.ToView()).ToView()));
+								FProperty* FieldProp = TargetStruct->FindPropertyByName(*FString(InnerPair.Key.ToView()));
 								if (!FieldProp)
 								{
 									continue;
