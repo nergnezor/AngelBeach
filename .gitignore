@@ -26,20 +26,22 @@ Content/Characters/**
 #     no AnimGraph — so nothing blends and none of the IK runs. That is the
 #     "arms and legs don't move at all" report from the Play build.
 #   - IK_Mannequin is the IK Rig whose goals that AnimGraph drives.
-#   - MI_Manny_0*_New are the material instances that own the "Paint Tint"
-#     parameter ApplyTeamMaterial() sets. The MoverExamples fallback materials
-#     call the same slot "Tint", so the tint silently no-ops there and the
-#     bodies render black — the "textures don't work" half of the same report.
 # They total ~3MB, versus ~126MB for the Mannequins mesh/anim library that
 # exhausted the LFS budget. Kept OUT of LFS deliberately (see .gitattributes).
+#
+# The MI_Manny_0*_New material instances are deliberately NOT here. They were
+# tried, and a cook from a git-only clone showed why they cannot work alone:
+# they depend on /Game M_Mannequin plus six textures (27MB, one 20MB file) that
+# live in the ignored part of this tree, so committing the instances alone just
+# ships a material with no parent and no textures. The MoverExamples mesh CI
+# actually loads brings its own complete, working material chain for free with
+# the engine — ApplyTeamMaterial() now sets that chain's "Tint" parameter
+# alongside "Paint Tint", so no /Game material needs to be tracked at all.
 !Content/Characters/Mannequin/
 !Content/Characters/Mannequin/**
 !Content/Characters/Mannequins/
 !Content/Characters/Mannequins/Rigs/
 !Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset
-!Content/Characters/Mannequins/Materials/
-!Content/Characters/Mannequins/Materials/Manny/
-!Content/Characters/Mannequins/Materials/Manny/MI_Manny_0*_New.uasset
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
 !Content/CourtLevel.umap

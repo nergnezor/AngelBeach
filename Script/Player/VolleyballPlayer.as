@@ -281,11 +281,17 @@ class AVolleyballPlayer : APawn
 		// bodies were black because almost no light reached the side of them the
 		// camera sees — see the sun-aiming note in GameMode.as::SetupWorld.
 		//
-		// THE PARAMETER IS "Paint Tint", WITH THE SPACE (read off the assets, not
-		// guessed: SKM_Manny_Simple uses MI_Manny_01_New and MI_Manny_02_New;
-		// MI_Manny_01_New is a child of M_Mannequin and overrides "Paint Tint").
-		// Setting a parameter that does not exist is a silent no-op, not an error,
-		// which is how two earlier wrong names went unnoticed.
+		// THE TINT PARAMETER IS NAMED DIFFERENTLY ON THE TWO MESHES, so set both.
+		// Names read off the assets, not guessed:
+		//   /Game .../MI_Manny_01_New  -> "Paint Tint" (with the space)
+		//   /MoverExamples .../MI_Manny_01 -> "Tint"
+		// SetupMesh() prefers the /Game mesh and falls back to the MoverExamples
+		// one, and CI only ever has the fallback (Content/Characters/ is mostly
+		// gitignored for the LFS budget). Setting a parameter that does not exist
+		// is a silent no-op rather than an error, so for a long time this set
+		// "Paint Tint" on a material that only has "Tint" and the bodies shipped
+		// untinted — the same silent-miss the two earlier wrong names caused.
+		// Setting both is harmless: each mesh ignores the name it does not have.
 		int NumSlots = Mesh.GetNumMaterials();
 		for (int i = 0; i < NumSlots; i++)
 		{
@@ -294,7 +300,10 @@ class AVolleyballPlayer : APawn
 
 			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, SlotMat);
 			if (MID != nullptr)
+			{
 				MID.SetVectorParameterValue(n"Paint Tint", TeamBodyTint());
+				MID.SetVectorParameterValue(n"Tint", TeamBodyTint());
+			}
 		}
 	}
 
