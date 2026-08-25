@@ -364,26 +364,16 @@ jobs:
           fi
           ls -lh "$APK_DIR" "$AAB_DIR" 2>/dev/null
 
-      # The APK as its own dedicated artifact (for direct sideload installs).
-      # APKs are already zip-compressed — recompressing wastes time for ~0 gain.
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk-${{ github.sha }}
-          path: Artifacts/apk/*.apk
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
-
-      # The AAB as its own artifact (for Play Console upload).
-      - name: Upload AAB artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-aab-${{ github.sha }}
-          path: Artifacts/aab/*.aab
-          if-no-files-found: warn
-          retention-days: 14
-          compression-level: 0
+      # No APK/AAB artifact uploads: Play internal testing is the distribution
+      # path now, and it auto-updates testers' devices straight from the
+      # publish-play-internal job below. Uploading ~175MB of build output to
+      # GitHub storage on every run just to have it expire unread is pure cost.
+      #
+      # Nothing downstream consumed them: publish-play-internal reads the AAB
+      # from Artifacts/aab/ in the shared runner workspace, not from artifact
+      # storage. Both files still exist there after a build if one is needed
+      # locally, and the packaging step above still hard-fails when no APK is
+      # produced, so a broken package is caught without the upload.
 
   # ── Play Internal Testing ──────────────────────────────────────────────────
   # Only on main/master: a broken experimental branch shouldn't push a bad

@@ -115,7 +115,9 @@ jobs:
               <div class="card">
                 <h2>Ladda ned senaste bygget</h2>
                 <p class="note" style="margin-bottom:1rem">
-                  Öppna senaste lyckade körningen och hämta artefakten längst ned på sidan.
+                  Android distribueras via Play Internal Testing och uppdateras
+                  automatiskt på anslutna enheter. För Linux: öppna senaste
+                  lyckade körningen och hämta artefakten längst ned på sidan.
                 </p>
                 <div class="grid">
                   <a class="dl-btn" href="$ACTIONS_URL/workflows/build-linux.yml">
@@ -129,7 +131,7 @@ jobs:
                     <span class="icon">🤖</span>
                     <span class="label">
                       Android
-                      <br><span class="sub">build-android → artifacts</span>
+                      <br><span class="sub">Play Internal Testing</span>
                     </span>
                   </a>
                 </div>
