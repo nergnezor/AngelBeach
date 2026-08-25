@@ -630,11 +630,22 @@ FVector GroundFootTarget(AVolleyballPlayer Self, FVector Target, FVector ActorLo
 	// ...and within one stride of the hips, so an accumulated horizontal
 	// drift can't march the target out past what a leg can reach. Inside the
 	// radius this changes nothing, which is what preserves the plant.
+	//
+	// Measured HORIZONTALLY (XY only) on purpose. THE KNEE BEND DEPENDS ON
+	// THIS: a crouch works by the pelvis sinking while the foot stays put, so
+	// Two Bone IK has to fold the knee to span the shortened hip-to-foot gap.
+	// Clamping the full 3D distance to the hips instead holds that gap
+	// roughly constant, which straightens the leg again and cancels the
+	// crouch entirely — the legs stopped bending at all. Only the horizontal
+	// wander is drift worth correcting; the vertical gap IS the crouch.
 	const float MaxStride = 55.0f;
-	FVector Offset = Planted - Rest;
+	FVector Offset = FVector(Planted.X - Rest.X, Planted.Y - Rest.Y, 0.0f);
 	float Dist = Offset.Size();
 	if (Dist > MaxStride)
-		Planted = Rest + Offset * (MaxStride / Dist);
+	{
+		FVector Clamped = Rest + Offset * (MaxStride / Dist);
+		Planted = FVector(Clamped.X, Clamped.Y, PlantZ);
+	}
 	return Planted;
 }
 
