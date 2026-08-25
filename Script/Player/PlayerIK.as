@@ -569,25 +569,33 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	const float PelvisSinkDepth = 35.0f;  // cm of hip drop at full CrouchAmount
 	Self.Anim.PelvisTarget = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
 	// Echo last frame's solved foot position back as this frame's target (as
-	// above) — EXCEPT rotate the actor-relative offset by this frame's yaw
-	// change first. A pure echo (no rotation correction) pins the feet in
-	// WORLD space: fine while standing still, but a fast yaw turn (AI
-	// "DEFEND SPLIT" repositioning hits 300+ deg/s) rotates the torso out from
-	// under feet that don't follow, dragging the leg across the body every
-	// frame it's turning — the reported "legs crossing" bug, measured as
-	// pelvisFlips up to 32/rally on exactly those players.
+	// above), rotated by this frame's yaw change and CLAMPED to a plausible
+	// stance around the actor. Both corrections are needed and they fix
+	// different halves of the same failure:
 	//
-	// Pivoting the echoed point around the actor's CURRENT location (not
-	// tracking the actor's translation separately) makes this a no-op when
-	// DYaw is 0 — FootTarget reduces to exactly FootL, byte-for-byte the
-	// original echo — so straight-line movement keeps that system's already
-	// -verified translation behavior untouched. Two tried alternatives that
-	// derived the foot target fresh from the actor's transform every frame
-	// (zero lag on translation too, not just rotation) instead measured
-	// footSlide 900-3900/rally, i.e. skating: Two Bone IK's own reach limit is
-	// what gives a plain echo its "foot holds still while planted, body moves
-	// over it, catches up only once the leg is fully stretched" behavior, and
-	// both alternatives threw that away along with the rotation bug.
+	//  - ROTATION. A pure echo pins the feet in WORLD space: fine standing
+	//    still, but a fast yaw turn (AI "DEFEND SPLIT" repositioning hits
+	//    300+ deg/s) rotates the torso out from under feet that don't follow,
+	//    dragging the leg across the body — the "legs crossing" symptom.
+	//    Pivoting around the actor's CURRENT location makes this a no-op at
+	//    DYaw 0, so straight-line movement keeps the plain echo's behavior.
+	//
+	//  - DRIFT. The echo is a feedback loop with NO GROUND ANCHOR: the target
+	//    is only ever "where the foot ended up", so nothing in it asserts that
+	//    feet belong under the body on the sand. Every source of drift — the
+	//    pelvis sinking on crouch, arm IK pulling the torso, a frame of solver
+	//    error — is written straight back as the next target and accumulates,
+	//    ending with the legs pointing horizontally out in front and the feet
+	//    dangling in the air. The old 200cm guard only caught a total blow-up
+	//    (the not-yet-posed zero vector), never a steady drift.
+	//
+	// The clamp below is the missing anchor: pull the target back onto the
+	// floor plane and keep it inside a stance radius of the actor. Both are
+	// no-ops for a foot that IS planted sensibly, so the "foot holds still
+	// while the body moves over it" behavior a plain echo gets for free
+	// survives — that behavior is what kept footSlide low, and the three
+	// alternatives that recomputed the foot from scratch each frame all
+	// destroyed it (measured footSlide 900-3900/rally, i.e. skating).
 	if (!Self.bFootYawInit)
 	{
 		Self.bFootYawInit = true;
@@ -597,9 +605,37 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	float DYaw = Math::FindDeltaAngleDegrees(Self.PrevYawForFeet, CurYaw);
 	FRotator YawDelta = FRotator(0.0f, DYaw, 0.0f);
 	FVector ActorLoc = Self.GetActorLocation();
-	Self.Anim.FootTargetL = ActorLoc + YawDelta.RotateVector(FootL - ActorLoc);
-	Self.Anim.FootTargetR = ActorLoc + YawDelta.RotateVector(FootR - ActorLoc);
+	Self.Anim.FootTargetL = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootL - ActorLoc), ActorLoc, Right);
+	Self.Anim.FootTargetR = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootR - ActorLoc), ActorLoc, -Right);
 	Self.PrevYawForFeet = CurYaw;
+}
+
+// Anchor an echoed foot target to something anatomically possible: on the
+// sand (or at the feet while airborne), and within a stride of the hips.
+// Without this the echo loop has no term pulling the feet groundward at all
+// and drifts until the legs stick straight out in front of the body.
+FVector GroundFootTarget(AVolleyballPlayer Self, FVector Target, FVector ActorLoc, FVector SideDir)
+{
+	// Where this foot SHOULD be: under the hips, out to its own side, on the
+	// floor. While airborne the feet hang under the (raised) actor instead of
+	// reaching for distant sand, so a jump doesn't stretch the legs downward.
+	const float StanceWidth = 12.0f;
+	float PlantZ = Self.bIsGrounded ? Self.FloorZ : (ActorLoc.Z - Self.PlayerHeight);
+	FVector Rest = FVector(ActorLoc.X, ActorLoc.Y, PlantZ) + SideDir * StanceWidth;
+
+	// Feet live on the floor plane: a planted foot has no business floating,
+	// and this is the term the echo loop was missing entirely.
+	FVector Planted = FVector(Target.X, Target.Y, PlantZ);
+
+	// ...and within one stride of the hips, so an accumulated horizontal
+	// drift can't march the target out past what a leg can reach. Inside the
+	// radius this changes nothing, which is what preserves the plant.
+	const float MaxStride = 55.0f;
+	FVector Offset = Planted - Rest;
+	float Dist = Offset.Size();
+	if (Dist > MaxStride)
+		Planted = Rest + Offset * (MaxStride / Dist);
+	return Planted;
 }
 
 // --- FIRST-PRINCIPLES MOTION SHAPING ---------------------------------------
