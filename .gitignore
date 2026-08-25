@@ -12,7 +12,34 @@ Content/*.uasset
 # Mesh/skeleton/anim sources — pulled from engine plugins, not committed.
 # (Recursive: a bare Content/*.uasset above only matches Content/'s direct
 # children, so this leaked into git+LFS once before — see commit history.)
-Content/Characters/
+#
+# Written as /** rather than a bare directory on purpose: an excluded DIRECTORY
+# is never descended into, so any !negation inside it is dead. Excluding the
+# CONTENTS keeps the directory traversable and lets the exceptions below work.
+Content/Characters/**
+# ...EXCEPT the handful of project-authored assets the game cannot run without.
+# Everything above is re-derivable from the engine's MoverExamples plugin; these
+# are not, and CI has no other source for them. Without them an Android build
+# silently ships a game whose players neither animate nor render correctly:
+#   - ABP_VolleyballPlayer is the Animation Blueprint SetupMesh() loads by path.
+#     When the load fails the code falls back to the raw anim instance, which has
+#     no AnimGraph — so nothing blends and none of the IK runs. That is the
+#     "arms and legs don't move at all" report from the Play build.
+#   - IK_Mannequin is the IK Rig whose goals that AnimGraph drives.
+#   - MI_Manny_0*_New are the material instances that own the "Paint Tint"
+#     parameter ApplyTeamMaterial() sets. The MoverExamples fallback materials
+#     call the same slot "Tint", so the tint silently no-ops there and the
+#     bodies render black — the "textures don't work" half of the same report.
+# They total ~3MB, versus ~126MB for the Mannequins mesh/anim library that
+# exhausted the LFS budget. Kept OUT of LFS deliberately (see .gitattributes).
+!Content/Characters/Mannequin/
+!Content/Characters/Mannequin/**
+!Content/Characters/Mannequins/
+!Content/Characters/Mannequins/Rigs/
+!Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset
+!Content/Characters/Mannequins/Materials/
+!Content/Characters/Mannequins/Materials/Manny/
+!Content/Characters/Mannequins/Materials/Manny/MI_Manny_0*_New.uasset
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
 !Content/CourtLevel.umap

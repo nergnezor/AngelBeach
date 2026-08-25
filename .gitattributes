@@ -1,1 +1,11 @@
 Content/Characters/** filter=lfs diff=lfs merge=lfs -text
+# The few small project-authored assets .gitignore un-ignores (the Anim BP, the
+# IK rig, the two _New material instances — see the note there) go in as plain
+# git blobs, NOT LFS. They are ~3MB total; routing them through LFS is what
+# would put this repo back under the budget pressure that got Content/Characters
+# purged in the first place. Bandwidth on an LFS object is charged per clone,
+# and CI clones on every run.
+Content/Characters/Mannequin/** -filter -diff -merge
+Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset -filter -diff -merge
+Content/Characters/Mannequins/Materials/Manny/MI_Manny_01_New.uasset -filter -diff -merge
+Content/Characters/Mannequins/Materials/Manny/MI_Manny_02_New.uasset -filter -diff -merge
