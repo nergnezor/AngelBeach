@@ -5,7 +5,6 @@ on:
     branches: ["**"]
     paths-ignore:
       - "**.md"
-      - ".github/workflows/pages.yml"
       - ".github/workflows/runner-setup.yml"
       - "scripts/setup-runner.sh"
       - "scripts/runner-watchdog.sh"
