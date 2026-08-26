@@ -7,3 +7,6 @@ Content/Characters/** filter=lfs diff=lfs merge=lfs -text
 # and CI clones on every run.
 Content/Characters/Mannequin/** -filter -diff -merge
 Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset -filter -diff -merge
+Content/Characters/Mannequins/Meshes/SKM_Manny_Simple.uasset -filter -diff -merge
+Content/Characters/Mannequins/Materials/** -filter -diff -merge
+Content/Characters/Mannequins/Textures/** -filter -diff -merge

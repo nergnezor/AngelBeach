@@ -26,21 +26,35 @@ Content/Characters/**
 #     no AnimGraph — so nothing blends and none of the IK runs. That is the
 #     "arms and legs don't move at all" report from the Play build.
 #   - IK_Mannequin is the IK Rig whose goals that AnimGraph drives.
-# They total ~3MB, versus ~126MB for the Mannequins mesh/anim library that
-# exhausted the LFS budget. Kept OUT of LFS deliberately (see .gitattributes).
+#   - SKM_Manny_Simple + M_Mannequin + MI_Manny_0*_New + the Manny textures are
+#     the BODY. SetupMesh() prefers this mesh and falls back to the engine's
+#     MoverExamples copy, which renders as a pure-black silhouette on Android
+#     (measured torso (4,4,4) in *unlit* viewmode, where lighting is removed
+#     entirely, against sand at (170,159,131) — so a material problem, not the
+#     older lighting bug). The Aug 15 Play build had all 137 of these files
+#     tracked and its textures rendered correctly; the Aug 23 purge dropped it
+#     to 0 and every Play build since has shipped black players. This is the
+#     set that difference comes down to.
 #
-# The MI_Manny_0*_New material instances are deliberately NOT here. They were
-# tried, and a cook from a git-only clone showed why they cannot work alone:
-# they depend on /Game M_Mannequin plus six textures (27MB, one 20MB file) that
-# live in the ignored part of this tree, so committing the instances alone just
-# ships a material with no parent and no textures. The MoverExamples mesh CI
-# actually loads brings its own complete, working material chain for free with
-# the engine — ApplyTeamMaterial() now sets that chain's "Tint" parameter
-# alongside "Paint Tint", so no /Game material needs to be tracked at all.
+# These are tracked as PLAIN GIT BLOBS, never LFS (see .gitattributes): LFS
+# bandwidth is billed per clone and CI clones on every run, which is what
+# exhausted the budget and triggered the purge in the first place. ~45MB total
+# against the ~126MB full Mannequins library, most of which stays ignored.
 !Content/Characters/Mannequin/
 !Content/Characters/Mannequin/**
 !Content/Characters/Mannequins/
 !Content/Characters/Mannequins/Rigs/
+!Content/Characters/Mannequins/Meshes/
+!Content/Characters/Mannequins/Meshes/SKM_Manny_Simple.uasset
+!Content/Characters/Mannequins/Materials/
+!Content/Characters/Mannequins/Materials/M_Mannequin.uasset
+!Content/Characters/Mannequins/Materials/Functions/
+!Content/Characters/Mannequins/Materials/Functions/**
+!Content/Characters/Mannequins/Materials/Manny/
+!Content/Characters/Mannequins/Materials/Manny/MI_Manny_0*_New.uasset
+!Content/Characters/Mannequins/Textures/
+!Content/Characters/Mannequins/Textures/Manny/
+!Content/Characters/Mannequins/Textures/Manny/**
 !Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
