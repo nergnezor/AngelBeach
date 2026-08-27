@@ -567,7 +567,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// at crouch speed and self-stabilizes once the pelvis stops moving.
 	const float PelvisRestZ = 5.9f;
 	const float PelvisSinkDepth = 35.0f;  // cm of hip drop at full CrouchAmount
-	Self.Anim.PelvisTarget = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
+	FVector PelvisPlant = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
 	// Echo last frame's solved foot position back as this frame's target (as
 	// above), rotated by this frame's yaw change and CLAMPED to a plausible
 	// stance around the actor. Both corrections are needed and they fix
@@ -605,8 +605,60 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	float DYaw = Math::FindDeltaAngleDegrees(Self.PrevYawForFeet, CurYaw);
 	FRotator YawDelta = FRotator(0.0f, DYaw, 0.0f);
 	FVector ActorLoc = Self.GetActorLocation();
-	Self.Anim.FootTargetL = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootL - ActorLoc), ActorLoc, Right);
-	Self.Anim.FootTargetR = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootR - ActorLoc), ActorLoc, -Right);
+	FVector PlantL = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootL - ActorLoc), ActorLoc, Right);
+	FVector PlantR = GroundFootTarget(Self, ActorLoc + YawDelta.RotateVector(FootR - ActorLoc), ActorLoc, -Right);
+
+	// FADE THE PLANT OUT WHEN THERE IS NO CROUCH TO SERVE.
+	//
+	// The plant above is a crouch tool: it holds the feet still so a sinking
+	// pelvis has to fold the knees. That is right for a receive and wrong for
+	// a walk — the target is clamped to a stance radius around the hips, so a
+	// walking player's legs get pinned under the body, the stride never
+	// happens, and the only bones left moving are the toes (below the IK'd
+	// foot, still driven by the base clip). That is the "they only move their
+	// toes when they walk" report.
+	//
+	// The Two Bone IK nodes have an Alpha pin for exactly this, but nothing
+	// can create AnimGraph nodes to drive it (no Python API for EdGraph node
+	// creation, and the MCP add-node tool only reaches the EventGraph). The
+	// same blend is available here for free: lerping the TARGET toward the
+	// foot's own current animated position is identical to lerping the node's
+	// weight, because at alpha 0 the solver is asked for the pose it already
+	// has and does nothing. FootL/FootR are that animated position — this
+	// frame's live bone read, taken above.
+	//
+	// SPEED IS THE GATE, NOT CROUCH DEPTH. Keying this on crouch alone does
+	// not work: the AI holds a 0.18-0.30 athletic stance crouch permanently
+	// while repositioning (RequestCrouch sits right next to MoveToHold in
+	// AIPlayer.as), so a crouch-only fade stays near full weight during every
+	// walk and the legs stay pinned. A planted foot is only meaningful when
+	// the player is not travelling: once they are, the gait has to own the
+	// legs no matter how deep the stance is. Fade out across 40-120 cm/s, so
+	// a standing receive keeps its full plant, a hard run is pure animation,
+	// and the two blend smoothly through a walk.
+	float PlantSpeed = FVector(Self.PlayerVelocity.X, Self.PlayerVelocity.Y, 0).Size();
+	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 40.0f) / 80.0f, 0.0f, 1.0f);
+	float LegAlpha = Math::Clamp(Self.SmCrouch / 0.25f, 0.0f, 1.0f) * MoveFade;
+	Self.Anim.LegIKAlpha = LegAlpha;
+	Self.Anim.FootTargetL = FootL + (PlantL - FootL) * LegAlpha;
+	Self.Anim.FootTargetR = FootR + (PlantR - FootR) * LegAlpha;
+
+	// THE PELVIS IS THE ONE THAT ACTUALLY BROKE THE WALK. Modify Bone replaces
+	// the pelvis with PelvisTarget in WORLD space at full weight every frame,
+	// so the hips are pinned to the capsule wherever the animation wanted to
+	// put them. A walk cycle drives the whole leg swing from hip motion, so
+	// pinning the hips flattens the gait to nothing and leaves only the bones
+	// below the IK — feet and toes — visibly moving. Fading the FEET alone
+	// (the first two attempts) could never fix that, because the feet were
+	// never the thing overriding the walk.
+	//
+	// Same blend trick as the feet: lerp toward the pelvis bone's own animated
+	// position, which makes the node a no-op at alpha 0 without needing an
+	// Alpha pin wired in the AnimGraph.
+	FVector PelvisNow = Self.Mesh.GetBoneTransform(n"pelvis").Location;
+	if ((PelvisNow - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
+		PelvisNow = PelvisPlant;   // not-yet-posed mesh: same guard as the feet
+	Self.Anim.PelvisTarget = PelvisNow + (PelvisPlant - PelvisNow) * LegAlpha;
 	Self.PrevYawForFeet = CurYaw;
 }
 

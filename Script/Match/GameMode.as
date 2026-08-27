@@ -343,7 +343,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		PlayerA2 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(-150, -100, 90), FRotator::ZeroRotator));
 		if (PlayerA2 != nullptr)
+		{
 			PlayerA2.Setup(ETeam::Team_A, EPlayerRole::Role_Front, 0.80f, Ball, SandFX, Court, this);
+			// Leg-chain trace on exactly one player — see bKneeTrace. Four players
+			// tracing at frame rate buries the log; one is enough to read the pose.
+			// Off by default: the per-rally MOTIONSTATS knee columns cover normal
+			// regression checking, and this is for digging into a specific pose.
+			PlayerA2.bKneeTrace = false;
+		}
 
 		// Team B: back player deep right, front player near net right
 		PlayerB1 = Cast<AAIPlayer>(SpawnActor(AAIPlayer, FVector(600, -100, 90), FRotator::ZeroRotator));

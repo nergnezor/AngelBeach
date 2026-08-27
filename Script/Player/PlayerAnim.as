@@ -80,6 +80,19 @@ class UVolleyballAnimInstance : UAnimInstance
 	// foot around with the body instead of leaving it pinned in world space.
 	UPROPERTY(BlueprintReadWrite) FVector   FootTargetL = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadWrite) FVector   FootTargetR = FVector::ZeroVector;
+	// Weight for the LEG chain only (pelvis Modify Bone + both foot Two Bone IK
+	// nodes) — the arms have their own IKAlpha above.
+	//
+	// THE LEG IK IS A CROUCH TOOL, NOT A GAIT. All it does is hold the feet
+	// still while the pelvis sinks, so the knees have to fold. That is exactly
+	// right for a receive, and exactly wrong while walking: the foot targets
+	// track the actor (clamped to a stance radius around the hips), so a
+	// walking player's legs get pinned under the body and never stride. The
+	// base MM_Walk/MM_Run clips already contain a real gait; at alpha 0 the
+	// legs are pure animation and that gait plays untouched. Fading in with
+	// crouch depth means the IK only takes over when there is a crouch to
+	// serve, which is the only time it has anything to contribute.
+	UPROPERTY(BlueprintReadWrite) float    LegIKAlpha = 0.0f;
 	UPROPERTY(BlueprintReadWrite) bool     bDiving = false;      // play dive montage
 
 	// Head look-at: a WORLD-space point the head should turn toward (the ball), fed

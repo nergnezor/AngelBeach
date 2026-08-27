@@ -154,6 +154,17 @@ class AVolleyballPlayer : APawn
 
 		Anim = Cast<UVolleyballAnimInstance>(Mesh.GetAnimInstance());
 
+		// Mesh/ABP binding, logged once per player. Worth keeping: the ABP is
+		// authored against /MoverExamples/.../SK_Mannequin while this mesh
+		// references /Game/Characters/Mannequins/Meshes/SK_Mannequin — two
+		// DIFFERENT skeleton assets. That binding does work (89 bones, ABP
+		// attached, verified in a headless run), so it is not itself a bug, but
+		// it means every locomotion clip is retargeted across skeletons and this
+		// line is the first thing to check if the pose ever looks wrong.
+		Log("MESHSKEL mesh=" + SkMesh.GetPathName()
+			+ " bones=" + Mesh.GetNumBones()
+			+ " animBP=" + (AnimBP != nullptr ? "yes" : "NO"));
+
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
 		BuildTeamRing();
@@ -828,6 +839,56 @@ class AVolleyballPlayer : APawn
 	private float MonFootSlide = 0.0f;    // cm accumulated while planted
 	private int MonPelvisFlips = 0;       // pelvis direction reversals (the sink can't see these)
 
+	// KNEE FLEXION — "do the legs actually bend?", measured instead of eyeballed.
+	// Every foot/pelvis number above can look perfect while the knees stay locked:
+	// a rigid leg whose foot is planted and whose hips hold still scores a clean
+	// footSlide of 0 and zero pelvisFlips. What the eye calls "walking on tiptoes"
+	// is precisely a knee that never folds, and nothing here could see it.
+	//
+	// The measure is KneeBend() below: 0 = locked straight, larger = more
+	// folded. Accumulated in two buckets because the two cases fail independently
+	// and have been confused for each other repeatedly — the legs DO bend on a
+	// receive (crouch, standing still) while staying rigid during a walk. A single
+	// average blends the working case into the broken one and reads "fine".
+	//   walk  = speed above WalkKneeSpeed, i.e. a real gait should be running
+	//   still = below it, where the crouch IK is the only thing bending anything
+	private float MonKneeWalkSum = 0.0f;
+	private float MonKneeWalkSamples = 0.0f;
+	private float MonKneeWalkMax = 0.0f;
+	private float MonKneeWalkMin = 999.0f;
+	private float MonKneeStillSum = 0.0f;
+	private float MonKneeStillSamples = 0.0f;
+	private float MonKneeStillMax = 0.0f;
+	// Bend RANGE over time is the real gait tell: a leg held at a constant bend
+	// of 20 is as stiff as one held at 0, and only a CHANGING bend is a stride.
+	// This sums how much the left knee's bend moves frame to frame while
+	// walking — a genuine walk cycle cranks this up fast, a locked leg leaves it
+	// near zero no matter how good the mean looks.
+	private float MonKneeWalkTravel = 0.0f;
+	private float MonPrevKneeL = -1.0f;
+	// Per-frame leg-chain trace. Diagnostic only — set on ONE player by the
+	// GameMode so the log stays readable; leave false in normal play.
+	bool bKneeTrace = false;
+	private int MonKneeTraceLogs = 0;
+
+	// How bent one knee is, as a 0..100 "shortening" percentage rather than an
+	// angle: a straight leg spans exactly thigh+shin from hip to ankle, and any
+	// bend pulls the ankle closer to the hip. 0 = locked straight, ~30 = a deep
+	// squat. Deliberately NOT an arccos of the joint angle — no trig function is
+	// bound in this fork (Math::Acos does not exist), and Size() alone gives a
+	// monotonic, unit-free measure of the same thing, which is all the buckets
+	// below compare.
+	private float KneeBend(FName Thigh, FName Calf, FName Foot) const
+	{
+		FVector Hip = Mesh.GetBoneTransform(Thigh).Translation;
+		FVector Knee = Mesh.GetBoneTransform(Calf).Translation;
+		FVector Ankle = Mesh.GetBoneTransform(Foot).Translation;
+		float Straight = (Knee - Hip).Size() + (Ankle - Knee).Size();
+		if (Straight < 1.0f) return 0.0f;
+		float Span = (Ankle - Hip).Size();
+		return Math::Clamp((1.0f - Span / Straight) * 100.0f, 0.0f, 100.0f);
+	}
+
 	// Called by the AI whenever it commands a movement target. Reporting the same
 	// target twice in a frame is harmless (delta 0), so both MoveToHold and
 	// MoveToward2D can call it without double counting.
@@ -837,6 +898,16 @@ class AVolleyballPlayer : APawn
 			MonGoalJumps++;
 		MonPrevGoal = Goal;
 		bMonGoalInit = true;
+	}
+
+	private float KneeWalkMean() const
+	{
+		return (MonKneeWalkSamples > 0.0f) ? MonKneeWalkSum / MonKneeWalkSamples : 0.0f;
+	}
+
+	private float KneeStillMean() const
+	{
+		return (MonKneeStillSamples > 0.0f) ? MonKneeStillSum / MonKneeStillSamples : 0.0f;
 	}
 
 	// Emitted per rally from GameMode.LogRallyEnd — one greppable regression
@@ -855,7 +926,14 @@ class AVolleyballPlayer : APawn
 			+ " yawRateMean=" + YawMean
 			+ " yawRateMax=" + int(MonYawRateMax)
 			+ " footSlide=" + int(MonFootSlide)
-			+ " pelvisFlips=" + MonPelvisFlips);
+			+ " pelvisFlips=" + MonPelvisFlips
+			+ " kneeWalk=" + int(KneeWalkMean())
+			+ " kneeWalkMin=" + int(MonKneeWalkMin < 900.0f ? MonKneeWalkMin : 0.0f)
+			+ " kneeWalkMax=" + int(MonKneeWalkMax)
+			+ " kneeWalkTravel=" + int(MonKneeWalkTravel)
+			+ " kneeStill=" + int(KneeStillMean())
+			+ " kneeStillMax=" + int(MonKneeStillMax)
+			+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f));
 		MonTotMoveFlips = 0;
 		MonTotYawFlips = 0;
 		MonTotCrouchFlips = 0;
@@ -867,6 +945,14 @@ class AVolleyballPlayer : APawn
 		MonYawRateMax = 0.0f;
 		MonFootSlide = 0.0f;
 		MonPelvisFlips = 0;
+		MonKneeWalkSum = 0.0f;
+		MonKneeWalkSamples = 0.0f;
+		MonKneeWalkMax = 0.0f;
+		MonKneeWalkMin = 999.0f;
+		MonKneeStillSum = 0.0f;
+		MonKneeStillSamples = 0.0f;
+		MonKneeStillMax = 0.0f;
+		MonKneeWalkTravel = 0.0f;
 	}
 
 	private void UpdateMotionMonitor(float DeltaTime)
@@ -1002,6 +1088,63 @@ class AVolleyballPlayer : APawn
 					&& PVel.DotProduct(MonPrevPelvisVel) < -0.2f * PVel.Size() * MonPrevPelvisVel.Size())
 					MonPelvisFlips++;
 				if (PVel.Size() > 15.0f) MonPrevPelvisVel = PVel;
+			}
+
+			// Knee flexion, bucketed by whether we are actually walking. 100 cm/s
+			// sits above MoveToHold's idle jitter but well below a real run, so
+			// "walk" means a gait clip is genuinely playing.
+			if (bIsGrounded)
+			{
+				float KneeL = KneeBend(n"thigh_l", n"calf_l", n"foot_l");
+				float KneeR = KneeBend(n"thigh_r", n"calf_r", n"foot_r");
+				float KneeAvg = (KneeL + KneeR) * 0.5f;
+				float Spd2D = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+				if (Spd2D > 100.0f)
+				{
+					MonKneeWalkSum += KneeAvg;
+					MonKneeWalkSamples += 1.0f;
+					if (KneeAvg > MonKneeWalkMax) MonKneeWalkMax = KneeAvg;
+					if (KneeAvg < MonKneeWalkMin) MonKneeWalkMin = KneeAvg;
+					if (MonPrevKneeL >= 0.0f)
+						MonKneeWalkTravel += Math::Abs(KneeL - MonPrevKneeL);
+				}
+				else
+				{
+					MonKneeStillSum += KneeAvg;
+					MonKneeStillSamples += 1.0f;
+					if (KneeAvg > MonKneeStillMax) MonKneeStillMax = KneeAvg;
+				}
+				MonPrevKneeL = KneeL;
+
+				// Per-frame trace on ONE player while walking: the rally totals say
+				// the knees stay locked but not WHY. Prints the whole leg chain so
+				// the pelvis/foot relationship is visible frame by frame.
+				if (bKneeTrace && Spd2D > 100.0f && MonKneeTraceLogs < 120)
+				{
+					MonKneeTraceLogs++;
+					FVector HipL = Mesh.GetBoneTransform(n"thigh_l").Translation;
+					FVector AnkL = Mesh.GetBoneTransform(n"foot_l").Translation;
+					FVector KneeLoc = Mesh.GetBoneTransform(n"calf_l").Translation;
+					// Segment lengths are constant (43 + 42 = 85cm) — printed so a
+					// suspicious knee reading can be told apart from a broken
+					// measurement. span == 85 means the leg is dead straight.
+					Log("KNEESEG thighLen=" + int((KneeLoc - HipL).Size())
+						+ " shinLen=" + int((AnkL - KneeLoc).Size())
+						+ " span=" + int((AnkL - HipL).Size())
+						+ " hipZ=" + int(HipL.Z) + " kneeZ=" + int(KneeLoc.Z) + " ankZ=" + int(AnkL.Z));
+					Log("KNEETRACE " + GetName()
+						+ " spd=" + int(Spd2D)
+						+ " kneeL=" + int(KneeL) + " kneeR=" + int(KneeR)
+						+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
+						+ " crouch=" + int(SmCrouch * 100.0f)
+						+ " pelvisZ=" + int(Pelvis.Z)
+						+ " hipLZ=" + int(HipL.Z)
+						+ " ankLZ=" + int(AnkL.Z)
+						+ " actorZ=" + int(GetActorLocation().Z)
+						+ " tgtLZ=" + int(Anim != nullptr ? Anim.FootTargetL.Z : 0.0f)
+						+ " tgtPelZ=" + int(Anim != nullptr ? Anim.PelvisTarget.Z : 0.0f)
+						+ " hipAnkDist=" + int((AnkL - HipL).Size()));
+				}
 			}
 			MonPrevFootL = FootL;
 			MonPrevFootR = FootR;
