@@ -103,6 +103,14 @@ class AAIPlayer : AVolleyballPlayer
 			bIntendSet = false;
 			bOnTwoLoggedNotViable = false;
 			bSpikeCueOn = false;    // a committed attack cue must not outlive its ball
+			bServeRecvLogged = false;
+
+			// The one player the GameMode nominated fetches the ball instead of
+			// strolling to formation. RunFetchSequence returns false once it is
+			// finished, so they fall straight through to the normal reset below.
+			if (bFetching && RunFetchSequence(DeltaTime))
+				return true;
+
 			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
 			PreFaceForServe();
 			return true;
@@ -314,6 +322,169 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// ---------------------------------------------------------------
+	// Dead-ball retrieval: walk to the ball, pick it up, throw it to
+	// where the next server is heading. Driven entirely from the dead-ball
+	// branch of RunAIBrain; the GameMode picks who does it (ChooseFetcher).
+	// ---------------------------------------------------------------
+	bool bFetching = false;
+	private int FetchState = 0;        // 0 walk to ball, 1 pick up, 2 back off, 3 throw, 4 done
+	private float FetchTimer = 0.0f;
+	private FVector FetchTarget = FVector::ZeroVector;   // where the next server is going
+	private FVector ThrowFrom = FVector::ZeroVector;
+	private FVector ThrowVel = FVector::ZeroVector;
+	private float ThrowFlightTime = 0.0f;
+
+	// How close to stand before picking the ball up, and the beat spent bending
+	// for it. Reach is generous: the ball rests ON the sand, the hand comes to it.
+	const float FetchReach = 70.0f;
+	const float PickupDuration = 0.35f;
+	// Minimum distance from the net to throw ACROSS it from. A ball fetched at
+	// the net cannot be lobbed over it on any sane arc — the required flight time
+	// diverges as the throw start approaches X=0 — so carry it back this far
+	// first. At 260 the arc peaks ~315cm over a 243cm net; see ThrowArc below.
+	const float MinCrossThrowX = 260.0f;
+
+	// Am I settled on my dead-ball formation spot? The GameMode polls every
+	// player to decide when to serve, instead of counting down a fixed timer:
+	// the serve now waits for the ball to be delivered and everyone to walk
+	// into position, which is what actually ends a beach volleyball dead ball.
+	//
+	// Radius is comfortably wider than MoveToHold's 35cm Arrived so a player who
+	// has planted and is holding always reads as ready — matching the hold
+	// threshold exactly would leave them one centimetre short forever.
+	const float ReadyRadius = 90.0f;
+
+	bool IsInReadyPosition() const
+	{
+		if (bFetching) return false;   // still carrying or throwing the ball
+		return (GetActorLocation() - ReadyPosition()).Size2D() < ReadyRadius;
+	}
+
+	void BeginFetch(FVector ThrowTarget)
+	{
+		bFetching = true;
+		FetchState = 0;
+		FetchTimer = 0.0f;
+		FetchTarget = ThrowTarget;
+	}
+
+	void EndFetch()
+	{
+		bFetching = false;
+		FetchState = 4;
+	}
+
+	// Returns true while the fetch owns this player's movement.
+	protected bool RunFetchSequence(float Dt)
+	{
+		if (Ball == nullptr || Ball.bInPlay || Mesh == nullptr) { bFetching = false; return false; }
+
+		FVector Me = GetActorLocation();
+
+		if (FetchState == 0)   // walk to the ball
+		{
+			FVector Goal = FVector(Ball.Position.X, Ball.Position.Y, Me.Z);
+			MoveToHold(Goal, Dt, 1.0f);
+			FaceToward(Ball.Position);
+			if ((Me - Goal).Size2D() < FetchReach)
+			{
+				FetchState = 1;
+				FetchTimer = 0.0f;
+			}
+			return true;
+		}
+
+		if (FetchState == 1)   // bend down and pick it up
+		{
+			MovePlayer(FVector2D::ZeroVector);
+			FaceToward(FetchTarget);
+			CarryBall();
+			FetchTimer += Dt;
+			if (FetchTimer >= PickupDuration)
+			{
+				FetchState = 2;
+				FetchTimer = 0.0f;
+			}
+			return true;
+		}
+
+		if (FetchState == 2)   // carry clear of the net if the throw has to cross it
+		{
+			CarryBall();
+			bool bCrossesNet = (FetchTarget.X * MySign()) < 0.0f;
+			if (!bCrossesNet || Math::Abs(Me.X) >= MinCrossThrowX)
+			{
+				StartThrow();
+				return true;
+			}
+			// Back away from the net along my own half, still facing the target.
+			MoveToHold(FVector(MySign() * (MinCrossThrowX + 40.0f), Me.Y, Me.Z), Dt, 1.0f);
+			FaceToward(FetchTarget);
+			return true;
+		}
+
+		if (FetchState == 3)   // ball in the air
+		{
+			MovePlayer(FVector2D::ZeroVector);
+			FaceToward(FetchTarget);
+			FetchTimer += Dt;
+			// CLOSED-FORM flight, same reasoning as the serve toss above: a frame
+			// hitch must not be able to integrate the ball through the floor.
+			float T = Math::Min(FetchTimer, ThrowFlightTime);
+			FVector P = ThrowFrom + ThrowVel * T + FVector(0, 0, -490.0f * T * T);
+			Ball.Position = P;
+			Ball.BallVel = FVector::ZeroVector;
+			Ball.SetActorLocation(P);
+			if (FetchTimer >= ThrowFlightTime)
+			{
+				FetchState = 4;
+				bFetching = false;
+				Log("FETCH done " + GetName() + " restX=" + int(P.X) + " restY=" + int(P.Y));
+			}
+			return true;
+		}
+
+		bFetching = false;
+		return false;
+	}
+
+	// The established carry idiom (see RunServeSequence): write position AND
+	// actor location every frame. Safe without fighting physics because the
+	// ball's Tick early-outs while bInPlay is false.
+	private void CarryBall()
+	{
+		FVector Carry = Mesh.GetBoneTransform(n"hand_r").Location + FVector(0, 0, 12);
+		Ball.Position = Carry;
+		Ball.BallVel = FVector::ZeroVector;
+		Ball.SetActorLocation(Carry);
+	}
+
+	private void StartThrow()
+	{
+		ThrowFrom = Ball.Position;
+		FVector D = FetchTarget - ThrowFrom;
+		// Flight time from distance, floored so short throws still arc rather
+		// than firing flat, capped so long ones do not hang past the serve.
+		ThrowFlightTime = Math::Clamp(D.Size2D() / 700.0f, 0.9f, 1.8f);
+		float T = ThrowFlightTime;
+		// Solve P0 + V*T - 490*T^2 = Target for V (gravity matches the serve toss).
+		ThrowVel = FVector(D.X / T, D.Y / T, D.Z / T + 490.0f * T);
+		FetchState = 3;
+		FetchTimer = 0.0f;
+	}
+
+	private void FaceToward(FVector P)
+	{
+		FVector To = P - GetActorLocation();
+		To.Z = 0.0f;
+		if (To.SizeSquared() > 1.0f)
+		{
+			FacingDir = To.GetSafeNormal();
+			bHasFacing = true;
+		}
+	}
+
+	// ---------------------------------------------------------------
 	// Main decision loop (protected so AHumanPlayer can reuse it as its
 	// AI fallback when no gamepad input is active)
 	// ---------------------------------------------------------------
@@ -375,18 +546,79 @@ class AAIPlayer : AVolleyballPlayer
 		float MyDist    = (GetActorLocation() - Landing).Size2D();
 		float TheirDist = (Teammate.GetActorLocation() - Landing).Size2D();
 
+		// SERVE RECEIVE IS SPLIT LEFT/RIGHT, NOT FRONT/BACK.
+		//
+		// This used to be an unconditional DEPTH gate: any deep ball went to the
+		// back player and the front player returned false no matter where either
+		// stood. Serves land at |X| 500-600 against IsDeep's 350 threshold, so
+		// every single serve counted as deep and the FRONT PLAYER NEVER TOOK ONE.
+		//
+		// Fixing it with a distance bias does not work either, and the measured
+		// reason is worth recording: the back player's home (±560, +120) sits
+		// almost exactly where serves land, so they are genuinely nearest nearly
+		// every time and ANY back-favouring bias reproduces "never". The split
+		// has to come from court ownership, not proximity.
+		//
+		// The codebase already has that ownership and it is the right one for a
+		// two-player receive — MyHalfPinY gives Front the -Y half and Back the
+		// +Y half. A serve landing clearly in a player's own half is theirs,
+		// which is exactly how a real beach pair splits serve receive. Only the
+		// narrow band down the middle falls through to distance.
 		bool bDeep = IsDeep(Landing.X);
-		if (bDeep && Role == EPlayerRole::Role_Back)  { bWasHitter = true;  return true;  }
-		if (bDeep && Role == EPlayerRole::Role_Front) { bWasHitter = false; return false; }
+		bool bMine;
+		bool bFrontOwnsIt = (Landing.Y < -HalfClaimY);
+		bool bBackOwnsIt  = (Landing.Y >  HalfClaimY);
+		// ...unless the owner is hopelessly out of position. Measured case: a
+		// serve to Y=-213 is the front player's by half, but they were 685cm away
+		// while the back player stood 112cm from it. Owning a half is not worth a
+		// cross-court sprint past a teammate who is already there.
+		bool bOwnerStranded = (MyDist - TheirDist) > HalfOverrideDist;
+		bool bPartnerStranded = (TheirDist - MyDist) > HalfOverrideDist;
+		if (bDeep && (bFrontOwnsIt || bBackOwnsIt) && !bOwnerStranded && !bPartnerStranded)
+		{
+			bMine = (Role == EPlayerRole::Role_Front) ? bFrontOwnsIt : bBackOwnsIt;
+		}
+		else
+		{
+			// STICKY ROLE: with a bare closest-player rule, two nearly equidistant
+			// teammates swapped hitter/support every AI tick and both shuttled
+			// between two goals. The incumbent keeps the ball unless the partner
+			// is CLEARLY closer.
+			float Margin = bWasHitter ? 60.0f : -60.0f;
+			bMine = MyDist <= TheirDist + Margin;
+		}
 
-		// STICKY ROLE: with a bare closest-player rule, two nearly equidistant
-		// teammates swapped hitter/support every AI tick and both shuttled
-		// between two goals. The incumbent keeps the ball unless the partner
-		// is CLEARLY closer.
-		float Margin = bWasHitter ? 60.0f : -60.0f;
-		bWasHitter = MyDist <= TheirDist + Margin;
+		// One line per player per deep receive, so who takes it can be COUNTED
+		// from the log instead of watched. Emitted once per dead-ball cycle
+		// (bServeRecvLogged resets with every other per-rally flag) — without
+		// that guard this fires every AI tick for the whole approach.
+		if (bDeep && !bServeRecvLogged)
+		{
+			bServeRecvLogged = true;
+			Log("SERVERECV " + DebugTag() + " " + GetName()
+				+ " mine=" + (bMine ? 1 : 0)
+				+ " landX=" + int(Landing.X) + " landY=" + int(Landing.Y)
+				+ " myDist=" + int(MyDist) + " theirDist=" + int(TheirDist));
+		}
+
+		bWasHitter = bMine;
 		return bWasHitter;
 	}
+
+	// Dead band (cm) either side of the centre line where neither player owns the
+	// serve by half and distance decides instead. Wide enough that a ball down
+	// the middle is not awarded on a centimetre, narrow enough that the halves
+	// still do the work. Verified by counting SERVERECV lines, not by eye.
+	const float HalfClaimY = 80.0f;
+
+	// How much farther than the partner the half-owner may be before ownership is
+	// abandoned and the closer player simply takes it. Comfortably above the
+	// normal in-formation gap (measured 40-115cm on receives the halves should
+	// decide) so it only fires on genuinely stranded cases.
+	const float HalfOverrideDist = 250.0f;
+
+	// One SERVERECV line per dead-ball-to-contact cycle; reset on every dead ball.
+	private bool bServeRecvLogged = false;
 
 	// Hysteresis state for AmIHitter (who owns the current ball).
 	private bool bWasHitter = false;

@@ -392,15 +392,118 @@ class ABeachVolleyballGameMode : AGameModeBase
 		ScheduleServe();
 	}
 
-	// Pause after a dead ball (point won / ball down) before the next serve, so
-	// players can reset and the rally has a clear beat.
-	float ServeDelay = 5.0f;
+	// THE NEXT SERVE WAITS FOR THE PLAYERS, NOT A CLOCK.
+	//
+	// This used to be a flat 5s countdown, which meant the serve fired whether or
+	// not anyone had reached their spot — and, now that someone fetches the ball,
+	// often while it was still in mid-air on its way to the server. Polling
+	// readiness instead lets the dead ball take exactly as long as it needs: ball
+	// retrieved, everyone walked into formation, then serve.
+	//
+	// MinServeWait stops a point ending and the next serve starting in the same
+	// breath when everyone happens to already be in position. MaxServeWait is a
+	// deadlock guard, not a target: a player wedged against a clamp bound would
+	// otherwise stall the match forever, and a headless verification run would
+	// hang instead of failing.
+	const float ServePollInterval = 0.2f;
+	float MinServeWait = 1.2f;   // MatchFilmer shortens this to film more rallies
+	const float MaxServeWait = 12.0f;
+	private float ServeWaitTimer = 0.0f;
 
 	private void ScheduleServe()
 	{
 		if (Ball == nullptr) return;
 		Ball.bInPlay = false;
-		System::SetTimer(this, n"ServeBall", ServeDelay, bLooping = false);
+		ChooseFetcher();
+		ServeWaitTimer = 0.0f;
+		System::SetTimer(this, n"PollServeReady", ServePollInterval, bLooping = true);
+	}
+
+	UFUNCTION(BlueprintCallable)
+	void PollServeReady()
+	{
+		ServeWaitTimer += ServePollInterval;
+		if (ServeWaitTimer < MinServeWait) return;
+
+		bool bReady = AllPlayersReady();
+		if (!bReady && ServeWaitTimer < MaxServeWait) return;
+
+		System::ClearTimer(this, "PollServeReady");
+		Log("SERVEGO wait=" + int(ServeWaitTimer * 100) + " ready=" + (bReady ? 1 : 0));
+		ServeBall();
+	}
+
+	private bool AllPlayersReady() const
+	{
+		if (HumanPawn != nullptr && !HumanPawn.IsInReadyPosition()) return false;
+		if (PlayerA2  != nullptr && !PlayerA2.IsInReadyPosition())  return false;
+		if (PlayerB1  != nullptr && !PlayerB1.IsInReadyPosition())  return false;
+		if (PlayerB2  != nullptr && !PlayerB2.IsInReadyPosition())  return false;
+		return true;
+	}
+
+	// --- Dead-ball ball retrieval ----------------------------------------
+	// Between points the ball used to just sit wherever the rally ended for the
+	// full ServeDelay, until RunServeSequence teleported it into the server's
+	// hand. Someone walks over, picks it up and throws it to the next server
+	// instead. Chosen HERE, once, rather than by each player independently:
+	// two teammates each deciding "am I closest?" both run at the ball.
+	AAIPlayer Fetcher;
+	FVector FetchThrowTarget = FVector::ZeroVector;
+
+	private void ChooseFetcher()
+	{
+		Fetcher = nullptr;
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr || Ball == nullptr) return;
+
+		FVector B = Ball.Position;
+
+		// Out of everyone's reach: players are hard-clamped to their own half
+		// (CourtMinX/MaxX in VolleyballPlayer.Tick), so a ball past the sidelines
+		// or baselines simply cannot be walked to. Leave it and let the serve
+		// snap collect it, as before.
+		if (Math::Abs(B.Y) > 430.0f || Math::Abs(B.X) > 880.0f) return;
+
+		// Whoever is about to serve walks to the serve spot, not to the ball —
+		// they are the one being thrown TO. ServeBall picks the Role_Back player
+		// of the serving team, so mirror that choice exactly.
+		AAIPlayer NextServer = (GS.ServingTeam == ETeam::Team_A) ? Cast<AAIPlayer>(HumanPawn) : PlayerB1;
+		float ServeSign = (GS.ServingTeam == ETeam::Team_A) ? -1.0f : 1.0f;
+		FetchThrowTarget = FVector(ServeSign * 820.0f, 0.0f, 110.0f);
+
+		// Only players whose half contains the ball are candidates — nobody can
+		// cross the net to fetch. Of those, the closest that is not the server.
+		TArray<AAIPlayer> Candidates;
+		Candidates.Add(Cast<AAIPlayer>(HumanPawn));
+		Candidates.Add(PlayerA2);
+		Candidates.Add(PlayerB1);
+		Candidates.Add(PlayerB2);
+
+		float BestDist = 100000.0f;
+		for (int i = 0; i < Candidates.Num(); i++)
+		{
+			AAIPlayer P = Candidates[i];
+			if (P == nullptr || P == NextServer) continue;
+			// Ball on my side? Team A owns X<0, Team B owns X>0.
+			bool bMySide = (P.TeamSide == ETeam::Team_A) ? (B.X < 0.0f) : (B.X > 0.0f);
+			if (!bMySide) continue;
+			float D = (P.GetActorLocation() - B).Size2D();
+			if (D < BestDist) { BestDist = D; Fetcher = P; }
+		}
+
+		if (Fetcher != nullptr)
+		{
+			Fetcher.BeginFetch(FetchThrowTarget);
+			Log("FETCH pick=" + Fetcher.GetName()
+				+ " ballX=" + int(B.X) + " ballY=" + int(B.Y)
+				+ " dist=" + int(BestDist)
+				+ " tgtX=" + int(FetchThrowTarget.X) + " tgtY=" + int(FetchThrowTarget.Y));
+		}
+		else
+		{
+			Log("FETCH none ballX=" + int(B.X) + " ballY=" + int(B.Y));
+		}
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -408,6 +511,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 	{
 		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		if (GS == nullptr || Ball == nullptr) return;
+
+		// The serve owns the ball from here. A fetcher still mid-throw would keep
+		// writing Ball.Position every frame and fight the server's carry for it.
+		if (Fetcher != nullptr)
+		{
+			Fetcher.EndFetch();
+			Fetcher = nullptr;
+		}
 
 		// Serve must clearly clear the 243cm net ~5-8m away: strong forward +
 		// strong upward arc. The velocity is handed to the SERVING PLAYER, who

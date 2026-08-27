@@ -23,8 +23,10 @@ class AMatchFilmerGameMode : ABeachVolleyballGameMode
 	void BeginPlay()
 	{
 		Super::BeginPlay();
-		// Shorter dead-ball pause: we're here to film rallies, not waiting.
-		ServeDelay = 2.0f;
+		// Shorter dead-ball pause: we're here to film rallies, not waiting. The
+		// serve now waits for players to reach formation rather than a fixed
+		// countdown, so this only trims the minimum beat, not the whole gap.
+		MinServeWait = 0.5f;
 
 		TArray<AActor> Found;
 		GetAllActorsOfClass(AVolleyballPlayer, Found);
