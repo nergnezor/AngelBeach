@@ -111,7 +111,7 @@ class AVolleyballPlayer : APawn
 		if (SkMesh == nullptr)
 		{
 			// The local template copy originated in UE 5.6. On a strict mobile
-			// loader it can fail before its packages have been re-saved in UE 5.7.
+			// loader it can fail before its packages have been re-saved in 5.8.
 			// MoverExamples is enabled for this project and supplies the matching,
 			// current-engine Manny mesh as a safe runtime fallback.
 			//

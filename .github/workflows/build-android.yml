@@ -115,7 +115,7 @@ jobs:
         shell: bash
         run: |
           # The repo variable JAVA_HOME points at /home/erik/jdk17, which exists on
-          # the 5.7 runner and not on the 5.8 one, so Gradle died there with
+          # one runner and not the other, so Gradle died there with
           # "JAVA_HOME is set to an invalid directory". Resolve it the same way the
           # engine is resolved above — take the configured value if it is real, else
           # fall back to the usual system locations — so adding a runner does not
@@ -247,18 +247,19 @@ jobs:
           # because an Android cook builds a Linux UnrealEditor target first, and
           # THAT target pulls the plugin in.
           #
-          # This step was added in 6408919 when the plugin stopped compiling on the
-          # 5.8 runner, then removed again in c4b39dc, which instead patched the
+          # This step was added in 6408919 when the plugin stopped compiling on one
+          # runner, then removed again in c4b39dc, which instead patched the
           # plugin's sources to the 5.8 JSON API (FString -> FSharedString keys,
-          # .ToView() on the key type). That traded one broken runner for the other:
-          # .ToView() does not exist on 5.7 either, so packaging now dies with "no
-          # member named 'ToView' in 'FString'" whenever a job lands on the 5.7
-          # machine. Reproduced locally at 0cf375c; run 32814956298 failed the same
-          # way, which is why the last two animation fixes never reached Play.
+          # .ToView() on the key type). That traded one broken runner for the other,
+          # because the two runners were on different engine versions and .ToView()
+          # only exists on the newer one. Run 32814956298 failed that way, which is
+          # why two animation fixes never reached Play.
           #
-          # Two runners with two engine versions means source-patching this plugin
-          # can only ever satisfy one of them. Not compiling an editor-only plugin
-          # during a GAME package is version-independent and correct on both.
+          # Every machine is on 5.8 now, so that particular split is gone — but the
+          # step stays, because it was never really about the version. Not compiling
+          # an EDITOR-ONLY plugin during a GAME package is correct regardless, and
+          # it keeps the packaged build independent of whatever the MCP plugin's
+          # sources happen to require next.
           #
           # The plugin has "EnabledByDefault": true and no entry in the .uproject,
           # so it is on simply by existing. Adding an explicit disabled entry here

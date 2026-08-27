@@ -1,4 +1,4 @@
-# AngelBeach — beach volleyball (UE5.7, Hazelight Angelscript fork)
+# AngelBeach — beach volleyball (UE5.8, Hazelight Angelscript fork)
 
 A beach volleyball game written almost entirely in Angelscript (`Script/*.as`).
 Players are `APawn`s with a Manny skeletal mesh; a custom physics ball bounces off
@@ -82,8 +82,8 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
 - The full template Manny library (mesh, skeleton, all anim clips incl. Death/dive,
   BS_Idle_Walk_Run, Dash) was copied into `Content/Characters/Mannequins/` (gitignored).
 - **Asset version trap:** template assets were saved in UE 5.6 (`++UE5+Release-5.6`); this
-  engine is 5.7 (`++UE5+Main`). 5.6 assets fail to load at runtime until re-saved in the 5.7
-  editor (Content Browser → folder → Save All upgrades the package format).
+  engine is 5.8 (`++UE5+Main`). Older assets fail to load at runtime until re-saved in the
+  5.8 editor (Content Browser → folder → Save All upgrades the package format).
 - The Anim BP must target this same skeleton or bone driving silently breaks.
 
 ## Gameplay
