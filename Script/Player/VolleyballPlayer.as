@@ -598,6 +598,17 @@ class AVolleyballPlayer : APawn
 		// Anim BP popped between the idle and locomotion poses at frame rate.
 		bMovingState = bMovingState ? (HSpeed > 30.0f) : (HSpeed > 70.0f);
 		Anim.bIsMoving     = bMovingState;
+		// NOT DONE HERE: scaling playback by ground speed. MM_Run_Fwd travels at
+		// 532 cm/s at rate 1.0 (measured off the asset), so Speed/532 through
+		// Mesh.GlobalAnimRateScale looks like the obvious cure for foot sliding.
+		// It was tried and MEASURED WORSE on every metric — slowing the clip below
+		// rate 1 costs more knee motion than the stride match buys:
+		//   footSlide/s     198 -> 221      kneeTravel/s   151 -> 104
+		//   straight-leg frames  58/120 -> 67/120
+		// Reverted rather than shipped. The real fix is a speed-driven blendspace
+		// (BS_VolleyballLocomotion exists, with idle/walk/run samples placed at
+		// each clip's own measured travel speed) — it just needs a BlendSpacePlayer
+		// node, which nothing outside the editor GUI can create.
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
 		Anim.bDiving       = IsDiving();
