@@ -61,6 +61,12 @@ Content/Characters/**
 !Content/Characters/Mannequins/Textures/
 !Content/Characters/Mannequins/Textures/Manny/
 !Content/Characters/Mannequins/Textures/Manny/**
+# M_Mannequin samples this alongside the three Manny maps, and MI_Manny_02_New
+# references it too — it is one of the base material's five TextureSamples, not
+# decoration. Without it a fresh checkout cooks the body material with a
+# missing texture. 60K.
+!Content/Characters/Mannequins/Textures/Shared/
+!Content/Characters/Mannequins/Textures/Shared/T_UE_Logo_M.uasset
 !Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
