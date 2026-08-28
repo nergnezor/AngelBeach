@@ -3,6 +3,9 @@
 
 enum EPlayerRole { Role_Back, Role_Front }
 
+// What a player is doing right now — see SetPlayState. Exactly one is active.
+enum EPlayState { Play_Base, Play_Block, Play_Job }
+
 class AAIPlayer : AVolleyballPlayer
 {
 	UPROPERTY(BlueprintReadWrite) float Difficulty = 0.75f;
@@ -177,40 +180,18 @@ class AAIPlayer : AVolleyballPlayer
 				return FVector(Sign * 130.0f, 0.0f, Z);     // partner up at the net
 		}
 
-		// RECEIVING: a real serve-receive formation, not the rally one.
+		// RECEIVING: the base formation — the same spot a player returns to any
+		// time they have no job (see BasePosition). One definition, so serve
+		// receive and in-rally reset cannot drift apart.
 		//
-		// This used to fall through to HomePosition(), which is where players
-		// reset DURING a rally — front player 250cm off the net (a blocking
-		// spot) and the pair only 240cm apart in Y. Nobody blocks a serve, and
-		// two receivers that close together leave both sidelines open: the front
-		// player was standing at the net while the serve landed 5m behind them.
-		//
-		// Both receivers belong deep and split wide, each genuinely owning a
-		// half. Measured serve landings sit at |X| 495-606 and Y -250..+250, so
-		// standing at 500/560 puts them where the ball actually arrives, and
-		// ±190 centres each on their own half (the court is ±400 wide).
-		// This is also what makes the Y-half receive assignment in AmIHitter
-		// mean anything — owning a half you are not standing in is just a label.
-		//
-		// The slight depth stagger is real technique: the player covering the
-		// sharper cross-court angle stands a touch shallower.
-		if (Role == EPlayerRole::Role_Front)
-			return FVector(Sign * 500.0f, -190.0f, Z);   // owns the -Y half
-		return FVector(Sign * 560.0f, 190.0f, Z);        // owns the +Y half
+		// It used to fall through to HomePosition(), the RALLY formation: front
+		// player 250cm off the net (a blocking spot) and the pair only 240cm
+		// apart in Y. Nobody blocks a serve, and two receivers that close leave
+		// both sidelines open — the front player stood at the net while the
+		// serve landed five metres behind them.
+		return BasePosition();
 	}
 
-	// Stable base position for each role. This is where a player resets while
-	// the opponent constructs its play and when supporting a teammate: do not
-	// chase a ball that is not ours. The front/back depth keeps two useful
-	// options while the small Y split covers the court without both players
-	// wandering toward every lateral ball movement.
-	private FVector HomePosition() const
-	{
-		float Sign = MySign();
-		float X = (Role == EPlayerRole::Role_Front) ? 250.0f : 560.0f;
-		float Y = (Role == EPlayerRole::Role_Front) ? -120.0f : 120.0f;
-		return FVector(Sign * X, Y, FloorZ + PlayerHeight);
-	}
 
 	// ---------------------------------------------------------------
 	// Serve — a real motion, not a ball teleport: the server walks to the
@@ -507,35 +488,110 @@ class AAIPlayer : AVolleyballPlayer
 	// Main decision loop (protected so AHumanPlayer can reuse it as its
 	// AI fallback when no gamepad input is active)
 	// ---------------------------------------------------------------
+	// ---------------------------------------------------------------
+	// WHAT AM I DOING RIGHT NOW — asked once, answered once.
+	//
+	// Twelve call sites used to command movement, half of them through a
+	// primitive with no hysteresis at all, and nothing ever asked this question
+	// as ONE question. That is why they could fight each other: two subsystems
+	// would each decide they owned the body on alternating AI ticks and the
+	// player shuttled between their two goals. Every previous fix bolted a
+	// hysteresis band onto whichever boolean was caught oscillating that week,
+	// which is a losing game — there is always another boolean.
+	//
+	// The model, in Erik's words: always follow the ball with your eyes, always
+	// move toward your receive position, EXCEPT when you must move to do
+	// something with the ball — plus blocking, which is a real position at the
+	// net and neither of those.
+	//
+	//   Job   — this ball is mine to play. Go to the contact.
+	//   Block — the opponent is attacking and the net is mine. Hold it.
+	//   Base  — everything else. Walk to base, watch the ball.
+	//
+	// Exactly one is active per tick, and a state must be held for StateMinDwell
+	// before another can take over. That dwell is the single arbitration point
+	// the codebase never had: it does not matter how noisy an individual
+	// predicate is if the STATE it feeds cannot change faster than a person can.
+	private EPlayState PlayState = EPlayState::Play_Base;
+	private float StateDwell = 0.0f;
+	// Long enough that no predicate can drive a visible shuttle (the AI ticks at
+	// ~9Hz, so this is ~3 ticks), short enough not to be felt as sluggishness.
+	const float StateMinDwell = 0.35f;
+
+	private void SetPlayState(EPlayState Want)
+	{
+		if (Want == PlayState) return;
+		if (StateDwell < StateMinDwell) return;   // too soon — hold what we have
+		PlayState = Want;
+		StateDwell = 0.0f;
+		if (bDebugAI) Log(DebugTag() + " STATE=" + int(Want));
+	}
+
 	protected void UpdateAI(float DeltaTime)
 	{
-		// Ball is on the opponent's side: play DEFENSE and clear our touch-ownership
-		// so the next receive starts fresh.
-		if (!IsBallComingToMySide())
+		StateDwell += DeltaTime;
+
+		bool bMine = IsBallComingToMySide();
+		if (!bMine)
 		{
+			// Ball is on the opponent's side: clear our touch-ownership so the
+			// next receive starts fresh.
 			bIMadeLastTouch = false;
 			bOnTwoDecided = false;
 			bChoseOnTwo = false;
 			bIntendSet = false;
 			bOnTwoLoggedNotViable = false;
-			PlayDefense(DeltaTime);
-			return;
 		}
 
-		int Touches = TeamTouches();          // how many times WE have touched it
 		FVector Landing = Ball.PredictLanding();
+		bool bWantJob = bMine && AmIHitter(Landing);
+		bool bWantBlock = !bMine && Role == EPlayerRole::Role_Front && IsPassAttackable();
 
-		// Decide my job for this contact based on touch count + role
-		if (AmIHitter(Landing))
+		if (bWantJob)         SetPlayState(EPlayState::Play_Job);
+		else if (bWantBlock)  SetPlayState(EPlayState::Play_Block);
+		else                  SetPlayState(EPlayState::Play_Base);
+
+		// ALWAYS watch the ball. Requested first so every state inherits it and
+		// only an active gesture can override — "follow the ball with the eyes"
+		// should not be something each branch remembers to ask for.
+		FaceBall();
+
+		if (PlayState == EPlayState::Play_Job)
 		{
-			if (bDebugAI) Log(DebugTag() + " HITTER t=" + Touches + " ballZ=" + int(Ball.Position.Z) + " grounded=" + bIsGrounded);
-			PlayHitter(Touches, DeltaTime);
+			if (bDebugAI) Log(DebugTag() + " JOB t=" + TeamTouches());
+			PlayHitter(TeamTouches(), DeltaTime);
+		}
+		else if (PlayState == EPlayState::Play_Block)
+		{
+			PlayBlock(DeltaTime);
 		}
 		else
 		{
-			if (bDebugAI) Log(DebugTag() + " SUPPORT t=" + Touches);
-			PlaySupport(Landing, DeltaTime);
+			PlayBase(DeltaTime);
 		}
+	}
+
+	// BASE: walk to my own receive spot and wait, low and watching. One target,
+	// constant per player, so this state cannot contribute jitter at all.
+	private void PlayBase(float DeltaTime)
+	{
+		if (bDebugAI) Log(DebugTag() + " BASE");
+		MoveToHold(ClampToCourt(BasePosition()), DeltaTime, 0.75f);
+		RequestCrouch(0.22f);
+	}
+
+	// The one spot a player returns to whenever they have no job. Same formation
+	// as serve receive, used during rallies too: it is where you want to be when
+	// you do not know where the ball is going, which is exactly what "no job"
+	// means. Deliberately NOT derived from the ball — a base that tracks the
+	// ball is just another moving goal.
+	FVector BasePosition() const
+	{
+		float Sign = MySign();
+		float Z = FloorZ + PlayerHeight;
+		if (Role == EPlayerRole::Role_Front)
+			return FVector(Sign * 500.0f, -190.0f, Z);
+		return FVector(Sign * 560.0f, 190.0f, Z);
 	}
 
 	// Temporary diagnostics — set true on ONE player from GameMode to inspect.
@@ -796,17 +852,19 @@ class AAIPlayer : AVolleyballPlayer
 			PlanSpeedFracLog = Plan.SpeedFraction;
 		}
 
-		// UNCERTAINTY BUDGET: slack-rich ball — hold my expectation point (the
-		// pin approach spot) in a ready stance instead of chasing the current
-		// read; commit when remaining slack no longer buys the drift back.
-		// τ only shrinks, so stage → go crosses exactly once — no flicker.
-		if (Plan.bReachable && Plan.bStage)
-		{
-			MoveToHold(MyPinApproachStart(), DeltaTime, 0.6f);
-			RequestCrouch(0.25f);
-			FaceBall();
-			return;
-		}
+		// STAGING IS GONE, and the comment it replaced was the tell: it claimed
+		// "τ only shrinks, so stage → go crosses exactly once — no flicker."
+		// That was false. BodyT is computed from the player's CURRENT distance to
+		// the contact, and the staging decision itself moves the player: stage
+		// sends them to the pin (farther) → BodyT grows → un-stage → run at the
+		// ball (closer) → BodyT shrinks → stage again. A positive feedback loop
+		// with a switching boundary around 288cm from the contact, ticking at the
+		// ~9Hz AI rate. That is the vibration, and it was worst exactly where it
+		// was reported: a player waiting to dig or set.
+		//
+		// Nothing replaces it. A player whose ball it is walks to the contact and
+		// waits there; a player with time to spare simply arrives early, which is
+		// what MoveToHold's hold was always for.
 
 		// Stand where the plan meets the ball — MINUS a standoff along the
 		// flight chord, so the contact happens IN FRONT of the chest where the
@@ -946,72 +1004,6 @@ class AAIPlayer : AVolleyballPlayer
 		}
 	}
 
-	// ---------------------------------------------------------------
-	// I am NOT contacting this touch — get to the right support spot.
-	// Crucially, anticipate MY upcoming touch in the three-touch rhythm:
-	//  - after our receive (1 touch), I'll be the setter -> go to the setter zone
-	//  - after our set (2 touches), I'll be the attacker -> go to the net to spike
-	// so I'm already in position when the ball comes to me.
-	// ---------------------------------------------------------------
-	private void PlaySupport(FVector Landing, float DeltaTime)
-	{
-		int Touches = TeamTouches();
-		FVector Target;
-
-		if (Touches == 1)
-		{
-			// Our receive is up; I set next. Get UNDER where the ball will actually
-			// drop to forehead height as early as possible — not just the nominal
-			// setter zone — so I'm planted under it in time to play a clean, high
-			// fingerpass instead of arriving late and scrambling a bagger. Fall back
-			// to the setter zone only before the receive has been hit (no useful
-			// prediction yet).
-			// (Handled fully in the branch below — see Touches == 1 early-out.)
-			Target = HomePosition();
-		}
-		else if (Touches == 2)
-		{
-			// Our set is up and my TEAMMATE attacks (I just set it — AmIHitter
-			// never gives me two touches in a row). Reset behind the hitter at the
-			// role's home rather than following their approach or the ball's Y. This
-			// is the stable cover point for a block rebound without needless motion.
-			Target = HomePosition();
-		}
-		else
-		{
-			// First contact is somebody else's receive. Stay in the middle of the
-			// assigned zone until the touch happens; only the designated hitter
-			// travels to the incoming ball.
-			Target = HomePosition();
-		}
-
-		// During OUR possession the supporter never ball-chases: they wait at
-		// the approach start behind their OWN-half pin, because that is where
-		// the next pass is coming (every pass targets the partner's pin). At
-		// Touches==0 I'm the upcoming setter; at Touches==1 I'm the attacker
-		// loading the approach — same spot either way.
-		if (Touches == 0 || Touches == 1)
-		{
-			MoveToward2D(MyPinApproachStart(), DeltaTime, false, 1.0f);
-			FaceBall();
-			return;
-		}
-
-		// Always keep at least MinSeparation from my teammate so our team holds two
-		// distinct options: whoever gets the ball can attack into open space OR pass
-		// to the well-separated partner. Push my target away from the teammate along
-		// the line between us until we're far enough apart.
-		Target = SpreadFromTeammate(Target);
-
-		// Take the spot and HOLD it (no constant shuffling), facing the play in a
-		// ready stance once there. Repositioning is a jog FACING THE TRAVEL —
-		// there's no ball to chase, just ground to cover.
-		Target = ClampToCourt(Target);
-		MoveToHold(Target, DeltaTime, 0.75f);
-		RequestCrouch(0.18f);
-		if ((Target - GetActorLocation()).Size2D() < 150.0f)
-			FaceAttacker();
-	}
 
 	// Turn to face whichever teammate/opponent is about to attack (or the ball), so
 	// we're oriented into the play while standing still.
@@ -1031,22 +1023,6 @@ class AAIPlayer : AVolleyballPlayer
 	// attacker always has a spike option AND a clearly separated pass option.
 	const float MinSeparation = 450.0f;   // ~half of the 900cm-wide court
 
-	// Nudge a desired position away from my teammate so we end up at least
-	// MinSeparation apart. Keeps the original spot when we're already spread.
-	private FVector SpreadFromTeammate(FVector Desired) const
-	{
-		if (Teammate == nullptr) return Desired;
-		FVector Mate = Teammate.GetActorLocation();
-		FVector Away = FVector(Desired.X - Mate.X, Desired.Y - Mate.Y, 0);
-		float Dist = Away.Size2D();
-		if (Dist >= MinSeparation) return Desired;          // already far enough
-
-		// Too close: move out to MinSeparation along the away direction. If we're
-		// almost on top of each other, push along Y (down the court) by default.
-		FVector Dir = (Dist > 1.0f) ? Away.GetSafeNormal2D() : FVector(0, 1, 0);
-		FVector Spread = Mate + Dir * MinSeparation;
-		return FVector(Spread.X, Spread.Y, Desired.Z);
-	}
 
 	// ---------------------------------------------------------------
 	// Spike approach — world-class shape: wait loaded at an approach start point
@@ -1276,25 +1252,6 @@ class AAIPlayer : AVolleyballPlayer
 
 	private float BallRadiusGuess() const { return (Ball != nullptr) ? Ball.BallRadius : 10.66f; }
 
-	// ---------------------------------------------------------------
-	// Positioning helpers
-	// ---------------------------------------------------------------
-	private FVector SupportPos(FVector Landing) const
-	{
-		float Sign = MySign();
-		if (Role == EPlayerRole::Role_Front)
-		{
-			// Front player: stay at net ready to attack, track ball Y
-			float Y = Math::Clamp(Landing.Y, CourtMinY + 100.0f, CourtMaxY - 100.0f);
-			return FVector(Sign * 170.0f, Y, FloorZ + PlayerHeight);
-		}
-		else
-		{
-			// Back player: cover deep court behind the attacker
-			float Y = Math::Clamp(Landing.Y * 0.5f, CourtMinY + 100.0f, CourtMaxY - 100.0f);
-			return FVector(Sign * 620.0f, Y, FloorZ + PlayerHeight);
-		}
-	}
 
 	// ---------------------------------------------------------------
 	// Defense: the ball is on the opponent's side. Two defenders split the court
@@ -1302,100 +1259,57 @@ class AAIPlayer : AVolleyballPlayer
 	// then the front player blocks at the net and the back player covers the line
 	// behind the block.
 	// ---------------------------------------------------------------
-	private void PlayDefense(float DeltaTime)
+	// BLOCK: hold the net while the opponent attacks. Extracted from the old
+	// PlayDefense, which also owned the deep-defender and no-cue-return cases —
+	// both of those are just "no job", i.e. Base, so they are gone. What remains
+	// here is the one genuinely distinct position: front player at the net.
+	//
+	// Entry and exit are the STATE's job now (StateMinDwell), not this
+	// function's. bSpikeCueOn used to be able to move the goal 2.7m the instant
+	// its raw OR flipped, which is precisely the class of teleport the state
+	// commit exists to absorb.
+	private void PlayBlock(float DeltaTime)
 	{
-		FVector Goal;
-		AAIPlayer Attacker = FindAttackingOpponent();
-		// Default assumption: the opponent WILL spike, so we commit to the block.
-		// We only drop OFF the block once their pass/set turns out to be poor (too
-		// far off the net or too low to attack) — then there's nothing to block and
-		// we fall back into court defense.
-		bool bAttackable = IsPassAttackable();
+		float NetX = MySign() * 55.0f;   // right up at the net on our side
 
-		if (Role == EPlayerRole::Role_Front && bAttackable)
+		// Aim the block at the middle of the opponent's court so a stuffed ball
+		// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
+		AimAt(FVector(-MySign() * 300.0f, 0.0f, FloorZ));
+
+		bool bSpikeIncoming = UpdateSpikeIncoming(FindAttackingOpponent());
+		// Hold the middle of the net while the opponent is still building. Track
+		// laterally only after the attack cue; following every set's small Y
+		// drift was visually busy and gave up the centre for no benefit.
+		float BlockY = bSpikeIncoming
+			? Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f)
+			: BasePosition().Y;
+		FVector Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
+
+		if (!bIsGrounded)
 		{
-			// BLOCK, with discipline. Grounded at the net = LOW ready stance,
-			// hands loaded — never arms-up statue. The block jump keys off the
-			// real cue elite blockers use: the ATTACKER LEAVING THE GROUND (with a
-			// fast-descending ball at the net as fallback). Arms go up only once
-			// we're airborne; the IK reaches the hands to the ball.
-			float NetX = MySign() * 55.0f;   // right up at the net on our side
-
-			// Aim the block at the middle of the opponent's court so a stuffed ball
-			// drops there (DesiredAim drives the hand angle in UpdateIKTargets).
-			AimAt(FVector(-MySign() * 300.0f, 0.0f, FloorZ));
-
-			AAIPlayer Att = FindAttackingOpponent();
-			bool bSpikeIncoming = UpdateSpikeIncoming(Att);
-			// Hold the middle of the net while the opponent is still building. Track
-			// laterally only after the attack cue; following every set's small Y
-			// drift was visually busy and gave up the centre for no benefit.
-			float BlockY = bSpikeIncoming
-				? Math::Clamp(Ball.Position.Y, CourtMinY + 60.0f, CourtMaxY - 60.0f)
-				: HomePosition().Y;
-			Goal = FVector(NetX, BlockY, FloorZ + PlayerHeight);
-
-			if (bIsGrounded)
-			{
-				float Horiz = (GetActorLocation() - FVector(Goal.X, Goal.Y, 0)).Size2D();
-				if (bSpikeIncoming && Horiz < 90.0f)
-				{
-					// Kill the drive FIRST so the block jump is vertical — momentum
-					// carries in the air, and drifting into the net is a fault.
-					// Blocks load too: the same full-body gather, matching the
-					// attacker's own load delay.
-					MovePlayer(FVector2D::ZeroVector);
-					float HSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
-					if (HSpd < 90.0f)
-						StartLoadedJump();
-				}
-				else
-				{
-					// Track the ball along the net in a loaded stance, hands low.
-					MoveToward2D(Goal, DeltaTime, false, 0.85f);
-					RequestCrouch(0.3f);
-				}
-			}
-			else
-			{
-				// Airborne: hold still (no drift) and throw up the block NOW.
-				MovePlayer(FVector2D::ZeroVector);
-				Reach(EHitType::Hit_Block);
-			}
-			if (bDebugAI) Log(DebugTag() + " DEFEND BLOCK ballZ=" + int(Ball.Position.Z)
-				+ " air=" + !bIsGrounded + " incoming=" + bSpikeIncoming);
+			// Airborne: hold still (no drift) and throw up the block NOW.
+			MovePlayer(FVector2D::ZeroVector);
+			Reach(EHitType::Hit_Block);
 			return;
 		}
-		else if (Role == EPlayerRole::Role_Back && bAttackable)
+
+		float Horiz = (GetActorLocation() - FVector(Goal.X, Goal.Y, 0)).Size2D();
+		if (bSpikeIncoming && Horiz < 90.0f)
 		{
-			// Back defender starts from the centre of the deep zone. Do not mirror
-			// the opponent's lateral setup; move toward that line only when the
-			// attacker has actually committed to the spike.
-			Goal = HomePosition();
-			// Same hysteresed cue as the blocker — this copy of the raw OR moved
-			// the deep defender's goal just as far, just as often.
-			bool bSpikeIncoming = UpdateSpikeIncoming(Attacker);
-			if (bSpikeIncoming && Attacker != nullptr)
-				Goal.Y = Math::Clamp(-Attacker.GetActorLocation().Y * 0.6f,
-					CourtMinY + 80.0f, CourtMaxY - 80.0f);
+			// Kill the drive FIRST so the block jump is vertical — momentum
+			// carries in the air, and drifting into the net is a fault. Blocks
+			// load too: the same full-body gather as the attacker.
+			MovePlayer(FVector2D::ZeroVector);
+			if (FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size() < 90.0f)
+				StartLoadedJump();
 		}
 		else
 		{
-			// No actual attack cue: return to the fixed base, then react when the
-			// ball crosses. This replaces continuous pre-emptive roaming.
-			Goal = HomePosition();
+			// Track the ball along the net in a loaded stance, hands low.
+			MoveToHold(ClampToCourt(Goal), DeltaTime, 0.85f);
+			RequestCrouch(0.3f);
 		}
-
-		if (bDebugAI) Log(DebugTag() + " DEFEND " + (bAttackable ? "BLOCK/COVER" : "SPLIT")
-			+ " ballX=" + int(Ball.Position.X) + " ballZ=" + int(Ball.Position.Z));
-		// Take the defensive spot and HOLD it, facing the play — in a LOW athletic
-		// base, never flat-footed upright: a defender waiting tall reads amateur.
-		// Jog into position facing the travel; face up once settled.
-		Goal = ClampToCourt(Goal);
-		MoveToHold(Goal, DeltaTime, 0.75f);
-		RequestCrouch(0.22f);
-		if ((Goal - GetActorLocation()).Size2D() < 150.0f)
-			FaceAttacker();
+		if (bDebugAI) Log(DebugTag() + " BLOCK incoming=" + bSpikeIncoming);
 	}
 
 	// Find the opponent who is about to hit — the one closest to the ball on the

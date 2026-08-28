@@ -847,20 +847,37 @@ class AVolleyballPlayer : APawn
 	// reversal test fails — the anti-flicker machinery and the jitter detectors
 	// were tuned against each other into mutual blindness.
 	//
-	// So measure DISPLACEMENT instead. Over a short window, compare the distance
-	// actually walked against the distance actually covered. Running scores ~0
-	// wasted. Standing still scores ~0 wasted. Vibrating between two spots is
-	// the ONLY motion that walks a long way and arrives nowhere — which is
-	// exactly what the eye calls jitter, so this cannot miss it by construction,
-	// at any amplitude or frequency, with no threshold to slip under.
+	// So measure DISPLACEMENT instead — specifically, HOW MANY TIMES THE PLAYER
+	// COVERED THE SAME GROUND. Over a short window, compare the distance walked
+	// against the spatial EXTENT of the window (how far from the start they ever
+	// got). That ratio is the number of times they crossed their own ground:
+	//
+	//   straight run          path = extent          -> 1.0
+	//   curved intercept      path slightly > extent -> 1.1-1.3
+	//   out and back once     path = 2 x extent      -> 2.0
+	//   shuttling N times     path = 2N x extent     -> 2N
+	//
+	// Extent, not net displacement. The first version of this used
+	// path-minus-net, which scores every CURVE as waste — a player arcing onto
+	// an intercept looks exactly like a vibration to it, and a detector that
+	// flags legitimate motion is nearly as useless as one that is blind, because
+	// it sends you off fixing things that were never broken. Dividing by extent
+	// is scale-free and curvature-tolerant while still being unbounded for a
+	// true shuttle, which is the only shape that revisits its own ground.
+	//
+	// Nothing here is a derivative, so no rate limiter can hide anything from it.
 	const float WasteWindowSecs = 0.7f;
+	// Below this the window is a player standing still; the ratio is meaningless
+	// and would divide by noise.
+	const float WasteMinPath = 25.0f;
 	private float MonWasteWindow = 0.0f;
 	private float MonWastePath = 0.0f;       // cm walked inside the window
+	private float MonWasteExtent = 0.0f;     // furthest we ever got from the start
 	private FVector MonWasteStart;           // where the window began
 	private FVector MonPrevPos;
 	private bool bMonWasteInit = false;
-	private float MonWasteWorst = 0.0f;      // worst single window this rally (cm)
-	private float MonWasteTotal = 0.0f;      // total wasted cm this rally
+	private float MonWasteWorst = 0.0f;      // worst path/extent ratio x100 this rally
+	private float MonWasteTotal = 0.0f;      // cm of revisited ground this rally
 
 	private void UpdateWastedTravel(float DeltaTime)
 	{
@@ -875,16 +892,24 @@ class AVolleyballPlayer : APawn
 
 		MonWastePath += (P - MonPrevPos).Size2D();
 		MonPrevPos = P;
+		float R = (P - MonWasteStart).Size2D();
+		if (R > MonWasteExtent) MonWasteExtent = R;
+
 		MonWasteWindow += DeltaTime;
 		if (MonWasteWindow < WasteWindowSecs) return;
 
-		float Net = (P - MonWasteStart).Size2D();
-		float Wasted = MonWastePath - Net;      // >= 0 by the triangle inequality
-		if (Wasted > MonWasteWorst) MonWasteWorst = Wasted;
-		MonWasteTotal += Wasted;
+		if (MonWastePath >= WasteMinPath && MonWasteExtent > 1.0f)
+		{
+			float Ratio = MonWastePath / MonWasteExtent;
+			if (Ratio * 100.0f > MonWasteWorst) MonWasteWorst = Ratio * 100.0f;
+			// Ground covered more than once, in cm — the absolute cost of the
+			// churn, which the ratio alone hides for a small tight shuffle.
+			MonWasteTotal += Math::Max(MonWastePath - MonWasteExtent, 0.0f);
+		}
 
 		MonWasteWindow = 0.0f;
 		MonWastePath = 0.0f;
+		MonWasteExtent = 0.0f;
 		MonWasteStart = P;
 	}
 
@@ -1453,13 +1478,13 @@ class AVolleyballPlayer : APawn
 			// The window's own wasted travel, so the emit condition can see the
 			// thing the three flip counters structurally cannot. 25cm of walking
 			// that arrives nowhere inside half a second is a shuttle, not a run.
-			float WinNet = (GetActorLocation() - MonWasteStart).Size2D();
-			float WinWaste = Math::Max(MonWastePath - WinNet, 0.0f);
+			float WinExtent = Math::Max(MonWasteExtent, 1.0f);
+			float WinRatio = (MonWastePath >= WasteMinPath) ? MonWastePath / WinExtent : 1.0f;
 			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3
-				|| MonIKTeleports >= 1 || WinWaste > 25.0f || MonGoalJumps >= 3)
+				|| MonIKTeleports >= 1 || WinRatio > 2.5f || MonGoalJumps >= 3)
 			{
 				Log("JITTER team=" + int(TeamSide)
-					+ " wasted=" + int(WinWaste)
+					+ " revisit=" + int(WinRatio * 100.0f)
 					+ " goalJumps=" + MonGoalJumps
 					+ " moveFlips=" + MonMoveFlips
 					+ " yawFlips=" + MonYawFlips

@@ -123,8 +123,8 @@ def main():
         print("JITTER — wasted travel (walking that arrives nowhere)")
         jit_fail = 0
         for key, limit, unit, src in (
-                ("wasteWorst", 25.0, "cm in one 0.7s window", raw),
-                ("wasteTotal", 60.0, "cm per second of motion", motion)):
+                ("wasteWorst", 250.0, "path/extent x100 in one 0.7s window", raw),
+                ("wasteTotal", 60.0, "cm of reground per second of motion", motion)):
             if key not in src:
                 continue
             v = max(src[key])
