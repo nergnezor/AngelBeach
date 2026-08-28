@@ -98,8 +98,17 @@ bool MB_BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutT
 		FVector Next = P + V * Dt;
 		if (P.Z >= TargetZ && Next.Z <= TargetZ && V.Z < 0.0f)
 		{
-			OutPos = Next;
-			OutTime = T + Dt;
+			// INTERPOLATE the crossing rather than snapping to the sample past
+			// it — same reasoning as ABall::PredictLanding. Returning `Next`
+			// makes the answer step by one substep of travel every time the
+			// remaining step count drops, i.e. a sawtooth at 1/Dt = 50Hz, and
+			// this result IS the hitter's move goal (Plan.Contact). A goal that
+			// twitches every frame is a goal the body chases every frame.
+			float Span = P.Z - Next.Z;
+			float Frac = (Span > 0.0001f)
+				? Math::Clamp((P.Z - TargetZ) / Span, 0.0f, 1.0f) : 1.0f;
+			OutPos = P + (Next - P) * Frac;
+			OutTime = T + Dt * Frac;
 			return true;
 		}
 		P = Next;

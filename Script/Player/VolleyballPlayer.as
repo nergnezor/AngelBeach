@@ -830,7 +830,10 @@ class AVolleyballPlayer : APawn
 	// the player run somewhere else count.
 	private FVector MonPrevGoal;
 	private bool bMonGoalInit = false;
-	private int MonGoalJumps = 0;
+	private int MonGoalJumps = 0;        // worst goal path/extent ratio x100
+	private float MonGoalPath = 0.0f;
+	private float MonGoalExtent = 0.0f;
+	private FVector MonGoalStart;
 
 	// ---------------------------------------------------------------
 	// WASTED TRAVEL — the one jitter measure that cannot go blind.
@@ -1173,13 +1176,30 @@ class AVolleyballPlayer : APawn
 	// MoveToward2D can call it without double counting.
 	void ReportMoveGoal(FVector Goal)
 	{
-		// 40, not 150. MoveToward2D commands motion for anything past its 25cm
-		// dead zone, so the entire 25-150cm band was a shuttle the player
-		// physically performed and no detector could report. The old threshold
-		// was justified as sitting "above MoveToHold's 110cm StartMoving", which
-		// only ever described one of the two movement primitives.
-		if (bMonGoalInit && (Goal - MonPrevGoal).Size2D() > 40.0f)
-			MonGoalJumps++;
+		// Goal churn measured the SAME way as body churn: path against extent,
+		// not a per-step threshold.
+		//
+		// A step threshold cannot tell tracking from churn, and both directions
+		// of that failure have now been observed. At 150cm it missed the whole
+		// 25-150 band that MoveToward2D acts on. Dropped to 40 it fired 303
+		// times across 29 rallies on runs whose bodies were provably straight —
+		// because a ball at 900 cm/s legitimately moves its predicted contact
+		// ~100cm between 9Hz AI ticks. That is the goal FOLLOWING the ball, which
+		// is the correct behaviour, not a teleport.
+		//
+		// Path/extent separates them with no threshold at all: a goal sweeping
+		// after a ball scores ~1 however fast it sweeps, and a goal alternating
+		// between two points scores 2 per cycle however small the gap.
+		if (bMonGoalInit)
+		{
+			MonGoalPath += (Goal - MonPrevGoal).Size2D();
+			float R = (Goal - MonGoalStart).Size2D();
+			if (R > MonGoalExtent) MonGoalExtent = R;
+		}
+		else
+		{
+			MonGoalStart = Goal;
+		}
 		MonPrevGoal = Goal;
 		bMonGoalInit = true;
 	}
@@ -1480,12 +1500,17 @@ class AVolleyballPlayer : APawn
 			// that arrives nowhere inside half a second is a shuttle, not a run.
 			float WinExtent = Math::Max(MonWasteExtent, 1.0f);
 			float WinRatio = (MonWastePath >= WasteMinPath) ? MonWastePath / WinExtent : 1.0f;
+			// Same primitive for the commanded goal. 25cm floor for the same
+			// reason: below it the extent is noise and the ratio is meaningless.
+			float GoalRatio = (MonGoalPath >= 25.0f)
+				? MonGoalPath / Math::Max(MonGoalExtent, 1.0f) : 1.0f;
+			if (int(GoalRatio * 100.0f) > MonGoalJumps) MonGoalJumps = int(GoalRatio * 100.0f);
 			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3
-				|| MonIKTeleports >= 1 || WinRatio > 2.5f || MonGoalJumps >= 3)
+				|| MonIKTeleports >= 1 || WinRatio > 2.5f || GoalRatio > 2.5f)
 			{
 				Log("JITTER team=" + int(TeamSide)
 					+ " revisit=" + int(WinRatio * 100.0f)
-					+ " goalJumps=" + MonGoalJumps
+					+ " goalChurn=" + int(GoalRatio * 100.0f)
 					+ " moveFlips=" + MonMoveFlips
 					+ " yawFlips=" + MonYawFlips
 					+ " crouchFlips=" + MonCrouchFlips
@@ -1494,6 +1519,9 @@ class AVolleyballPlayer : APawn
 					+ " hit=" + int(CurrentHit)
 					+ " grounded=" + bIsGrounded);
 			}
+			MonGoalPath = 0.0f;
+			MonGoalExtent = 0.0f;
+			MonGoalStart = MonPrevGoal;
 			MonWindow = 0.0f;
 			MonMoveFlips = 0;
 			MonYawFlips = 0;

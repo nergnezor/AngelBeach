@@ -37,7 +37,7 @@ TARGETS = {
 # Counters that are already an extreme or a ratio, so dividing them by the
 # rally's motion time would be meaningless. wasteWorst is the worst single
 # window, not an accumulation.
-RAW_KEYS = {"wasteWorst", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
+RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
             "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha"}
 
 
@@ -131,17 +131,17 @@ def main():
             ok = v <= limit
             jit_fail += 0 if ok else 1
             print(f"  {'ok  ' if ok else 'FAIL'} {key:<12} {v:>7.1f}  limit {limit:<6} ({unit})")
-        if "goalJumps" in motion:
-            v = max(motion["goalJumps"])
-            ok = v <= 1.0
+        if "goalJumps" in raw:
+            v = max(raw["goalJumps"])
+            ok = v <= 250.0
             jit_fail += 0 if ok else 1
-            print(f"  {'ok  ' if ok else 'FAIL'} {'goalJumps':<12} {v:>7.1f}  limit {1.0:<6} "
-                  f"(target teleports per second of motion)")
+            print(f"  {'ok  ' if ok else 'FAIL'} {'goalChurn':<12} {v:>7.1f}  limit {250.0:<6} "
+                  f"(goal path/extent x100; a goal tracking a ball scores ~100)")
         print(f"\n  {jit_fail} jitter metric(s) over limit\n")
 
         print("RELATIVE — per second of motion (compare against the last run)")
         for key in ("footSlide", "kneeWalkTravel", "pelvisFlips", "ikTeleports",
-                    "moveFlips", "yawFlips", "crouchFlips", "goalJumps"):
+                    "moveFlips", "yawFlips", "crouchFlips"):
             if key in motion:
                 vals = motion[key]
                 print(f"       {key:<16} mean {sum(vals)/len(vals):>8.1f}"

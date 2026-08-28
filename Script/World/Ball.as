@@ -294,20 +294,40 @@ class ABall : AActor
 			NoUV, NoUV, NoUV, Colors, Tangents, true);
 	}
 
+	// Where this flight reaches the sand.
+	//
+	// INTERPOLATES the crossing between the two bracketing samples instead of
+	// returning the first sample past the floor. That single line matters more
+	// than it looks: with a 50ms step the raw sample overshoots by up to one
+	// step of horizontal travel, and as real time advances the number of
+	// remaining steps drops by one every 50ms — so the answer JUMPED by a
+	// step-worth of travel, 20 times a second. At 400-900 cm/s of ball speed
+	// that is a 20-45cm sawtooth at 20Hz, feeding AmIHitter, the receive
+	// half-claim and every goal derived from them, and it was comparable in size
+	// to the +/-60cm margin those decisions compare against. The AI was
+	// re-deciding on quantisation noise.
 	FVector PredictLanding(float MaxTime = 3.0f) const
 	{
 		FVector PPos = Position;
 		FVector PVel = BallVel;
 		float Dt = 0.05f;
 		float T = 0;
+		float Floor = FloorZ + BallRadius;
 
 		while (T < MaxTime)
 		{
+			FVector Prev = PPos;
 			PVel.Z += Gravity * Dt;
 			PPos += PVel * Dt;
 			T += Dt;
-			if (PPos.Z <= FloorZ + BallRadius)
-				return PPos;
+			if (PPos.Z <= Floor)
+			{
+				// Fraction of this step at which the floor is actually crossed.
+				float Span = Prev.Z - PPos.Z;
+				float Frac = (Span > 0.0001f)
+					? Math::Clamp((Prev.Z - Floor) / Span, 0.0f, 1.0f) : 1.0f;
+				return Prev + (PPos - Prev) * Frac;
+			}
 		}
 		return PPos;
 	}
