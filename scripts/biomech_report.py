@@ -34,8 +34,15 @@ TARGETS = {
 }
 
 
+# Counters that are already an extreme or a ratio, so dividing them by the
+# rally's motion time would be meaningless. wasteWorst is the worst single
+# window, not an accumulation.
+RAW_KEYS = {"wasteWorst", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
+            "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha"}
+
+
 def parse(path):
-    bio, motion, rallies = defaultdict(list), defaultdict(list), 0
+    bio, motion, raw, rallies = defaultdict(list), defaultdict(list), defaultdict(list), 0
     line_re = re.compile(r"\b(\w+)=(-?\d+)")
     with open(path, errors="replace") as fh:
         for line in fh:
@@ -49,16 +56,20 @@ def parse(path):
                 moving = vals.get("moving", 0) / 100.0
                 if moving > 0.5:          # ignore slivers; they divide badly
                     for k, v in vals.items():
-                        if k != "moving":
+                        if k == "moving":
+                            continue
+                        if k in RAW_KEYS:
+                            raw[k].append(float(v))
+                        else:
                             motion[k].append(v / moving)
             elif "RALLY " in line:
                 rallies += 1
-    return bio, motion, rallies
+    return bio, motion, raw, rallies
 
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/run.log"
-    bio, motion, rallies = parse(path)
+    bio, motion, raw, rallies = parse(path)
 
     if not bio and not motion:
         print(f"no BIOMECH or MOTIONSTATS lines in {path}")
@@ -103,6 +114,31 @@ def main():
         print(f"\n  {worst_fail} metric(s) outside human range\n")
 
     if motion:
+        # JITTER is judged here, not by eye and not by a separate CI job that
+        # someone has to remember to dispatch. Wasted travel is walking that
+        # arrives nowhere, so a threshold on it is a statement about the motion
+        # itself rather than a tuning knob: a run wastes ~0, standing wastes ~0,
+        # and only a shuttle scores. See UpdateWastedTravel for why the older
+        # derivative-based flip counters cannot see this at all.
+        print("JITTER — wasted travel (walking that arrives nowhere)")
+        jit_fail = 0
+        for key, limit, unit, src in (
+                ("wasteWorst", 25.0, "cm in one 0.7s window", raw),
+                ("wasteTotal", 60.0, "cm per second of motion", motion)):
+            if key not in src:
+                continue
+            v = max(src[key])
+            ok = v <= limit
+            jit_fail += 0 if ok else 1
+            print(f"  {'ok  ' if ok else 'FAIL'} {key:<12} {v:>7.1f}  limit {limit:<6} ({unit})")
+        if "goalJumps" in motion:
+            v = max(motion["goalJumps"])
+            ok = v <= 1.0
+            jit_fail += 0 if ok else 1
+            print(f"  {'ok  ' if ok else 'FAIL'} {'goalJumps':<12} {v:>7.1f}  limit {1.0:<6} "
+                  f"(target teleports per second of motion)")
+        print(f"\n  {jit_fail} jitter metric(s) over limit\n")
+
         print("RELATIVE — per second of motion (compare against the last run)")
         for key in ("footSlide", "kneeWalkTravel", "pelvisFlips", "ikTeleports",
                     "moveFlips", "yawFlips", "crouchFlips", "goalJumps"):
@@ -111,8 +147,8 @@ def main():
                 print(f"       {key:<16} mean {sum(vals)/len(vals):>8.1f}"
                       f"   worst {max(vals):>8.1f}")
         for key in ("kneeWalk", "kneeWalkMax"):
-            if key in motion:
-                vals = motion[key]
+            if key in raw:
+                vals = raw[key]
                 print(f"       {key:<16} (absolute, not per-second) "
                       f"mean {sum(vals)/len(vals):>6.1f}")
         print()

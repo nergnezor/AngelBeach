@@ -832,6 +832,62 @@ class AVolleyballPlayer : APawn
 	private bool bMonGoalInit = false;
 	private int MonGoalJumps = 0;
 
+	// ---------------------------------------------------------------
+	// WASTED TRAVEL — the one jitter measure that cannot go blind.
+	//
+	// Every other detector in this file measures a DERIVATIVE (velocity reversal,
+	// yaw-rate reversal, crouch-rate reversal) and asks for a sign change between
+	// adjacent samples. That is provably useless here, because every writer is
+	// now rate-limited: ApplyMoveInput caps a one-frame velocity change at
+	// GroundDecel*Dt = 20 cm/s at 60fps, while MonMoveFlips needs 93 cm/s to
+	// fire. It CANNOT trip above ~13fps no matter how violently the player
+	// shuttles. The same holds for yaw (needs 15 deg/frame, the rate limiters
+	// allow 12.5) and crouch (needs 7cm of hip travel). Rate limiting guarantees
+	// the derivative passes smoothly through zero, which guarantees the
+	// reversal test fails — the anti-flicker machinery and the jitter detectors
+	// were tuned against each other into mutual blindness.
+	//
+	// So measure DISPLACEMENT instead. Over a short window, compare the distance
+	// actually walked against the distance actually covered. Running scores ~0
+	// wasted. Standing still scores ~0 wasted. Vibrating between two spots is
+	// the ONLY motion that walks a long way and arrives nowhere — which is
+	// exactly what the eye calls jitter, so this cannot miss it by construction,
+	// at any amplitude or frequency, with no threshold to slip under.
+	const float WasteWindowSecs = 0.7f;
+	private float MonWasteWindow = 0.0f;
+	private float MonWastePath = 0.0f;       // cm walked inside the window
+	private FVector MonWasteStart;           // where the window began
+	private FVector MonPrevPos;
+	private bool bMonWasteInit = false;
+	private float MonWasteWorst = 0.0f;      // worst single window this rally (cm)
+	private float MonWasteTotal = 0.0f;      // total wasted cm this rally
+
+	private void UpdateWastedTravel(float DeltaTime)
+	{
+		FVector P = GetActorLocation();
+		if (!bMonWasteInit)
+		{
+			bMonWasteInit = true;
+			MonPrevPos = P;
+			MonWasteStart = P;
+			return;
+		}
+
+		MonWastePath += (P - MonPrevPos).Size2D();
+		MonPrevPos = P;
+		MonWasteWindow += DeltaTime;
+		if (MonWasteWindow < WasteWindowSecs) return;
+
+		float Net = (P - MonWasteStart).Size2D();
+		float Wasted = MonWastePath - Net;      // >= 0 by the triangle inequality
+		if (Wasted > MonWasteWorst) MonWasteWorst = Wasted;
+		MonWasteTotal += Wasted;
+
+		MonWasteWindow = 0.0f;
+		MonWastePath = 0.0f;
+		MonWasteStart = P;
+	}
+
 	// BONE-LEVEL JITTER — the solver's OUTPUT, which is what the eye actually sees.
 	// Every detector above watches script INTENT (velocity, yaw, crouch, hand
 	// targets). The visible pose is the FBIK solve on top of that, and the solver
@@ -1092,7 +1148,12 @@ class AVolleyballPlayer : APawn
 	// MoveToward2D can call it without double counting.
 	void ReportMoveGoal(FVector Goal)
 	{
-		if (bMonGoalInit && (Goal - MonPrevGoal).Size2D() > 150.0f)
+		// 40, not 150. MoveToward2D commands motion for anything past its 25cm
+		// dead zone, so the entire 25-150cm band was a shuttle the player
+		// physically performed and no detector could report. The old threshold
+		// was justified as sitting "above MoveToHold's 110cm StartMoving", which
+		// only ever described one of the two movement primitives.
+		if (bMonGoalInit && (Goal - MonPrevGoal).Size2D() > 40.0f)
 			MonGoalJumps++;
 		MonPrevGoal = Goal;
 		bMonGoalInit = true;
@@ -1123,6 +1184,8 @@ class AVolleyballPlayer : APawn
 			+ " goalJumps=" + MonGoalJumps
 			+ " yawRateMean=" + YawMean
 			+ " yawRateMax=" + int(MonYawRateMax)
+			+ " wasteWorst=" + int(MonWasteWorst)
+			+ " wasteTotal=" + int(MonWasteTotal)
 			+ " footSlide=" + int(MonFootSlide)
 			+ " pelvisFlips=" + MonPelvisFlips
 			+ " kneeWalk=" + int(KneeWalkMean())
@@ -1169,6 +1232,8 @@ class AVolleyballPlayer : APawn
 		MonYawRateMax = 0.0f;
 		MonFootSlide = 0.0f;
 		MonPelvisFlips = 0;
+		MonWasteWorst = 0.0f;
+		MonWasteTotal = 0.0f;
 		MonKneeWalkSum = 0.0f;
 		MonKneeWalkSamples = 0.0f;
 		MonKneeWalkMax = 0.0f;
@@ -1183,6 +1248,7 @@ class AVolleyballPlayer : APawn
 	{
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
 		UpdateBiomech(DeltaTime);
+		UpdateWastedTravel(DeltaTime);
 		float Yaw = GetActorRotation().Yaw;
 		float CrouchNow = (Anim != nullptr) ? Anim.CrouchAmount : 0.0f;
 		FVector HandR = (Anim != nullptr) ? Anim.HandTargetR : FVector::ZeroVector;
@@ -1384,9 +1450,17 @@ class AVolleyballPlayer : APawn
 		MonWindow += DeltaTime;
 		if (MonWindow >= 0.5f)
 		{
-			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3 || MonIKTeleports >= 1)
+			// The window's own wasted travel, so the emit condition can see the
+			// thing the three flip counters structurally cannot. 25cm of walking
+			// that arrives nowhere inside half a second is a shuttle, not a run.
+			float WinNet = (GetActorLocation() - MonWasteStart).Size2D();
+			float WinWaste = Math::Max(MonWastePath - WinNet, 0.0f);
+			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3
+				|| MonIKTeleports >= 1 || WinWaste > 25.0f || MonGoalJumps >= 3)
 			{
 				Log("JITTER team=" + int(TeamSide)
+					+ " wasted=" + int(WinWaste)
+					+ " goalJumps=" + MonGoalJumps
 					+ " moveFlips=" + MonMoveFlips
 					+ " yawFlips=" + MonYawFlips
 					+ " crouchFlips=" + MonCrouchFlips
@@ -2159,7 +2233,12 @@ class AVolleyballPlayer : APawn
 	// reactive jump's ~70cm (at the heavy player gravity above).
 	float JumpLoadTimer = 0.0f;
 	const float JumpLoadDuration = 0.16f;
-	const float LoadedJumpVelocity = 660.0f;
+	// 585 gives a 90cm ballistic rise at this gravity — the TOP of the elite
+	// range (60-90), which is where these players belong. It was 660, i.e. a
+	// 115cm jump no human has made; SpikeStrikeZ compensated with short arms.
+	// See StrikeReachAboveCenter: the reach grew by exactly what the jump lost,
+	// so the contact height and every budget derived from it are unchanged.
+	const float LoadedJumpVelocity = 585.0f;
 	// Fraction of the approach speed that survives the gather (the residue that
 	// drifts the body into the contact). Was applied as an instant multiply.
 	const float JumpLoadSpeedKeep = 0.25f;

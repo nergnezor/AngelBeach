@@ -177,7 +177,26 @@ class AAIPlayer : AVolleyballPlayer
 				return FVector(Sign * 130.0f, 0.0f, Z);     // partner up at the net
 		}
 
-		return HomePosition();
+		// RECEIVING: a real serve-receive formation, not the rally one.
+		//
+		// This used to fall through to HomePosition(), which is where players
+		// reset DURING a rally — front player 250cm off the net (a blocking
+		// spot) and the pair only 240cm apart in Y. Nobody blocks a serve, and
+		// two receivers that close together leave both sidelines open: the front
+		// player was standing at the net while the serve landed 5m behind them.
+		//
+		// Both receivers belong deep and split wide, each genuinely owning a
+		// half. Measured serve landings sit at |X| 495-606 and Y -250..+250, so
+		// standing at 500/560 puts them where the ball actually arrives, and
+		// ±190 centres each on their own half (the court is ±400 wide).
+		// This is also what makes the Y-half receive assignment in AmIHitter
+		// mean anything — owning a half you are not standing in is just a label.
+		//
+		// The slight depth stagger is real technique: the player covering the
+		// sharper cross-court angle stands a touch shallower.
+		if (Role == EPlayerRole::Role_Front)
+			return FVector(Sign * 500.0f, -190.0f, Z);   // owns the -Y half
+		return FVector(Sign * 560.0f, 190.0f, Z);        // owns the +Y half
 	}
 
 	// Stable base position for each role. This is where a player resets while
@@ -1044,8 +1063,17 @@ class AAIPlayer : AVolleyballPlayer
 	// ballistic rise (v²/2g) + the rig's raised-hand reach above the actor
 	// centre (the one measured constant). Retuning jump speed or gravity
 	// re-derives the strike zone automatically instead of stranding a magic
-	// 350 that silently stops matching the body. (Sanity: 112 + 115 + 123 ≈ 350.)
-	const float StrikeReachAboveCenter = 123.0f;
+	// 350 that silently stops matching the body.
+	//
+	// The reach was 123, which put STANDING reach at 90 + 123 = 213cm — about
+	// 25cm short for an elite player — and the shortfall was being paid for by
+	// a 115cm jump, half again the world-class 60-90. The BIOMECH line caught
+	// the jump; the short arms were what it was compensating for. Splitting it
+	// the anatomically honest way (240cm standing reach, 90cm jump) lands the
+	// contact at the same height, so the strike zone and every timing budget
+	// built on it are unchanged. (Sanity: 90 + 90 + 150 = 330; net is 243 and
+	// real elite contact is 330-350.)
+	const float StrikeReachAboveCenter = 150.0f;
 	float SpikeStrikeZ() const
 	{
 		float Rise = (LoadedJumpVelocity * LoadedJumpVelocity) / (2.0f * Math::Abs(Gravity));
