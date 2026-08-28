@@ -882,6 +882,193 @@ class AVolleyballPlayer : APawn
 	bool bKneeTrace = false;
 	private int MonKneeTraceLogs = 0;
 
+	// ---------------------------------------------------------------
+	// BIOMECHANICAL PLAUSIBILITY — measured against published human values.
+	//
+	// Every metric above answers "did this change make it better than last
+	// time?", which is only ever a comparison against ourselves: a run can win
+	// on all of them and still move like nothing alive. These answer the
+	// different question "is this what a human body can actually do?", by
+	// carrying an absolute target taken from the literature rather than from
+	// taste. That is what makes the loop closable without a human watching:
+	// a number outside its band is wrong on its own terms, not merely worse.
+	//
+	// Targets (elite athlete / sports-biomechanics ranges):
+	//   peak horizontal accel   <= ~10 m/s^2   (sprint first-step peak)
+	//   peak horizontal decel   <= ~12 m/s^2   (hard controlled plant)
+	//   airborne accel           = 9.81 m/s^2 down, nothing else touching it
+	//   COM vertical oscillation  4-6 cm running
+	//   turn rate               <= ~360 deg/s while travelling
+	// Values are stored in the units the engine already uses (cm/s^2) and only
+	// converted at the log line, so nothing silently mixes units mid-sum.
+	private float MonPeakAccel = 0.0f;      // cm/s^2, strongest speeding-up
+	private float MonPeakDecel = 0.0f;      // cm/s^2, strongest slowing-down
+	private float MonPeakPlant = 0.0f;      // cm/s^2, strongest braking inside a jump gather
+	private float MonAccelOverBudget = 0.0f;   // seconds spent above the human band
+	private float MonPelvisZMin = 99999.0f;    // running COM oscillation, grounded only
+	private float MonPelvisZMax = -99999.0f;
+	private float MonAirBallisticErr = 0.0f;   // cm/s^2 of non-gravity vertical accel
+	private float MonAirSamples = 0.0f;
+	private float MonJumpApex = 0.0f;          // cm above standing hip height
+	private float MonStandHipZ = -1.0f;
+	private float MonStandActorZ = -1.0f;
+	private FVector MonPrevVelBio = FVector::ZeroVector;
+	private bool bMonBioInit = false;
+
+	// Human bands, in engine units. Deliberately generous — the point is to
+	// catch "no human could do that", not to police centimetres.
+	const float HumanAccelLimit = 1000.0f;   // cm/s^2 (10 m/s^2)
+	const float HumanDecelLimit = 1200.0f;   // cm/s^2 (12 m/s^2)
+
+	private void UpdateBiomech(float DeltaTime)
+	{
+		if (DeltaTime <= 0.0f || Mesh == nullptr) return;
+
+		FVector V = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0.0f);
+		if (!bMonBioInit)
+		{
+			bMonBioInit = true;
+			MonPrevVelBio = V;
+			return;
+		}
+
+		// Acceleration as a VECTOR, not a change in speed. A player carving a
+		// turn at constant pace has real lateral acceleration that the legs must
+		// produce, and a speed-magnitude delta scores that as zero — which would
+		// pass a sidestep no human could plant hard enough to make.
+		//
+		// The signed along-track part still splits accel from decel, because the
+		// body's limits differ (you can stop harder than you can start), but the
+		// over-budget test uses the full magnitude since that is what the ground
+		// actually has to push back.
+		FVector A = (V - MonPrevVelBio) / DeltaTime;
+		if (bIsGrounded)
+		{
+			float Along = (V.Size() - MonPrevVelBio.Size()) / DeltaTime;
+			if (Along > MonPeakAccel) MonPeakAccel = Along;
+			// The approach PLANT is scored separately, on its own band. It is the
+			// most violent legal thing in the sport — an elite gather puts 3-5x
+			// bodyweight through the foot and kills most of the run in ~0.16s, so
+			// holding it to the same 12 m/s^2 as ordinary braking would demand
+			// the game be LESS real, not more. Everything outside the gather is
+			// normal locomotion and does answer to the ordinary limit.
+			if (JumpLoadTimer > 0.0f)
+			{
+				if (-Along > MonPeakPlant) MonPeakPlant = -Along;
+			}
+			else if (-Along > MonPeakDecel) MonPeakDecel = -Along;
+			// 5% tolerance: ApplyMoveInput accelerates at EXACTLY the limit, and a
+			// bare > counted every ordinary frame of a run as a violation. That
+			// filled the diagnostic's log budget with at-the-cap noise and hid the
+			// real offenders completely.
+			if (A.Size() > HumanAccelLimit * 1.05f && JumpLoadTimer <= 0.0f)
+			{
+				MonAccelOverBudget += DeltaTime;
+				// WHAT is producing it, not just how much. Only genuinely large
+				// excursions are logged (2x the limit), for the same reason: the
+				// interesting cases are velocity discontinuities, not the cap.
+				if (MonAccelLogs < 25 && A.Size() > HumanAccelLimit * 2.0f)
+				{
+					MonAccelLogs++;
+					Log("ACCELSPIKE " + GetName()
+						+ " a=" + int(A.Size() / 100.0f)
+						+ " dt=" + int(DeltaTime * 1000.0f)
+						+ " v=" + int(V.Size()) + " prev=" + int(MonPrevVelBio.Size())
+						+ " dive=" + (DiveTimer > 0.0f ? 1 : 0)
+						+ " recover=" + (DiveRecoverTimer > 0.0f ? 1 : 0)
+						+ " hit=" + int(CurrentHit));
+				}
+			}
+		}
+		MonPrevVelBio = V;
+
+		FVector Pelvis = Mesh.GetBoneTransform(n"pelvis").Translation;
+		if (bIsGrounded)
+		{
+			// Hip height while standing still is the reference the jump and the
+			// running oscillation are both measured against.
+			if (V.Size() < 30.0f) { MonStandHipZ = Pelvis.Z; MonStandActorZ = GetActorLocation().Z; }
+			// GAIT bob only. The first version measured raw hip height while
+			// running and read 28-112cm against a 4-6cm target, which looked like
+			// a catastrophic failure but was really a broken measurement: the
+			// crouch system raises and lowers the hips by up to 35cm on purpose,
+			// and that dwarfs the few centimetres a stride contributes. Sampling
+			// only while the crouch is HOLDING still separates the two — what is
+			// left is the gait's own oscillation, which is what the target
+			// describes.
+			float CrouchRateNow = Math::Abs(SmCrouch - MonPrevCrouchBio) / DeltaTime;
+			if (V.Size() > 150.0f && CrouchRateNow < 0.15f && DiveTimer <= 0.0f
+				&& DiveRecoverTimer <= 0.0f)
+			{
+				// Measure the hips RELATIVE TO THE CAPSULE, not in world space:
+				// absolute pelvis Z also contains the actor's own vertical travel.
+				//
+				// And measure it over a STRIDE-LENGTH WINDOW, not the whole rally.
+				// Bob is a fast oscillation riding on top of slow stance drift; a
+				// rally-long min/max reports the drift (a player rising out of a
+				// deep dig and settling again) and calls it bob, which is what
+				// kept this reading ~78cm against a 4-6cm target however the
+				// crouch was gated. Only the largest single-window swing counts.
+				float HipRel = Pelvis.Z - GetActorLocation().Z;
+				// Reject a not-yet-posed mesh, whose pelvis reads at the origin
+				// and lands ~90cm from the capsule. Left in, a single such frame
+				// makes one window swing the height of the whole body — which is
+				// exactly the ~79cm this metric kept reporting. Same guard as the
+				// foot targets in PlayerIK use, for the same reason.
+				if (HipRel > -45.0f && HipRel < 20.0f)
+				{
+					if (HipRel < MonPelvisZMin) MonPelvisZMin = HipRel;
+					if (HipRel > MonPelvisZMax) MonPelvisZMax = HipRel;
+				}
+				MonBobWindow += DeltaTime;
+				if (MonBobWindow >= BobWindowSecs)
+				{
+					float Swing = MonPelvisZMax - MonPelvisZMin;
+					if (Swing > MonBobWorst) MonBobWorst = Swing;
+					MonBobWindow = 0.0f;
+					MonPelvisZMin = 99999.0f;
+					MonPelvisZMax = -99999.0f;
+				}
+			}
+		}
+		else
+		{
+			// AIRBORNE BALLISTIC CHECK: once the feet leave the sand the only
+			// thing acting on the body is gravity. Any other vertical
+			// acceleration is the animation or the IK shoving the hips around,
+			// which is exactly the kind of unphysical motion the eye reads as
+			// floaty or robotic but no per-frame smoothness metric can see.
+			// Skip the first airborne frame: MonPrevAirVz still holds the grounded
+			// sentinel, and differencing against it would be meaningless.
+			if (MonPrevAirVz > -99998.0f)
+			{
+				float VertAcc = (PlayerVelocity.Z - MonPrevAirVz) / DeltaTime;
+				MonAirBallisticErr += Math::Abs(VertAcc - Gravity);
+				MonAirSamples += 1.0f;
+			}
+			// Jump height off the CAPSULE, not the pelvis. The pelvis carries the
+			// crouch, so the reference height depended on how deep the player
+			// happened to be squatting when they were last still — which made a
+			// jump out of a deep gather measure 159cm, taller than the player.
+			// The capsule is the physics body: its rise IS the jump.
+			if (MonStandActorZ > 0.0f)
+			{
+				float Rise = GetActorLocation().Z - MonStandActorZ;
+				if (Rise > MonJumpApex) MonJumpApex = Rise;
+			}
+		}
+		MonPrevAirVz = bIsGrounded ? -99999.0f : PlayerVelocity.Z;
+		MonPrevCrouchBio = SmCrouch;
+	}
+	private float MonPrevAirVz = -99999.0f;
+	private float MonPrevCrouchBio = 0.0f;
+	private int MonAccelLogs = 0;
+	// Roughly one stride at running cadence (2.5-3.5 Hz), so a window holds a
+	// full up-down cycle without spanning a change of stance.
+	const float BobWindowSecs = 0.4f;
+	private float MonBobWindow = 0.0f;
+	private float MonBobWorst = 0.0f;
+
 	// How bent one knee is, as a 0..100 "shortening" percentage rather than an
 	// angle: a straight leg spans exactly thigh+shin from hip to ankle, and any
 	// bend pulls the ankle closer to the hip. 0 = locked straight, ~30 = a deep
@@ -945,6 +1132,32 @@ class AVolleyballPlayer : APawn
 			+ " kneeStill=" + int(KneeStillMean())
 			+ " kneeStillMax=" + int(MonKneeStillMax)
 			+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f));
+
+		// Absolute plausibility, separate from the relative numbers above so a
+		// regression comparison never gets mixed up with a physics verdict.
+		// Units converted to m/s^2 and cm here, at the boundary, once.
+		float BobCm = MonBobWorst;
+		int AirErr = (MonAirSamples > 0.0f) ? int(MonAirBallisticErr / MonAirSamples) : 0;
+		Log("BIOMECH " + GetName()
+			+ " accel=" + int(MonPeakAccel / 100.0f)          // m/s^2, human <= 10
+			+ " decel=" + int(MonPeakDecel / 100.0f)          // m/s^2, human <= 12
+			+ " plant=" + int(MonPeakPlant / 100.0f)          // m/s^2, approach gather 20-45
+			+ " overBudget=" + int(MonAccelOverBudget * 100.0f)  // centiseconds outside the band
+			+ " bob=" + int(BobCm)                            // cm, running 4-6
+			+ " airErr=" + AirErr                             // cm/s^2 off pure ballistic, want 0
+			+ " jump=" + int(MonJumpApex));                   // cm hip rise, elite spike 60-90
+
+		MonPeakAccel = 0.0f;
+		MonPeakDecel = 0.0f;
+		MonPeakPlant = 0.0f;
+		MonAccelOverBudget = 0.0f;
+		MonPelvisZMin = 99999.0f;
+		MonPelvisZMax = -99999.0f;
+		MonBobWorst = 0.0f;
+		MonBobWindow = 0.0f;
+		MonAirBallisticErr = 0.0f;
+		MonAirSamples = 0.0f;
+		MonJumpApex = 0.0f;
 		MonTotMoveFlips = 0;
 		MonTotYawFlips = 0;
 		MonTotCrouchFlips = 0;
@@ -969,6 +1182,7 @@ class AVolleyballPlayer : APawn
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
+		UpdateBiomech(DeltaTime);
 		float Yaw = GetActorRotation().Yaw;
 		float CrouchNow = (Anim != nullptr) ? Anim.CrouchAmount : 0.0f;
 		FVector HandR = (Anim != nullptr) ? Anim.HandTargetR : FVector::ZeroVector;
@@ -1833,8 +2047,25 @@ class AVolleyballPlayer : APawn
 		return Math::Lerp(BackpedalScale, 1.0f, (Dot + 1.0f) * 0.5f);
 	}
 
-	float GroundAccel = 2400.0f;
-	float GroundDecel = 3400.0f;
+	// ACCELERATION IS A HUMAN LIMIT, NOT A TUNING KNOB.
+	//
+	// These were 2400/3400 cm/s^2 — 24 and 34 m/s^2, measured straight out of a
+	// match by the BIOMECH line. A sprinter's first step peaks near 10 m/s^2 and
+	// a hard controlled plant near 12, so the body was accelerating 2.4x and
+	// braking 2.8x harder than any human can, reaching top speed in 0.24s. No
+	// amount of animation polish reads as real on top of that: the legs are
+	// being asked to explain motion the legs could not produce.
+	//
+	// Safe to lower because MotionPlan budgets travel time from these very
+	// values (trapezoid accel/cruise/brake profile), so the AI simply starts
+	// moving earlier instead of misjudging what it can reach — as long as the
+	// planner reads them rather than duplicating them, which is why MB_Brake
+	// was removed in favour of passing GroundDecel through.
+	//
+	// Kept at the TOP of the human band rather than mid: these are athletes, and
+	// the game still has to be playable at volleyball tempo.
+	float GroundAccel = 1000.0f;   // 10 m/s^2
+	float GroundDecel = 1200.0f;   // 12 m/s^2
 	float AirAccel = 350.0f;
 
 	// Ease PlayerVelocity.XY toward the requested input velocity.
@@ -1929,6 +2160,10 @@ class AVolleyballPlayer : APawn
 	float JumpLoadTimer = 0.0f;
 	const float JumpLoadDuration = 0.16f;
 	const float LoadedJumpVelocity = 660.0f;
+	// Fraction of the approach speed that survives the gather (the residue that
+	// drifts the body into the contact). Was applied as an instant multiply.
+	const float JumpLoadSpeedKeep = 0.25f;
+	private FVector JumpLoadEntryVel = FVector::ZeroVector;
 
 	bool IsJumpLoading() const { return JumpLoadTimer > 0.0f; }
 
@@ -1937,8 +2172,15 @@ class AVolleyballPlayer : APawn
 		if (!bIsGrounded || JumpLoadTimer > 0.0f) return;
 		// The plant: the gather brakes the run — momentum becomes height, and
 		// the small residue drifts the body into the contact during the ascent.
-		PlayerVelocity.X *= 0.25f;
-		PlayerVelocity.Y *= 0.25f;
+		//
+		// Braked ACROSS the load, not in the frame it starts. This used to be a
+		// flat `*= 0.25` here, which is a velocity teleport: 584 -> 139 cm/s in a
+		// single 5ms frame, measured as 757 m/s^2 and by far the largest physical
+		// violation in the game. A real approach plant is violent but finite —
+		// the foot is on the ground for the whole gather. Spreading the same
+		// 75% loss over JumpLoadDuration keeps the intent and the resulting jump
+		// height while making the deceleration something legs could produce.
+		JumpLoadEntryVel = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0.0f);
 		JumpLoadTimer = JumpLoadDuration;
 	}
 
@@ -1950,6 +2192,14 @@ class AVolleyballPlayer : APawn
 		// Sink through the load — deepest right before the explosion.
 		float Prog = 1.0f - JumpLoadTimer / JumpLoadDuration;
 		ExtraCrouch = Math::Max(ExtraCrouch, 0.65f * Prog);
+
+		// Bleed the run off over the gather (see StartLoadedJump). Written as an
+		// absolute position along the ramp rather than a per-frame multiply so
+		// the total loss is exactly 75% regardless of frame rate — a per-frame
+		// scale would brake harder at 250fps than at 30.
+		FVector Braked = JumpLoadEntryVel * Math::Lerp(1.0f, JumpLoadSpeedKeep, Prog);
+		PlayerVelocity.X = Braked.X;
+		PlayerVelocity.Y = Braked.Y;
 
 		JumpLoadTimer -= DeltaTime;
 		if (JumpLoadTimer <= 0.0f)

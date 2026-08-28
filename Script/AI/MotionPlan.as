@@ -111,9 +111,13 @@ bool MB_BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutT
 	return false;
 }
 
-// Braking deceleration — MUST mirror GroundDecel on the player (measured
-// property of the sim, not a tuning knob here).
-const float MB_Brake = 3400.0f;
+// Braking deceleration is a MEASURED PROPERTY OF THE SIM, not a tuning knob
+// here — so it is passed in from the player rather than restated. It used to
+// be a const duplicating GroundDecel with a comment saying the two must match
+// by hand, which is a silent trap: retune the body and every travel-time
+// budget keeps quoting the old braking power, so the planner books arrivals
+// the legs can no longer make and the AI is late to balls for reasons nothing
+// in the log explains.
 
 // TRAPEZOID PROFILE: every approach both accelerates AND brakes to a stop —
 // a contact demands a planted body, so "travel time" that ignores braking
@@ -121,10 +125,10 @@ const float MB_Brake = 3400.0f;
 // the legs couldn't cash). Time over Dist arriving STOPPED, cruising at
 // most at VMax: accel ramp (v/a) + brake ramp (v/b) + cruise of whatever
 // distance the ramps don't cover. Plus the physical first-step lag.
-float MB_BodyTravelTimeRaw(float Dist, float VMax, float Accel)
+float MB_BodyTravelTimeRaw(float Dist, float VMax, float Accel, float Brake)
 {
 	if (Dist <= 1.0f) return 0.0f;
-	float InvSum = 1.0f / Accel + 1.0f / MB_Brake;
+	float InvSum = 1.0f / Accel + 1.0f / Brake;
 	float RampDist = 0.5f * VMax * VMax * InvSum;
 	float T;
 	if (Dist <= RampDist)
@@ -142,11 +146,11 @@ float MB_BodyTravelTimeRaw(float Dist, float VMax, float Accel)
 // stopped. From TAvail = D/v + v·(1/a+1/b)/2 — a quadratic in v; the smaller
 // root is the efficient one (the larger wastes speed and brakes longer).
 // Returns VMax when even the optimal profile can't arrive stopped in time.
-float MB_RequiredCruiseSpeed(float Dist, float TAvail, float VMax, float Accel)
+float MB_RequiredCruiseSpeed(float Dist, float TAvail, float VMax, float Accel, float Brake)
 {
 	if (Dist <= 1.0f) return 0.0f;
 	if (TAvail <= 0.05f) return VMax;
-	float InvSum = 1.0f / Accel + 1.0f / MB_Brake;
+	float InvSum = 1.0f / Accel + 1.0f / Brake;
 	float Disc = TAvail * TAvail - 2.0f * InvSum * Dist;
 	if (Disc <= 0.0f) return VMax;
 	return Math::Clamp((TAvail - Math::Sqrt(Disc)) / InvSum, 0.0f, VMax);
@@ -156,7 +160,7 @@ float MB_RequiredCruiseSpeed(float Dist, float TAvail, float VMax, float Accel)
 // functions only resolve reliably via the mixin pattern — see PlayerIK).
 mixin float BodyTravelTime(AAIPlayer Self, float Dist)
 {
-	return MB_BodyTravelTimeRaw(Dist, Self.MoveSpeed, Self.GroundAccel);
+	return MB_BodyTravelTimeRaw(Dist, Self.MoveSpeed, Self.GroundAccel, Self.GroundDecel);
 }
 
 // RETENTION check for a decision already committed to: does the ball still
@@ -184,6 +188,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 	FVector MyPos = Self.GetActorLocation();
 	float MyMoveSpeed = Self.MoveSpeed;
 	float MyAccel = Self.GroundAccel;
+	float MyBrake = Self.GroundDecel;
 	FInterceptPlan Plan;
 	// The hand share that cannot overlap the run: roughly the second half of
 	// the effector travel happens after the body has settled.
@@ -208,7 +213,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 		float EffVMax = MyMoveSpeed * Self.MoveDirSpeedScale(ToContact);
 
 		float Dist = ToContact.Size2D();
-		float BodyT = MB_BodyTravelTimeRaw(Dist, EffVMax, MyAccel);
+		float BodyT = MB_BodyTravelTimeRaw(Dist, EffVMax, MyAccel, MyBrake);
 		if (Tau < BodyT + HandT + MB_Margin) continue;   // not playable this high
 
 		Plan.bReachable = true;
@@ -224,7 +229,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 		// cruise speed comes from the profile inverse; headroom absorbs
 		// prediction drift; the floor keeps a purposeful stride.
 		float Avail = Math::Max(Tau - MB_SettleTime - MB_FirstStepLag, 0.05f);
-		float NeedSpeed = MB_RequiredCruiseSpeed(Dist, Avail, EffVMax, MyAccel);
+		float NeedSpeed = MB_RequiredCruiseSpeed(Dist, Avail, EffVMax, MyAccel, MyBrake);
 		Plan.SpeedFraction = Math::Clamp((NeedSpeed / EffVMax) * 1.15f, 0.35f, 1.0f);
 
 		// UNCERTAINTY: while the slack left AFTER the run and settle exceeds
@@ -251,7 +256,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 	FVector ToDive = FVector(DivePos.X - MyPos.X, DivePos.Y - MyPos.Y, 0);
 	float DiveDist = ToDive.Size2D();
 	float BodyT = MB_BodyTravelTimeRaw(DiveDist,
-		MyMoveSpeed * Self.MoveDirSpeedScale(ToDive), MyAccel);
+		MyMoveSpeed * Self.MoveDirSpeedScale(ToDive), MyAccel, Self.GroundDecel);
 	Plan.Contact = DivePos;
 	Plan.BallTime = DiveTau;
 	Plan.BodyTime = BodyT;
