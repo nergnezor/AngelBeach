@@ -675,6 +675,9 @@ class AVolleyballPlayer : APawn
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
+		int Clip = HitClipIndexFor(CurrentHit);
+		Anim.HitClipBranch = (Clip > 0) ? 1 : 0;
+		Anim.HitSetSpikeBlend = (Clip == 2) ? 1.0f : 0.0f;
 
 		// Head tracks the ball: always look at it while it's in play, so every
 		// player keeps their eyes on the ball. The Anim BP drives a Look At node on
@@ -2222,6 +2225,17 @@ class AVolleyballPlayer : APawn
 			if (Found.Num() > 0) CachedBall = Cast<ABall>(Found[0]);
 		}
 		return CachedBall;
+	}
+
+	// Maps gameplay hit type to the Anim BP's three upper-body clip slots.
+	private int HitClipIndexFor(EHitType Type) const
+	{
+		if (Type == EHitType::Hit_Set)
+			return 1;
+		if (Type == EHitType::Hit_Spike || Type == EHitType::Hit_Block
+			|| Type == EHitType::Hit_Serve)
+			return 2;
+		return 0;   // bump, none, and anything else
 	}
 
 	// Called by gameplay code each time a contact happens. Sets which upper-body

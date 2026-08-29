@@ -44,6 +44,9 @@ class UVolleyballAnimInstance : UAnimInstance
 	UPROPERTY(BlueprintReadWrite) bool     bIsHitting = false;
 	UPROPERTY(BlueprintReadWrite) EHitType HitType = EHitType::Hit_None;
 	UPROPERTY(BlueprintReadWrite) float    HitAlpha = 0.0f;   // 0 -> 1 -> 0 swing envelope
+	// Hit overlay clip picker: branch 0=bump, 1=set/spike; blend picks set (0) vs spike (1).
+	UPROPERTY(BlueprintReadWrite) int      HitClipBranch = 0;
+	UPROPERTY(BlueprintReadWrite) float    HitSetSpikeBlend = 0.0f;
 
 	// --- Full Body IK effector targets (WORLD space) ----------------------
 	// The Anim BP feeds these into a Full Body IK node. Code computes WHERE each
