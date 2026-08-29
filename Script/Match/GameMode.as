@@ -304,7 +304,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 				//
 				// Desktop is thinner AND, crucially, a normal sea-level layer again —
 					// see the falloff below.
-					FC.SetFogDensity(bMobile ? 0.002f : 0.006f);
+					// Thinner again now that the world is 200m across instead of 50m. 0.006
+					// with a 2200 start was tuned when the sea was a dome 50m away; against a
+					// real ocean it saturated the whole surface to flat pale blue within a few
+					// tens of metres and erased every wave. Real aerial perspective at these
+					// distances is almost nothing.
+					FC.SetFogDensity(bMobile ? 0.002f : 0.0022f);
 				// Stretching the fog layer upward (falloff 0.5 -> 0.1) was an attempt
 				// to make the fog double as the sky on Android, where SkyAtmosphere
 				// was switched off. It did not work — the top of frame went from
@@ -359,7 +364,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 					// good: 2200 leaves the court and the near sand completely clear (the match
 					// camera is 1050 out) while the sea beyond it fades with distance, which is
 					// the cue that makes a flat surface read as kilometres instead of metres.
-					FC.SetStartDistance(bMobile ? 5200.0f : 2200.0f);
+					FC.SetStartDistance(bMobile ? 5200.0f : 4500.0f);
 				// Was warm to glow toward the low sunset sun disc; with the sun
 				// at the zenith this glow isn't visible from a horizontal camera
 				// anyway, so keep it neutral rather than falsely warm.

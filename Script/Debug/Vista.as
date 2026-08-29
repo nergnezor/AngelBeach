@@ -88,7 +88,7 @@ class AVistaGameMode : ABeachVolleyballGameMode
 		// Re-aimed once: the first placement put a player directly behind the ball
 		// along the view ray, so the subject of the shot was read against a body
 		// instead of against sand. Clear sand behind it now.
-		S.Name = "ball";     S.Pos = FVector(-420, -180, 148);  S.Look = BallMark;
+		S.Name = "ball";     S.Pos = FVector(-433, -302, 212);  S.Look = BallMark;
 		S.Note = "ball at ~118cm on clean sand: panel seams, shading gradient, spin cue";
 		Shots.Add(S);
 

@@ -45,6 +45,9 @@ class AEnvironment : AActor
 	UProceduralMeshComponent WaterMesh;
 
 	UPROPERTY(DefaultComponent, Attach = Root)
+	UProceduralMeshComponent BackshoreMesh;
+
+	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent DuneMesh;
 
 	UPROPERTY(DefaultComponent, Attach = Root)
@@ -121,6 +124,7 @@ class AEnvironment : AActor
 		BuildSky();
 		if (!IsMobile())
 		{
+			BuildBackshore();
 			BuildWater();
 			BuildDunes();
 			BuildProps();
@@ -281,8 +285,66 @@ class AEnvironment : AActor
 		return Blend(DeepSeaColor, WaterlineSeaColor, k);
 	}
 
+	// THE BEACH HAS TO REACH THE HORIZON TOO.
+	//
+	// The ocean plane is 400m across in BOTH axes, and the court's sand skirt is
+	// 26m by 18m. That left water on every side of the court: from the match
+	// camera the whole thing read as a sandbar in open sea rather than as a
+	// beach, which is less believable than the flat sand-to-nowhere it replaced.
+	// A shoreline is a LINE — sea on one side of it, land on the other — so the
+	// land needs to be as big as the sea.
+	//
+	// Sits 2cm below the court sand so the deformable playfield always wins the
+	// depth test; the step is far too small to see and it never meets the camera
+	// edge-on. Same M_Sand, so the macro variation runs continuously from the
+	// court out to the dunes without a seam.
+	private void BuildBackshore()
+	{
+		BackshoreMesh.SetCastShadow(false);
+
+		const int N = 16;
+		const float H = WaterHalf;
+		TArray<FVector> V; TArray<int32> T2; TArray<FVector> Nrm;
+		TArray<FVector2D> UV; TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+		for (int iy = 0; iy <= N; iy++)
+		{
+			for (int ix = 0; ix <= N; ix++)
+			{
+				float fx = float(ix) / float(N);
+				float fy = float(iy) / float(N);
+				V.Add(FVector((fx - 0.5f) * 2.0f * H, ShoreY + fy * (H - ShoreY), -2.0f));
+				Nrm.Add(FVector(0, 0, 1));
+				UV.Add(FVector2D(fx, fy));
+				C.Add(FLinearColor(1, 1, 1, 1));
+			}
+		}
+		for (int iy = 0; iy < N; iy++)
+		{
+			for (int ix = 0; ix < N; ix++)
+			{
+				int A = iy * (N + 1) + ix;
+				int B = A + 1;
+				int Cidx = A + N + 1;
+				int D = Cidx + 1;
+				T2.Add(A); T2.Add(Cidx); T2.Add(B);
+				T2.Add(B); T2.Add(Cidx); T2.Add(D);
+			}
+		}
+
+		BackshoreMesh.CreateMeshSection_LinearColor(0, V, T2, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(BackshoreMesh, 0, "/Game/Materials/M_Sand.M_Sand");
+		if (MID != nullptr)
+		{
+			MID.SetScalarParameterValue(n"ShoreY", ShoreY);
+			MID.SetScalarParameterValue(n"WetWidth", 160.0f);
+		}
+	}
+
 	// Desktop ocean: a vast horizontal plane below the sand so Lumen can reflect
-	// the sky and clouds — the painted dome bands never could.
+	// the sky and clouds — the painted dome bands never could. Only the SEA side
+	// of the shoreline now: BuildBackshore owns everything inland of ShoreY.
 	private void BuildWater()
 	{
 		WaterMesh.SetCastShadow(false);
@@ -299,7 +361,13 @@ class AEnvironment : AActor
 			{
 				float fx = float(ix) / float(N);
 				float fy = float(iy) / float(N);
-				V.Add(FVector((fx - 0.5f) * 2.0f * H, (fy - 0.5f) * 2.0f * H, WaterZ));
+				// fy must still run in the +Y direction. Mapping it the other way (from
+				// the shoreline out to sea) mirrors the plane, which INVERTS THE TRIANGLE
+				// WINDING built below — the whole ocean then faces downward, gets
+				// backface-culled, and what fills the frame is SkyAtmosphere below the
+				// horizon: a flat pale band that looks almost exactly like calm water and
+				// took three material fixes to stop believing.
+				V.Add(FVector((fx - 0.5f) * 2.0f * H, -H + fy * (H + ShoreY), WaterZ));
 				Nrm.Add(FVector(0, 0, 1));
 				UV.Add(FVector2D(fx, fy));
 				C.Add(FLinearColor(1, 1, 1, 1));

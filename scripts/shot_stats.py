@@ -37,24 +37,21 @@ REGIONS = {
         # Re-aimed once SkyAtmosphere replaced the dome: what these used to call
         # "zenith" and "horizon" were the cloud layer and the sea.
         "sky_zenith":  (560, 60, 720, 100),
-        "sky_horizon": (560, 130, 720, 150),
+        "sky_horizon": (560, 106, 720, 124),
         "sand_far":    (540, 296, 740, 326),
         "sand_near":   (260, 600, 420, 660),
-        "sea":         (560, 185, 720, 240),
+        # The sea is on the -Y side only now, which is screen-LEFT from the match
+        # camera. It used to be sampled dead centre, where there is now beach.
+        "sea":         (60, 200, 240, 300),
     },
     "Vista_2_two_shot": {
         "body":        (686, 300, 726, 430),
         "sand_lit":    (300, 560, 420, 620),
-        # The BALL's cast shadow: an isolated ellipse on clean sand, where the
-        # net's shadow stripes would have made the reading half lit, half dark.
-        # Re-aimed when the sun moved from the zenith to (-45, 70) — a cast
-        # shadow's position is a function of the sun angle, so this rectangle
-        # has to move whenever the sun does.
-        "sand_shadow": (620, 522, 662, 542),
     },
     "Vista_3_ball": {
-        # BallMark (-280,-320) seen from (-420,-180): centred on sand, no body behind.
-        "ball":        (520, 300, 720, 480),
+        # TIGHT on the ball. A 200x180 box was mostly sand, so "ball" was really
+        # measuring the background: it read 109 while the ball itself read 11.
+        "ball":        (600, 320, 675, 395),
     },
     "Vista_4_sand": {
         "sand_fg":     (300, 480, 700, 620),
@@ -63,7 +60,7 @@ REGIONS = {
     "Vista_5_horizon": {
         "sky_top":     (500, 10, 780, 60),
         "sky_mid":     (500, 300, 780, 340),
-        "sea_band":    (300, 540, 560, 565),
+        "sea_band":    (200, 400, 1080, 540),
         "sand_fg":     (300, 620, 900, 700),
     },
     "Vista_6_skin": {
@@ -82,7 +79,17 @@ TEXTURE_REGIONS = {("Vista_4_sand", "sand_fg"), ("Vista_1_wide", "sand_near")}
 # The sky banding check: sample a column of the dome and count how many
 # neighbouring samples jump. A real gradient steps by ~1; a 40-band dome steps
 # by a lot at 39 places.
-BAND_SCAN = {"Vista_5_horizon": (300, 10, 560), "Vista_1_wide": (640, 6, 230)}
+# Sky-only columns. The horizon shot's scan used to run from the top of frame
+# down to y=560, which since the ocean arrived means it spends most of its
+# length counting WAVES and reports 128 "steps" in a sky that has none.
+BAND_SCAN = {"Vista_5_horizon": (300, 10, 360), "Vista_1_wide": (640, 6, 120)}
+
+# Regions where the interesting number is how much the surface VARIES, not how
+# bright it is: a mirror-flat ocean and a choppy one have the same mean.
+DETAIL_REGIONS = {
+    ("Vista_5_horizon", "sea_band"),
+    ("Vista_1_wide", "sea"),
+}
 
 
 def scaled(rect, w, h):
@@ -118,8 +125,17 @@ def measure(path):
         rec["lum"] = round(float(plum.mean()), 1)
         rec["min"] = round(float(plum.min()), 1)
         rec["max"] = round(float(plum.max()), 1)
-        if (name, rname) in TEXTURE_REGIONS:
+        if (name, rname) in TEXTURE_REGIONS or (name, rname) in DETAIL_REGIONS:
             rec["texture_sd"] = round(float(plum.std()), 2)
+        if rname == "sand_lit":
+            # Lit sand vs its own deepest shadow, measured over one wide strip.
+            # The old metric was a hand-placed rectangle on the ball's cast
+            # shadow, so it went blind the moment the ball or the sun moved —
+            # and it did, twice, reporting -2.4 as though that were a shadow.
+            wide = a[y0:y1, max(0, x0 - 250):x1 + 250]
+            wl = 0.2126 * wide[:, :, 0] + 0.7152 * wide[:, :, 1] + 0.0722 * wide[:, :, 2]
+            rec["p50"] = round(float(np.percentile(wl, 50)), 1)
+            rec["p03"] = round(float(np.percentile(wl, 3)), 1)
         if rname == "body":
             # p90 - p25 across the torso. A flat zenith sun leaves a body almost
             # uniformly lit and this collapses; a sun with an angle to it opens
@@ -139,8 +155,8 @@ def measure(path):
         }
 
     # Derived readings that say more than either half alone.
-    if name == "Vista_2_two_shot" and "sand_lit" in out and "sand_shadow" in out:
-        out["_shadow_delta"] = round(out["sand_lit"]["lum"] - out["sand_shadow"]["lum"], 1)
+    if name == "Vista_2_two_shot" and "sand_lit" in out:
+        out["_shadow_delta"] = round(out["sand_lit"]["p50"] - out["sand_lit"]["p03"], 1)
     for shot in ("Vista_6_skin", "Vista_2_two_shot"):
         if name == shot and "body" in out:
             out["_form_delta"] = round(out["body"]["p90"] - out["body"]["p25"], 1)
@@ -168,6 +184,8 @@ def fmt(rec):
             s += f"  texture_sd {rec['texture_sd']:5.2f}"
         if "p90" in rec:
             s += f"  p25 {rec['p25']:5.1f} p90 {rec['p90']:5.1f}"
+        if "p03" in rec:
+            s += f"  p03 {rec['p03']:5.1f} p50 {rec['p50']:5.1f}"
         return s
     return json.dumps(rec)
 

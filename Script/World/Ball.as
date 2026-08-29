@@ -322,8 +322,24 @@ class ABall : AActor
 				int B = A + 1;
 				int C = A + Slices + 1;
 				int D = C + 1;
-				Tris.Add(A); Tris.Add(C); Tris.Add(B);
-				Tris.Add(B); Tris.Add(C); Tris.Add(D);
+				// WINDING. This was inverted for the entire life of this sphere, and
+				// it is the reason the ball has never once been lit correctly: with the
+				// faces pointing inward, backface culling threw away the near hemisphere
+				// and what you actually saw was the INSIDE of the far one — lit by
+				// normals pointing away from you. The ball measured 55,50,41 against
+				// sand at 142,125,97 that it sits 20cm above, with a pure-black lower
+				// half, because the only light reaching it was the sky's upper
+				// hemisphere. Flipping these six indices takes it to 111,106,84.
+				//
+				// It hid for so long because the HDR albedo (2.4,2.3,0.25) and the
+				// 1500-intensity point light inside the ball were bright enough to show
+				// through anyway. Removing those did not break the ball; it revealed
+				// this. Ruled out in order, each on the locked reference series: the
+				// material (M_Sand on the ball was equally black), tangents,
+				// tessellation, component mobility, self-shadowing, ray-traced shadows,
+				// virtual shadow maps, and any occluder (identical 6m in the air).
+				Tris.Add(A); Tris.Add(B); Tris.Add(C);
+				Tris.Add(B); Tris.Add(D); Tris.Add(C);
 			}
 		}
 
