@@ -11,3 +11,5 @@ Content/Characters/Mannequins/Meshes/SKM_Manny_Simple.uasset -filter -diff -merg
 Content/Characters/Mannequins/Meshes/SK_Mannequin.uasset -filter -diff -merge
 Content/Characters/Mannequins/Materials/** -filter -diff -merge
 Content/Characters/Mannequins/Textures/** -filter -diff -merge
+Content/Characters/Mannequins/Anims/Death/MM_Death_Front_01.uasset -filter -diff -merge
+Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_0*.uasset -filter -diff -merge

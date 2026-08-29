@@ -161,6 +161,21 @@ jobs:
           test -d "$PLATFORM35_DIR" || { echo "ERROR: platforms;android-35 still missing"; exit 1; }
           test -d "$BUILDTOOLS35_DIR" || { echo "ERROR: build-tools;35.0.0 still missing"; exit 1; }
 
+          # ABP_VolleyballPlayer hard-references these clips; they must exist in
+          # every fresh checkout (see .gitignore exceptions under Mannequins/Anims).
+          for req in \
+            Content/Characters/Mannequins/Anims/Death/MM_Death_Front_01.uasset \
+            Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.uasset \
+            Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_02.uasset \
+            Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_03.uasset \
+            Content/Characters/Mannequin/ABP_VolleyballPlayer.uasset; do
+            test -f "$GITHUB_WORKSPACE/$req" || {
+              echo "ERROR: required asset missing from checkout: $req"
+              exit 1
+            }
+          done
+          echo "Required Mannequin anim assets present."
+
           # UnrealBuildTool reads the NDK location from NDKROOT / ANDROID_NDK_ROOT
           # (NOT ANDROID_NDK_HOME). Export all three for subsequent steps.
           {

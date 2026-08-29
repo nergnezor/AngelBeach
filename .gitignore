@@ -68,6 +68,16 @@ Content/Characters/**
 !Content/Characters/Mannequins/Textures/Shared/
 !Content/Characters/Mannequins/Textures/Shared/T_UE_Logo_M.uasset
 !Content/Characters/Mannequins/Rigs/IK_Mannequin.uasset
+# Anim clips wired directly in ABP_VolleyballPlayer (dive + hit overlay).
+# Without these, Android cook fails: "references an unknown Anim Sequence".
+!Content/Characters/Mannequins/Anims/
+!Content/Characters/Mannequins/Anims/Death/
+!Content/Characters/Mannequins/Anims/Death/MM_Death_Front_01.uasset
+!Content/Characters/Mannequins/Anims/Unarmed/
+!Content/Characters/Mannequins/Anims/Unarmed/Attack/
+!Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.uasset
+!Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_02.uasset
+!Content/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_03.uasset
 # Level maps — CourtLevel.umap is tracked, others are not
 Content/*.umap
 !Content/CourtLevel.umap
