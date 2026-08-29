@@ -647,6 +647,15 @@ class AAIPlayer : AVolleyballPlayer
 	{
 		if (Teammate == nullptr) return true;
 
+		// A PLAYER SLIDING OUT A DIVE IS NOT AVAILABLE, and this has to be asked
+		// first — before the touch-ownership rules below, which would otherwise
+		// hand the job to a body lying face down on the sand. It is asked about
+		// BOTH players on purpose: if the ball is only my teammate's because they
+		// are nearer, and they are mid-slide, then it is mine and nobody had been
+		// claiming it.
+		if (bRagdollActive)           { bWasHitter = false; return false; }
+		if (Teammate.bRagdollActive)  { bWasHitter = true;  return true;  }
+
 		// I never take two contacts in a row — if I made the last touch, it's
 		// my teammate's turn now. This guarantees digger != setter != attacker.
 		if (bIMadeLastTouch)          { bWasHitter = false; return false; }
@@ -1753,7 +1762,7 @@ class AAIPlayer : AVolleyballPlayer
 	// No two contacts in a row — I'm transparent to the ball right after I hit it.
 	bool CanContactBall() const override
 	{
-		return !bIMadeLastTouch;
+		return !bIMadeLastTouch && !bRagdollActive;
 	}
 
 	protected void FindBall()

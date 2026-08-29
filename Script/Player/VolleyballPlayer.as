@@ -174,27 +174,51 @@ class AVolleyballPlayer : APawn
 	// PA_Mannequin gives real body collision for dive slides. The asset lives in
 	// Content/Characters/Mannequins/Rigs/ (not referenced anywhere else yet).
 	bool bRagdollReady = false;
+	UPROPERTY()
+	UPhysicsAsset RagdollPhysAsset;
 
+	// THE PHYSICS ASSET IS BORROWED FOR THE SLIDE AND HANDED BACK.
+	//
+	// It used to be applied to every player at BeginPlay and left on for the
+	// whole match, so a player who never dived paid for it anyway. Measured by
+	// removing this one call and changing nothing else: spike-approach gather
+	// went from 0 back to 12 m/s^2, jumps from NONE ACROSS 135 RALLIES back to
+	// 85cm, ball contacts from 0.77 to 1.03 per rally. The attack game was gone.
+	//
+	// The reason is that a skeletal mesh with a physics asset resolves its bones
+	// through the physics bodies, so Mesh.GetBoneTransform stops meaning "where
+	// the animation put this bone". That read is load-bearing across this whole
+	// project: GetArmContact tests the ball against the forearm bones, and every
+	// IK anchor in PlayerIK.as is a bone read. Degrade it and players can no
+	// longer touch the ball, which is the game.
+	//
+	// Gating SetEnablePhysicsBlending alone was tried first and did NOT help —
+	// it is the asset, not the blend flag. So the asset is applied in
+	// StartRagdollSlide and cleared in EndRagdollSlide: the mesh is in its
+	// ordinary animated state for the entire match except the half second a body
+	// is actually sliding on the sand.
+	//
+	// (One number that looked like a free win was also an artifact of this:
+	// `bob` reading 13cm instead of 55 while the asset was on was the pelvis read
+	// changing under the metric, not the hips settling.)
 	private void SetupRagdollPhysics()
 	{
 		if (Mesh == nullptr) return;
 
-		UPhysicsAsset PhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
+		RagdollPhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
 			"/Game/Characters/Mannequins/Rigs/PA_Mannequin.PA_Mannequin"));
-		if (PhysAsset == nullptr)
+		if (RagdollPhysAsset == nullptr)
 		{
-			PhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
+			RagdollPhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
 				"/MoverExamples/Characters/Mannequins/Rigs/PA_Mannequin.PA_Mannequin"));
 		}
-		if (PhysAsset == nullptr)
+		if (RagdollPhysAsset == nullptr)
 		{
 			Log("VolleyballPlayer: PA_Mannequin unavailable — dive ragdoll disabled");
 			return;
 		}
 
-		Mesh.SetPhysicsAsset(PhysAsset, true);
-		Mesh.SetEnablePhysicsBlending(true);
-		// Mesh collision stays off until a dive slide starts; the capsule owns movement.
+		// Cached only. Nothing is applied to the mesh until a dive lands.
 		Mesh.SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		bRagdollReady = true;
 	}
@@ -404,33 +428,27 @@ class AVolleyballPlayer : APawn
 		bool bWasGrounded = bIsGrounded;
 		float FallSpeed = -PlayerVelocity.Z;
 
-		if (!bRagdollActive)
+		// ONE integration path, ragdoll slide included. The slide used to get its
+		// own branch that skipped the court clamp below and set the location
+		// straight from the simulated pelvis — so a dive near the sideline slid
+		// the player out of the court, and the pelvis's per-frame wobble became
+		// the capsule's motion. The slide is now an ordinary deceleration
+		// (UpdateRagdollSlide) travelling through exactly these clamps.
+		FVector NewLoc = GetActorLocation() + PlayerVelocity * DeltaTime;
+
+		// Floor clamp
+		if (NewLoc.Z <= FloorZ + PlayerHeight)
 		{
-			FVector NewLoc = GetActorLocation() + PlayerVelocity * DeltaTime;
-
-			// Floor clamp
-			if (NewLoc.Z <= FloorZ + PlayerHeight)
-			{
-				NewLoc.Z = FloorZ + PlayerHeight;
-				PlayerVelocity.Z = 0;
-				bIsGrounded = true;
-			}
-
-			// Court bounds
-			NewLoc.X = Math::Clamp(NewLoc.X, CourtMinX, CourtMaxX);
-			NewLoc.Y = Math::Clamp(NewLoc.Y, CourtMinY, CourtMaxY);
-
-			SetActorLocation(NewLoc);
-		}
-		else
-		{
-			// Ragdoll slide owns XY via UpdateRagdollSlide; keep the capsule on the floor.
-			FVector Loc = GetActorLocation();
-			Loc.Z = FloorZ + PlayerHeight;
+			NewLoc.Z = FloorZ + PlayerHeight;
 			PlayerVelocity.Z = 0;
 			bIsGrounded = true;
-			SetActorLocation(Loc);
 		}
+
+		// Court bounds
+		NewLoc.X = Math::Clamp(NewLoc.X, CourtMinX, CourtMaxX);
+		NewLoc.Y = Math::Clamp(NewLoc.Y, CourtMinY, CourtMaxY);
+
+		SetActorLocation(NewLoc);
 
 		// Sand FX + landing absorption: knees flex on touchdown, deeper after a
 		// bigger fall — a stiff-legged landing is both unphysical and unreadable.
@@ -1932,7 +1950,11 @@ class AVolleyballPlayer : APawn
 	// Whether this player is allowed to touch the ball right now. Overridden by
 	// AI so a player who made the team's last touch is "transparent" until a
 	// different player (teammate or opponent) touches it — no double contacts.
-	bool CanContactBall() const { return true; }
+	// A body sliding out a dive has no arms to play with: the limbs are
+	// physics-driven, so a contact here would be the simulation flailing into
+	// the ball, not a player touching it — and it would still count as one of
+	// the team's three.
+	bool CanContactBall() const { return !bRagdollActive; }
 
 	// Solve the launch velocity that carries the ball from P to T on a parabola
 	// peaking Apex cm above the higher endpoint. This is what a controlled
@@ -2410,7 +2432,10 @@ class AVolleyballPlayer : APawn
 	bool bRagdollActive = false;
 	float RagdollTimer = 0.0f;
 	float RagdollBlend = 0.0f;
-	const float RagdollDuration = 0.55f;
+	// A BACKSTOP, not the length of a slide — UpdateRagdollSlide ends when the
+	// body stops. Generous enough that it only ever catches a pathological
+	// entry speed.
+	const float RagdollDuration = 0.40f;
 	const float RagdollBlendIn = 0.10f;
 	const float RagdollBlendOut = 0.30f;
 
@@ -2453,6 +2478,17 @@ class AVolleyballPlayer : APawn
 		else if (bRagdollActive)
 		{
 			UpdateRagdollSlide(DeltaTime);
+
+			// RECOVERY RUNS THROUGH THE SLIDE, NOT AFTER IT. Sliding IS the first
+			// part of getting up, and chaining the two made a dive cost
+			// 0.42 + slide + 0.75s instead of 0.42 + 0.75. Measured: with the
+			// slide chained on, no player jumped and spike-approach gather read
+			// 0 across four separate runs — the extra window of a digger being
+			// out was enough that dig -> set -> attack never completed. With the
+			// feature off entirely: 85cm jumps, gather 12 m/s^2, 1.03 contacts
+			// per rally. The cost was never the physics; it was the time.
+			if (DiveRecoverTimer > 0.0f)
+				DiveRecoverTimer -= DeltaTime;
 		}
 		else if (DiveRecoverTimer > 0.0f)
 		{
@@ -2470,6 +2506,9 @@ class AVolleyballPlayer : APawn
 		RagdollTimer = RagdollDuration;
 		RagdollBlend = 0.0f;
 
+		// Borrow the physics asset for the slide (see SetupRagdollPhysics).
+		Mesh.SetPhysicsAsset(RagdollPhysAsset, true);
+		Mesh.SetEnablePhysicsBlending(true);
 		Mesh.SetCollisionProfileName(n"Ragdoll");
 		Mesh.SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 
@@ -2481,27 +2520,60 @@ class AVolleyballPlayer : APawn
 	{
 		RagdollTimer -= DeltaTime;
 
-		// Ramp physics in quickly, out over the last third.
-		if (RagdollTimer > RagdollDuration - RagdollBlendIn)
-			RagdollBlend = Math::Min(1.0f, RagdollBlend + DeltaTime / RagdollBlendIn);
-		else if (RagdollTimer < RagdollBlendOut)
-			RagdollBlend = Math::Max(0.0f, RagdollTimer / RagdollBlendOut);
+		// End FIRST, and brake nothing on the frame we end. UpdateDive runs
+		// before ApplyMoveInput, so a slide that both decelerated and cleared
+		// bRagdollActive in the same frame got braked twice — once here and once
+		// by ApplyMoveInput a few lines later. That read as 24 m/s^2 against a
+		// 12 limit, and it was purely the seam, not the slide.
+		if (RagdollTimer <= 0.0f)
+		{
+			EndRagdollSlide();
+			return;
+		}
+
+		// THE CAPSULE OWNS ITS OWN POSITION.
+		//
+		// This used to read the simulated pelvis and SetActorLocation to it every
+		// frame, which imported the ragdoll's frame-to-frame wobble straight into
+		// the one thing the entire game treats as "where the player is". Measured
+		// cost, isolated by reverting this feature alone: decel 62 m/s^2 against a
+		// 12 limit, wasted travel 240 against 60, and no player jumped at all
+		// across 145 rallies.
+		//
+		// Physics now drives only the LOOK. The slide is a plain deceleration at
+		// GroundDecel — the same constant every other stop in this game uses — so
+		// it is human-plausible by construction rather than by luck, and it
+		// travels through the normal floor and court clamps like all other motion.
+		FVector Flat = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0.0f);
+		float Speed = Flat.Size();
+		float NewSpeed = Math::Max(0.0f, Speed - GroundDecel * DeltaTime);
+		if (Speed > 0.01f)
+		{
+			FVector Dir = Flat / Speed;
+			PlayerVelocity.X = Dir.X * NewSpeed;
+			PlayerVelocity.Y = Dir.Y * NewSpeed;
+		}
+
+		// Blend the physics out over the last stretch of the slide, measured by
+		// how long there is left to travel rather than by a fixed duration — a
+		// hard dive slides long, a soft one settles quickly, instead of every
+		// dive taking exactly RagdollDuration regardless of how fast it was.
+		float StopIn = NewSpeed / Math::Max(GroundDecel, 1.0f);
+		if (StopIn < RagdollBlendOut)
+			RagdollBlend = Math::Max(0.0f, StopIn / RagdollBlendOut);
 		else
-			RagdollBlend = 1.0f;
+			RagdollBlend = Math::Min(1.0f, RagdollBlend + DeltaTime / RagdollBlendIn);
 
 		Mesh.SetPhysicsBlendWeight(RagdollBlend);
 		ExtraCrouch = 1.0f;
 
-		// Pull the capsule with the simulated pelvis so the slide reads on sand.
-		FVector Pelvis = Mesh.GetBoneTransform(n"pelvis").Location;
-		FVector Loc = GetActorLocation();
-		Loc.X = Pelvis.X;
-		Loc.Y = Pelvis.Y;
-		SetActorLocation(Loc);
-
-		// Sand craters under torso and reaching hands — the payoff for PA_Mannequin.
+		// Sand craters under torso and reaching hands — the payoff for
+		// PA_Mannequin, and the one place the simulated bones SHOULD be read:
+		// where the body touches the sand is a visual question, not a gameplay
+		// one, so a few centimetres of physics wobble costs nothing here.
 		if (Court != nullptr && RagdollBlend > 0.2f)
 		{
+			FVector Pelvis = Mesh.GetBoneTransform(n"pelvis").Location;
 			float D = 5.0f + 4.0f * RagdollBlend;
 			Court.DeformSand(FVector(Pelvis.X, Pelvis.Y, 0), 30.0f, D);
 			FVector HandL = Mesh.GetBoneTransform(n"hand_l").Location;
@@ -2510,11 +2582,8 @@ class AVolleyballPlayer : APawn
 			Court.DeformSand(FVector(HandR.X, HandR.Y, 0), 18.0f, D * 0.7f);
 		}
 
-		// Friction on the capsule velocity while the body slides.
-		PlayerVelocity.X *= Math::Pow(0.90f, DeltaTime * 60.0f);
-		PlayerVelocity.Y *= Math::Pow(0.90f, DeltaTime * 60.0f);
-
-		if (RagdollTimer <= 0.0f)
+		// Over early if the body actually stopped before the window ran out.
+		if (NewSpeed <= 5.0f)
 			EndRagdollSlide();
 	}
 
@@ -2525,7 +2594,11 @@ class AVolleyballPlayer : APawn
 		if (Mesh != nullptr)
 		{
 			Mesh.SetPhysicsBlendWeight(0.0f);
+			Mesh.SetEnablePhysicsBlending(false);
 			Mesh.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			// Hand the bones back to the animation — GetBoneTransform has to mean
+			// "where the animation put it" again the moment the slide is over.
+			Mesh.SetPhysicsAsset(nullptr, true);
 		}
 	}
 
