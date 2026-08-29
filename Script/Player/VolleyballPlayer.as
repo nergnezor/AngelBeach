@@ -168,6 +168,35 @@ class AVolleyballPlayer : APawn
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
 		BuildTeamRing();
+		SetupRagdollPhysics();
+	}
+
+	// PA_Mannequin gives real body collision for dive slides. The asset lives in
+	// Content/Characters/Mannequins/Rigs/ (not referenced anywhere else yet).
+	bool bRagdollReady = false;
+
+	private void SetupRagdollPhysics()
+	{
+		if (Mesh == nullptr) return;
+
+		UPhysicsAsset PhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
+			"/Game/Characters/Mannequins/Rigs/PA_Mannequin.PA_Mannequin"));
+		if (PhysAsset == nullptr)
+		{
+			PhysAsset = Cast<UPhysicsAsset>(LoadObject(nullptr,
+				"/MoverExamples/Characters/Mannequins/Rigs/PA_Mannequin.PA_Mannequin"));
+		}
+		if (PhysAsset == nullptr)
+		{
+			Log("VolleyballPlayer: PA_Mannequin unavailable — dive ragdoll disabled");
+			return;
+		}
+
+		Mesh.SetPhysicsAsset(PhysAsset, true);
+		Mesh.SetEnablePhysicsBlending(true);
+		// Mesh collision stays off until a dive slide starts; the capsule owns movement.
+		Mesh.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		bRagdollReady = true;
 	}
 
 	// Flat annulus on the sand in the player's team colour.
@@ -365,7 +394,7 @@ class AVolleyballPlayer : APawn
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
 		UpdateJumpLoad(DeltaTime);
-		if (!IsDiving())
+		if (!IsDiving() && !bRagdollActive)
 			ApplyMoveInput(DeltaTime);
 
 		// Gravity
@@ -375,25 +404,38 @@ class AVolleyballPlayer : APawn
 		bool bWasGrounded = bIsGrounded;
 		float FallSpeed = -PlayerVelocity.Z;
 
-		FVector NewLoc = GetActorLocation() + PlayerVelocity * DeltaTime;
-
-		// Floor clamp
-		if (NewLoc.Z <= FloorZ + PlayerHeight)
+		if (!bRagdollActive)
 		{
-			NewLoc.Z = FloorZ + PlayerHeight;
+			FVector NewLoc = GetActorLocation() + PlayerVelocity * DeltaTime;
+
+			// Floor clamp
+			if (NewLoc.Z <= FloorZ + PlayerHeight)
+			{
+				NewLoc.Z = FloorZ + PlayerHeight;
+				PlayerVelocity.Z = 0;
+				bIsGrounded = true;
+			}
+
+			// Court bounds
+			NewLoc.X = Math::Clamp(NewLoc.X, CourtMinX, CourtMaxX);
+			NewLoc.Y = Math::Clamp(NewLoc.Y, CourtMinY, CourtMaxY);
+
+			SetActorLocation(NewLoc);
+		}
+		else
+		{
+			// Ragdoll slide owns XY via UpdateRagdollSlide; keep the capsule on the floor.
+			FVector Loc = GetActorLocation();
+			Loc.Z = FloorZ + PlayerHeight;
 			PlayerVelocity.Z = 0;
 			bIsGrounded = true;
+			SetActorLocation(Loc);
 		}
-
-		// Court bounds
-		NewLoc.X = Math::Clamp(NewLoc.X, CourtMinX, CourtMaxX);
-		NewLoc.Y = Math::Clamp(NewLoc.Y, CourtMinY, CourtMaxY);
-
-		SetActorLocation(NewLoc);
 
 		// Sand FX + landing absorption: knees flex on touchdown, deeper after a
 		// bigger fall — a stiff-legged landing is both unphysical and unreadable.
-		FVector Feet = FVector(NewLoc.X, NewLoc.Y, 0.0f);
+		FVector ActorLoc = GetActorLocation();
+		FVector Feet = FVector(ActorLoc.X, ActorLoc.Y, 0.0f);
 		if (bIsGrounded && !bWasGrounded && FallSpeed > 120.0f)
 		{
 			float Strength = Math::Clamp(FallSpeed / 600.0f, 0.3f, 1.6f);
@@ -611,7 +653,7 @@ class AVolleyballPlayer : APawn
 		// node, which nothing outside the editor GUI can create.
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
-		Anim.bDiving       = IsDiving();
+		Anim.bDiving       = IsDiving() || bRagdollActive;
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
@@ -2363,8 +2405,21 @@ class AVolleyballPlayer : APawn
 	const float DiveRecovery = 0.75f;
 	const float DiveSpeedMul = 1.75f;
 
+	// Ragdoll slide at dive landing: physics blend on PA_Mannequin, capsule follows
+	// the pelvis horizontally while the body deforms sand on contact.
+	bool bRagdollActive = false;
+	float RagdollTimer = 0.0f;
+	float RagdollBlend = 0.0f;
+	const float RagdollDuration = 0.55f;
+	const float RagdollBlendIn = 0.10f;
+	const float RagdollBlendOut = 0.30f;
+
 	bool IsDiving() const { return DiveTimer > 0.0f; }
-	bool CanDive() const { return bIsGrounded && DiveTimer <= 0.0f && DiveRecoverTimer <= 0.0f; }
+	bool CanDive() const
+	{
+		return bIsGrounded && DiveTimer <= 0.0f && DiveRecoverTimer <= 0.0f
+			&& !bRagdollActive;
+	}
 
 	void StartDive(FVector WorldDir)
 	{
@@ -2390,13 +2445,87 @@ class AVolleyballPlayer : APawn
 			bHasFacing = true;
 			ExtraCrouch = 1.0f;
 			if (DiveTimer <= 0.0f)
+			{
 				DiveRecoverTimer = DiveRecovery;
+				StartRagdollSlide();
+			}
+		}
+		else if (bRagdollActive)
+		{
+			UpdateRagdollSlide(DeltaTime);
 		}
 		else if (DiveRecoverTimer > 0.0f)
 		{
 			DiveRecoverTimer -= DeltaTime;
 			// Getting up: still low, easing back to standing.
 			ExtraCrouch = Math::Max(ExtraCrouch, 0.85f * (DiveRecoverTimer / DiveRecovery));
+		}
+	}
+
+	private void StartRagdollSlide()
+	{
+		if (!bRagdollReady || Mesh == nullptr) return;
+
+		bRagdollActive = true;
+		RagdollTimer = RagdollDuration;
+		RagdollBlend = 0.0f;
+
+		Mesh.SetCollisionProfileName(n"Ragdoll");
+		Mesh.SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+
+		FVector SlideVel = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+		Mesh.SetAllBodiesBelowLinearVelocity(n"pelvis", SlideVel, true);
+	}
+
+	private void UpdateRagdollSlide(float DeltaTime)
+	{
+		RagdollTimer -= DeltaTime;
+
+		// Ramp physics in quickly, out over the last third.
+		if (RagdollTimer > RagdollDuration - RagdollBlendIn)
+			RagdollBlend = Math::Min(1.0f, RagdollBlend + DeltaTime / RagdollBlendIn);
+		else if (RagdollTimer < RagdollBlendOut)
+			RagdollBlend = Math::Max(0.0f, RagdollTimer / RagdollBlendOut);
+		else
+			RagdollBlend = 1.0f;
+
+		Mesh.SetPhysicsBlendWeight(RagdollBlend);
+		ExtraCrouch = 1.0f;
+
+		// Pull the capsule with the simulated pelvis so the slide reads on sand.
+		FVector Pelvis = Mesh.GetBoneTransform(n"pelvis").Location;
+		FVector Loc = GetActorLocation();
+		Loc.X = Pelvis.X;
+		Loc.Y = Pelvis.Y;
+		SetActorLocation(Loc);
+
+		// Sand craters under torso and reaching hands — the payoff for PA_Mannequin.
+		if (Court != nullptr && RagdollBlend > 0.2f)
+		{
+			float D = 5.0f + 4.0f * RagdollBlend;
+			Court.DeformSand(FVector(Pelvis.X, Pelvis.Y, 0), 30.0f, D);
+			FVector HandL = Mesh.GetBoneTransform(n"hand_l").Location;
+			FVector HandR = Mesh.GetBoneTransform(n"hand_r").Location;
+			Court.DeformSand(FVector(HandL.X, HandL.Y, 0), 18.0f, D * 0.7f);
+			Court.DeformSand(FVector(HandR.X, HandR.Y, 0), 18.0f, D * 0.7f);
+		}
+
+		// Friction on the capsule velocity while the body slides.
+		PlayerVelocity.X *= Math::Pow(0.90f, DeltaTime * 60.0f);
+		PlayerVelocity.Y *= Math::Pow(0.90f, DeltaTime * 60.0f);
+
+		if (RagdollTimer <= 0.0f)
+			EndRagdollSlide();
+	}
+
+	private void EndRagdollSlide()
+	{
+		bRagdollActive = false;
+		RagdollBlend = 0.0f;
+		if (Mesh != nullptr)
+		{
+			Mesh.SetPhysicsBlendWeight(0.0f);
+			Mesh.SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 	}
 
