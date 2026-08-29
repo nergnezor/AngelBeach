@@ -53,16 +53,29 @@ class AEnvironment : AActor
 	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent PropsMesh;
 
-	// THE ISLAND IS A CIRCLE, centred on the court (the court is spawned at the
-	// world origin — GameMode.as). The sand skirt's furthest corner sits at
-	// sqrt(1300^2+900^2) ~= 1581 from centre, and the dune ridge below reaches
-	// ~1749; 1950 clears both with a visible ring of beach all the way round —
-	// this used to be a straight line on the sea side only (ShoreY = -920),
-	// which put open ocean along one edge and dry land on the rest, i.e. a
-	// coastline, not an island. M_Sand and M_Water both mask off this same
-	// radius (parameter "IslandRadius") so the wet band, the foam and the
-	// water's depth fade all read as a ring instead of a line.
-	const float IslandRadius = 1950.0f;
+	// THE ISLAND IS A BLOB, not a perfect circle. A true circle read as a
+	// perfect ring from above and, worse, from the match camera's low oblique
+	// angle it looked SQUARE — the visible arc across the frame is shallow
+	// enough at that angle that a true circle and the court's own straight
+	// edges underneath it were hard to tell apart. IslandRadius is a per-angle
+	// function now (BlobRadius below): three sine harmonics at different
+	// frequencies and phases so the coastline wanders in and out without
+	// repeating symmetry — a natural-looking outline instead of a gear or a
+	// flower, which is what happens with a single harmonic or harmonics that
+	// share a phase.
+	//
+	// Centred on the court (the court is spawned at the world origin —
+	// GameMode.as). The sand skirt's furthest corner sits at
+	// sqrt(1300^2+900^2) ~= 1581 from centre, and the dune ridge reaches
+	// ~1749; verified numerically (see the constants below) that the blob's
+	// TIGHTEST point never comes closer than 1913 — clears both with margin
+	// at every angle, not just on average. M_Sand and M_Water compute the same
+	// BlobRadius(angle) in the shader (parameters "IslandRadius" for the base
+	// and "BlobAmplitude" for the wobble) so the wet band, the foam and the
+	// water's depth fade all follow the actual wandering coastline rather than
+	// a circle that no longer matches the geometry.
+	const float IslandRadius = 2300.0f;
+	const float IslandBlobAmp = 0.17f;
 	const float WaterZ = -40.0f;
 	const float WaterHalf = 20000.0f;   // 400 m square ocean
 
@@ -319,17 +332,22 @@ class AEnvironment : AActor
 		BackshoreMesh.SetCastShadow(false);
 
 		const int Rings = 18;
-		const int Segs  = 48;
+		const int Segs  = 64;
 		TArray<FVector> V; TArray<int32> T2; TArray<FVector> Nrm;
 		TArray<FVector2D> UV; TArray<FLinearColor> C;
 		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
 
 		for (int ri = 0; ri <= Rings; ri++)
 		{
-			float R = IslandRadius * float(ri) / float(Rings);
 			for (int sj = 0; sj <= Segs; sj++)
 			{
 				float Ang = 2.0f * PI * float(sj) / float(Segs);
+				// The blob boundary at THIS angle, scaled by how far out this ring
+				// sits. Scaling the local (angle-dependent) radius rather than a
+				// fixed one keeps every ring's outline the same shape as the
+				// coastline, just smaller — no self-intersection, because r grows
+				// monotonically with ri at every angle.
+				float R = BlobRadius(Ang) * float(ri) / float(Rings);
 				V.Add(FVector(Math::Cos(Ang) * R, Math::Sin(Ang) * R, -2.0f));
 				Nrm.Add(FVector(0, 0, 1));
 				UV.Add(FVector2D(float(ri) / float(Rings), float(sj) / float(Segs)));
@@ -354,6 +372,7 @@ class AEnvironment : AActor
 		if (MID != nullptr)
 		{
 			MID.SetScalarParameterValue(n"IslandRadius", IslandRadius);
+			MID.SetScalarParameterValue(n"BlobAmplitude", IslandBlobAmp);
 			MID.SetScalarParameterValue(n"WetWidth", 160.0f);
 		}
 	}
@@ -407,6 +426,7 @@ class AEnvironment : AActor
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(WaterMesh, 0, "/Game/Materials/M_Water.M_Water");
 		if (MID != nullptr)
 			MID.SetScalarParameterValue(n"IslandRadius", IslandRadius);
+			MID.SetScalarParameterValue(n"BlobAmplitude", IslandBlobAmp);
 	}
 
 	// Low dunes behind the court (+Y) so the sand does not end in a hard line
@@ -468,6 +488,19 @@ class AEnvironment : AActor
 
 		DuneMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
 		ApplyAuthoredMaterial(DuneMesh, 0, "/Game/Materials/M_Sand.M_Sand");
+	}
+
+	// Three sine harmonics at incommensurate frequencies (2, 3, 5) and unrelated
+	// phases, weighted so they sum to at most 1.0 in magnitude. MUST MATCH the
+	// copy in M_Sand.M_Sand and M_Water.M_Water exactly — verified numerically
+	// before picking these constants that the combined minimum never comes
+	// closer than 1913 to the centre (see IslandRadius's comment).
+	private float BlobRadius(float Ang) const
+	{
+		float Wobble = 0.5f * Math::Sin(2.0f * Ang + 0.7f)
+			+ 0.3f * Math::Sin(3.0f * Ang + 2.1f)
+			+ 0.2f * Math::Sin(5.0f * Ang + 4.0f);
+		return IslandRadius * (1.0f + IslandBlobAmp * Wobble);
 	}
 
 	private float DuneHeight(float X, float Y) const

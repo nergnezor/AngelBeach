@@ -199,7 +199,14 @@ class ACourt : AActor
 			// M_Sand's shoreline mask (Etapp 4). Duplicated rather than shared for
 			// the same module-isolation reason as ApplySolidColorMaterial: keep this
 			// number in step with Environment.as::IslandRadius by hand.
-			SandMID.SetScalarParameterValue(n"IslandRadius", 1950.0f);
+			// Kept in step with Environment.as::IslandRadius/IslandBlobAmp by hand
+			// (module isolation — see ApplySolidColorMaterial's comment). The wet
+			// band never actually reaches the court itself at these numbers — the
+			// closest sand-skirt corner is ~1581 from centre, comfortably inside
+			// even the blob's tightest point at ~1913 — but the shader still needs
+			// a real value to evaluate the mask against.
+			SandMID.SetScalarParameterValue(n"IslandRadius", 2300.0f);
+			SandMID.SetScalarParameterValue(n"BlobAmplitude", 0.17f);
 			SandMID.SetScalarParameterValue(n"WetWidth", 160.0f);
 		}
 	}
