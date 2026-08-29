@@ -334,7 +334,7 @@ class ACourt : AActor
 			}
 
 			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
-			ApplySolidColorMaterial(NetMesh, 0, NetBandColor);
+			ApplySolidColorMaterial(NetMesh, 0, NetBandColor, 0.55f);
 		}
 
 		// --- Section 1: white top tape — the classic visual cue for the net line
@@ -345,7 +345,7 @@ class ACourt : AActor
 			AddNetStrip(V, T, N, UV, C, NetTapeColor, -HW, HW, BandTop, NetHeight);
 			NetMesh.CreateMeshSection_LinearColor(1, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 
-			ApplySolidColorMaterial(NetMesh, 1, NetTapeColor);
+			ApplySolidColorMaterial(NetMesh, 1, NetTapeColor, 0.72f);
 		}
 	}
 
@@ -416,7 +416,7 @@ class ACourt : AActor
 
 		// Never had a material at all — the court lines were drawn in whatever the
 		// engine's fallback material happened to look like.
-		ApplySolidColorMaterial(LinesMesh, 0, LineColor);
+		ApplySolidColorMaterial(LinesMesh, 0, LineColor, 0.68f);
 	}
 
 	private void AddLine(TArray<FVector>& Verts, TArray<int32>& Tris,
@@ -462,7 +462,7 @@ class ACourt : AActor
 			C, Tan, false);
 
 		// Never had a material either (same as BuildLines above).
-		ApplySolidColorMaterial(PostsMesh, 0, PostColor);
+		ApplySolidColorMaterial(PostsMesh, 0, PostColor, 0.38f);
 	}
 
 	private void AddCylinder(TArray<FVector>& Verts, TArray<int32>& Tris,
@@ -551,7 +551,11 @@ class ACourt : AActor
 		return Comp.CreateDynamicMaterialInstance(Section, Base);
 	}
 
-	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
+	// Roughness is the second half of what a surface IS, and every caller was
+	// leaving it at BasicShapeMaterial's default — so nylon cord, canvas tape,
+	// chalk line paint and painted steel all had identical gloss. It costs nothing
+	// to be right about it: the material already exposes the parameter.
+	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color, float Roughness = 0.9f)
 	{
 		if (Comp == nullptr) return nullptr;
 
@@ -561,7 +565,10 @@ class ACourt : AActor
 
 		UMaterialInstanceDynamic MID = Comp.CreateDynamicMaterialInstance(Section, Base);
 		if (MID != nullptr)
+		{
 			MID.SetVectorParameterValue(n"Color", Color);
+			MID.SetScalarParameterValue(n"Roughness", Roughness);
+		}
 		return MID;
 	}
 }

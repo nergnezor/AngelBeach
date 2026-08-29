@@ -76,12 +76,39 @@ class AAIPlayer : AVolleyballPlayer
 		// note this is checked BEFORE the dead-ball branch because the ball goes
 		// live at the strike (phase 0.78) while the gesture runs to 1.0.
 		if (bServing)
-		{
 			RunServeSequence(DeltaTime);
-			return;
-		}
+		else
+			RunAIBrain(DeltaTime);
 
-		RunAIBrain(DeltaTime);
+		// WATCHING THE BALL IS PERCEPTION, NOT DECISION — so it runs at full
+		// frame rate, above the decision cadence, exactly like the split step.
+		//
+		// This is the shake, measured rather than guessed at. FaceBall() used to
+		// live only inside UpdateAI, which sits behind BOTH the 0.16s perception
+		// blackout and the ~0.11s reaction gate, while a facing request expires
+		// after FacingHoldTimer = 0.2s. Any ball touch therefore opened a gap of
+		// up to 0.27s containing no facing request at all. The hold lapsed, the
+		// rotation authority fell through to its next source — travel-facing,
+		// 15-40 deg away — the body swung there, and swung back when the brain
+		// resumed. The waveform trace shows it plainly: src goes 1 -> 0 -> 1 and
+		// the target makes a ~40 deg round trip with it, every touch.
+		//
+		// It is reported as "before every receive" because a touch is precisely
+		// what sends a ball toward a receiver, so the blackout fires on the
+		// approach every single time.
+		//
+		// Note the old comment on the perception gate claimed "the facing hold
+		// carries the old intent through the gap". It could not: 0.2 < 0.27. The
+		// repair is not a longer hold — that is the same coincidence-of-constants
+		// that keeps breaking — but taking eye tracking out of the decision path,
+		// which is also where it belongs physically. A player does not stop
+		// looking at the ball for 160ms while deciding what to do about it.
+		//
+		// Guarded on bHasFacing so a branch that ran this frame and asked for
+		// something MORE specific (the spike approach's open shoulder, a dive)
+		// still wins; this only fills the frames where nothing asked at all.
+		if (!bHasFacing && !bServing && Ball != nullptr && Ball.bInPlay && !IsDiving())
+			RequestBallFacing();
 	}
 
 	// The dead-ball reset, perception latency and reaction gate, in one place.
@@ -1052,13 +1079,61 @@ class AAIPlayer : AVolleyballPlayer
 		// Request facing via the single rotation authority (UpdatePlayer lerps to it)
 		// rather than snapping the rotation here — snapping fought the travel-facing
 		// and caused jerky spinning, especially mid-jump.
+		RequestBallFacing();
+	}
+
+	// A BEARING COMPUTED FROM A SHRINKING VECTOR IS NOT A DIRECTION.
+	//
+	// This one line was the shake reported as "de vibrerar mellan två positioner,
+	// innan varje mottag". The old guard was SizeSquared() > 1.0f — one square
+	// CENTIMETRE — so a ball 2cm from the player's vertical axis still produced a
+	// facing target, and that target's angular rate goes as v/r: at r = 10cm a
+	// ball crossing at 400 cm/s sweeps the bearing at 2300 deg/s. The body chases
+	// it through three cascaded rate limiters (SmFacingDir 300, SmWantDir 300,
+	// the body 450 deg/s), and cascaded lags chasing a target that sweeps faster
+	// than they can follow is the textbook recipe for a limit cycle. Measured on
+	// the live run: yaw reversing at +-60 to +-110 deg/s with speed=0, moveIn=0,
+	// hit set — a planted player rocking in place.
+	//
+	// It happens BEFORE EVERY RECEIVE by construction: the receiver plants at the
+	// contact point (standoff 35cm, and zero on a vertical drop) and the ball
+	// then descends onto exactly that spot, so r goes to zero every single time.
+	//
+	// Every position-based detector is blind to it because the FEET NEVER MOVE:
+	// wasteWorst stays at 100 (a perfectly straight path of length zero) while
+	// the whole body rocks. See MonYawRevisit below for the fix to that.
+	//
+	// The repair is not more smoothing — smoothing a target that sweeps through
+	// 180 deg only converts a snap into a sustained rock, which is precisely what
+	// the previous pass did. Inside FaceNearRadius the ball is no longer
+	// something to LOOK AT, it is something ARRIVING: face where it is coming
+	// FROM. The flight chord is stable all the way to contact, and squaring up to
+	// the incoming ball is also what a real player does on a dig.
+	private void RequestBallFacing()
+	{
 		FVector To = Ball.Position - GetActorLocation();
-		To.Z = 0;
-		if (To.SizeSquared() > 1.0f)
+		To.Z = 0.0f;
+
+		// Above this radius the bearing is well conditioned: at 150cm even a
+		// 900 cm/s crossing ball sweeps it at 344 deg/s, which the body can
+		// track without lagging into oscillation.
+		const float FaceNearRadius = 150.0f;
+		if (To.SizeSquared() > FaceNearRadius * FaceNearRadius)
 		{
 			FacingDir = To.GetSafeNormal();
 			bHasFacing = true;
+			return;
 		}
+
+		// Close in: face the ball's approach instead of its position.
+		FVector From = FVector(-Ball.BallVel.X, -Ball.BallVel.Y, 0.0f);
+		if (From.SizeSquared() > 100.0f * 100.0f)   // 100 cm/s of usable horizontal flight
+			FacingDir = From.GetSafeNormal();
+		// else: a near-vertical drop has no horizontal bearing at all. HOLD the
+		// last one — still asserting bHasFacing so the request does not lapse
+		// into velocity-facing, which would hand the body a fresh target and
+		// restart the very oscillation this exists to prevent.
+		bHasFacing = true;
 	}
 
 
@@ -1066,14 +1141,9 @@ class AAIPlayer : AVolleyballPlayer
 	// we're oriented into the play while standing still.
 	private void FaceAttacker()
 	{
-		// Same single-authority facing request (smooth lerp in UpdatePlayer).
-		FVector Look = Ball.Position - GetActorLocation();
-		Look.Z = 0;
-		if (Look.SizeSquared() > 1.0f)
-		{
-			FacingDir = Look.GetSafeNormal();
-			bHasFacing = true;
-		}
+		// Same single-authority facing request, and the same degenerate-bearing
+		// guard — a blocker at the net has the ball come at them too.
+		RequestBallFacing();
 	}
 
 	// Minimum desired distance between teammates: about half the court width, so an

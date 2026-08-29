@@ -916,6 +916,98 @@ class AVolleyballPlayer : APawn
 		MonWasteStart = P;
 	}
 
+	// ---------------------------------------------------------------
+	// THE SAME PRIMITIVE, ON THE DEGREES OF FREEDOM IT DID NOT COVER.
+	//
+	// UpdateWastedTravel was introduced with the claim that it "cannot go blind".
+	// That was true, and insufficient: it watches TRANSLATION. A planted player
+	// rocking on the spot walks a path of length zero, so it reports a perfectly
+	// straight 100 forever while the entire body visibly shakes — which is
+	// exactly what the live run showed while the shake was being reported.
+	//
+	// Yaw and crouch were still guarded only by the derivative flip counters,
+	// and those are blind for the reason spelled out above: every writer is
+	// rate-limited, so the derivative always passes smoothly through zero.
+	// yawFlips read 0 on rallies whose YFLIP dumps show the body reversing at
+	// +-100 deg/s with the feet stationary.
+	//
+	// Revisit ratio does not care which quantity it is fed, only that the
+	// quantity has a path and an extent. Steady turn: path == extent -> 1.0.
+	// Rock back and forth N times: 2N. No threshold, no rate, nothing a limiter
+	// can hide behind. Three channels now share it — position, yaw, crouch —
+	// which is the point: the guard belongs to the measurement, not to a list of
+	// specific bugs someone remembered to write a detector for.
+	private float MonRotWindow = 0.0f;
+	private float MonYawPath = 0.0f;         // degrees turned inside the window
+	private float MonYawSpan = 0.0f;         // furthest from the window's start yaw
+	private float MonYawWinStart = 0.0f;
+	private float MonYawRevisit = 0.0f;      // worst yaw path/extent x100 this rally
+	private float MonYawRevisitWin = 100.0f; // this window's, for the JITTER gate
+	private float MonCrPath = 0.0f;
+	private float MonCrSpan = 0.0f;
+	private float MonCrWinStart = 0.0f;
+	private float MonCrRevisit = 0.0f;
+	private float MonCrRevisitWin = 100.0f;
+	private float MonPrevYawRaw = 0.0f;
+	private float MonPrevCrouchRaw = 0.0f;
+	private bool bMonRotInit = false;
+	// Below these the channel is holding still and the ratio would divide by
+	// noise. 20 deg of turning inside 0.7s is a real turn; 0.15 of crouch is a
+	// real knee bend.
+	const float RevisitMinYaw = 20.0f;
+	const float RevisitMinCrouch = 0.15f;
+	// Per-frame waveform dump for shake_scope.py. ~4 lines/frame; a 90s run is
+	// about 3MB of log, which is why it is a switch and not always on.
+	const bool bTraceMotion = true;
+	private float MonTraceT = 0.0f;
+
+	private void UpdateRotRevisit(float DeltaTime, float Yaw, float Crouch)
+	{
+		if (!bMonRotInit)
+		{
+			bMonRotInit = true;
+			MonPrevYawRaw = Yaw;
+			MonPrevCrouchRaw = Crouch;
+			MonYawWinStart = Yaw;
+			MonCrWinStart = Crouch;
+			return;
+		}
+
+		MonYawPath += Math::Abs(Math::FindDeltaAngleDegrees(MonPrevYawRaw, Yaw));
+		MonPrevYawRaw = Yaw;
+		float YSpan = Math::Abs(Math::FindDeltaAngleDegrees(MonYawWinStart, Yaw));
+		if (YSpan > MonYawSpan) MonYawSpan = YSpan;
+
+		MonCrPath += Math::Abs(Crouch - MonPrevCrouchRaw);
+		MonPrevCrouchRaw = Crouch;
+		float CSpan = Math::Abs(Crouch - MonCrWinStart);
+		if (CSpan > MonCrSpan) MonCrSpan = CSpan;
+
+		MonRotWindow += DeltaTime;
+		if (MonRotWindow < WasteWindowSecs) return;
+
+		MonYawRevisitWin = 100.0f;
+		if (MonYawPath >= RevisitMinYaw && MonYawSpan > 1.0f)
+		{
+			MonYawRevisitWin = (MonYawPath / MonYawSpan) * 100.0f;
+			if (MonYawRevisitWin > MonYawRevisit) MonYawRevisit = MonYawRevisitWin;
+		}
+		MonCrRevisitWin = 100.0f;
+		if (MonCrPath >= RevisitMinCrouch && MonCrSpan > 0.01f)
+		{
+			MonCrRevisitWin = (MonCrPath / MonCrSpan) * 100.0f;
+			if (MonCrRevisitWin > MonCrRevisit) MonCrRevisit = MonCrRevisitWin;
+		}
+
+		MonRotWindow = 0.0f;
+		MonYawPath = 0.0f;
+		MonYawSpan = 0.0f;
+		MonYawWinStart = Yaw;
+		MonCrPath = 0.0f;
+		MonCrSpan = 0.0f;
+		MonCrWinStart = Crouch;
+	}
+
 	// BONE-LEVEL JITTER — the solver's OUTPUT, which is what the eye actually sees.
 	// Every detector above watches script INTENT (velocity, yaw, crouch, hand
 	// targets). The visible pose is the FBIK solve on top of that, and the solver
@@ -1231,6 +1323,8 @@ class AVolleyballPlayer : APawn
 			+ " yawRateMax=" + int(MonYawRateMax)
 			+ " wasteWorst=" + int(MonWasteWorst)
 			+ " wasteTotal=" + int(MonWasteTotal)
+			+ " yawRevisit=" + int(MonYawRevisit)
+			+ " crouchRevisit=" + int(MonCrRevisit)
 			+ " footSlide=" + int(MonFootSlide)
 			+ " pelvisFlips=" + MonPelvisFlips
 			+ " kneeWalk=" + int(KneeWalkMean())
@@ -1297,6 +1391,39 @@ class AVolleyballPlayer : APawn
 		float Yaw = GetActorRotation().Yaw;
 		float CrouchNow = (Anim != nullptr) ? Anim.CrouchAmount : 0.0f;
 		FVector HandR = (Anim != nullptr) ? Anim.HandTargetR : FVector::ZeroVector;
+		UpdateRotRevisit(DeltaTime, Yaw, CrouchNow);
+
+		// WAVEFORM TRACE. A ratio can say "this oscillates" but never "at what
+		// frequency, at what amplitude, driven by which source" — and guessing
+		// the answer from a ratio has now cost one wrong fix. One line per player
+		// per frame; scripts/shake_scope.py reconstructs the signal, finds the
+		// dominant frequency per channel, and reports which facing source was
+		// selected while it happened. Diagnostic, not telemetry: off by default.
+		if (bTraceMotion)
+		{
+			MonTraceT += DeltaTime;
+			// Pelvis RELATIVE TO THE ACTOR is the decisive split, the same shape
+			// as target-vs-yaw: it separates "the character moved" from "the mesh
+			// moved inside the character". Script-side movement cannot appear in
+			// it at all, so anything oscillating here is the anim/IK layer.
+			FVector Pv = (Mesh != nullptr)
+				? Mesh.GetBoneTransform(n"pelvis").Translation - GetActorLocation()
+				: FVector::ZeroVector;
+			Log("TRACE " + GetName() + " t=" + int(MonTraceT * 1000.0f)
+				+ " px=" + int(Pv.X * 10.0f)
+				+ " py=" + int(Pv.Y * 10.0f)
+				+ " pz=" + int(Pv.Z * 10.0f)
+				+ " ik=" + int(IKWeight * 100.0f)
+				+ " la=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
+				+ " yaw=" + int(Yaw * 10.0f)
+				+ " want=" + int(DbgWantYaw * 10.0f)
+				+ " src=" + DbgFacingSrc
+				+ " cr=" + int(CrouchNow * 1000.0f)
+				+ " spd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
+				+ " hit=" + int(CurrentHit)
+				+ " x=" + int(GetActorLocation().X)
+				+ " y=" + int(GetActorLocation().Y));
+		}
 
 		if (!bMonInit)
 		{
@@ -1506,10 +1633,13 @@ class AVolleyballPlayer : APawn
 				? MonGoalPath / Math::Max(MonGoalExtent, 1.0f) : 1.0f;
 			if (int(GoalRatio * 100.0f) > MonGoalJumps) MonGoalJumps = int(GoalRatio * 100.0f);
 			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3
-				|| MonIKTeleports >= 1 || WinRatio > 2.5f || GoalRatio > 2.5f)
+				|| MonIKTeleports >= 1 || WinRatio > 2.5f || GoalRatio > 2.5f
+				|| MonYawRevisitWin > 250.0f || MonCrRevisitWin > 250.0f)
 			{
 				Log("JITTER team=" + int(TeamSide)
 					+ " revisit=" + int(WinRatio * 100.0f)
+					+ " yawRevisit=" + int(MonYawRevisitWin)
+					+ " crouchRevisit=" + int(MonCrRevisitWin)
 					+ " goalChurn=" + int(GoalRatio * 100.0f)
 					+ " moveFlips=" + MonMoveFlips
 					+ " yawFlips=" + MonYawFlips

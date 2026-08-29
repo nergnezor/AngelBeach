@@ -38,7 +38,8 @@ TARGETS = {
 # rally's motion time would be meaningless. wasteWorst is the worst single
 # window, not an accumulation.
 RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
-            "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha"}
+            "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha",
+            "yawRevisit", "crouchRevisit"}
 
 
 def parse(path):
@@ -120,10 +121,17 @@ def main():
         # itself rather than a tuning knob: a run wastes ~0, standing wastes ~0,
         # and only a shuttle scores. See UpdateWastedTravel for why the older
         # derivative-based flip counters cannot see this at all.
-        print("JITTER — wasted travel (walking that arrives nowhere)")
+        # Three channels, one primitive. wasteWorst watches TRANSLATION only,
+        # and a player rocking on the spot walks a path of length zero — it
+        # scored a clean 100 through an entire run of visible shaking. yaw and
+        # crouch close that: the same path/extent ratio on the two degrees of
+        # freedom a planted body can still churn.
+        print("JITTER — revisited ground (motion that arrives nowhere)")
         jit_fail = 0
         for key, limit, unit, src in (
                 ("wasteWorst", 250.0, "path/extent x100 in one 0.7s window", raw),
+                ("yawRevisit", 250.0, "deg turned / deg net, x100 (rocking in place)", raw),
+                ("crouchRevisit", 250.0, "crouch travel / net, x100 (knee flapping)", raw),
                 ("wasteTotal", 60.0, "cm of reground per second of motion", motion)):
             if key not in src:
                 continue

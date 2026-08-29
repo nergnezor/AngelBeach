@@ -213,6 +213,52 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	{
 		NewNode = CreateEventNode(Graph, NodeParams);
 	}
+	// GENERIC FALLBACK: any node class, addressed by its class path.
+	//
+	// The named cases above only cover K2 node types, which left whole graph
+	// families unreachable — most painfully AnimGraph, where there is no other
+	// way in at all: UEdGraph::Nodes is protected so Python cannot append to it,
+	// and no engine Python API creates EdGraph nodes. Wiring a blend space or an
+	// IK node therefore required a human clicking in the editor.
+	//
+	// Resolution is by reflection through the UEdGraphNode base API, so this
+	// deliberately links nothing new — no AnimGraph module dependency — and it
+	// works for node classes this plugin has never heard of.
+	else if (NodeType.StartsWith(TEXT("/Script/")))
+	{
+		UClass* NodeClass = LoadClass<UEdGraphNode>(nullptr, *NodeType);
+		if (!NodeClass)
+		{
+			return CreateErrorResponse(FString::Printf(TEXT("Node class not found: %s"), *NodeType));
+		}
+
+		UEdGraphNode* GenericNode = NewObject<UEdGraphNode>(Graph, NodeClass, NAME_None, RF_Transactional);
+		if (!GenericNode)
+		{
+			return CreateErrorResponse(FString::Printf(TEXT("Failed to instantiate %s"), *NodeType));
+		}
+
+		double GPosX = 0.0;
+		double GPosY = 0.0;
+		NodeParams->TryGetNumberField(TEXT("pos_x"), GPosX);
+		NodeParams->TryGetNumberField(TEXT("pos_y"), GPosY);
+		GenericNode->NodePosX = static_cast<int32>(GPosX);
+		GenericNode->NodePosY = static_cast<int32>(GPosY);
+
+		Graph->AddNode(GenericNode, true, false);
+		GenericNode->CreateNewGuid();
+		GenericNode->PostPlacedNewNode();
+		GenericNode->AllocateDefaultPins();
+
+		Graph->NotifyGraphChanged();
+		FBlueprintEditorUtils::MarkBlueprintAsModified(BP);
+
+		TSharedPtr<FJsonObject> GenericResult = MakeShareable(new FJsonObject);
+		GenericResult->SetBoolField(TEXT("success"), true);
+		GenericResult->SetStringField(TEXT("node_id"), GenericNode->GetName());
+		GenericResult->SetStringField(TEXT("node_type"), NodeType);
+		return GenericResult;
+	}
 	else
 	{
 		return CreateErrorResponse(FString::Printf(TEXT("Unknown node type: %s"), *NodeType));

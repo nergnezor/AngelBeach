@@ -54,24 +54,37 @@ class ABall : AActor
 	{
 		BuildSphereMesh();
 
-		// Glowing yellow ball: drive the material colour with an HDR (>1) yellow so
-		// it reads as self-lit and blooms, and attach a yellow point light so it
-		// actually casts a warm glow on the court.
-		UMaterialInterface BallMat = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-		if (BallMat != nullptr)
+		// THE BALL IS A BALL NOW, NOT A LIGHT BULB.
+		//
+		// It used to be painted HDR yellow (2.4, 2.3, 0.25) with a 1500-intensity
+		// point light inside it, so that it read as self-lit and bloomed. Four
+		// problems with that, and they compound:
+		//   - An albedo above 1.0 is not a colour any surface has. It reflects more
+		//     light than falls on it.
+		//   - It guaranteed the ball clipped to a flat yellow blob with no shading
+		//     gradient across it — which is why its rotation was invisible even
+		//     though UpdateSpin has been computing a correct spin all along.
+		//   - The point light sat INSIDE the sphere, so it lit nothing on the ball
+		//     and instead threw a fake yellow pool onto the sand that Lumen then
+		//     bounced around the court.
+		//   - It fought the tonemapper: the one object in frame that ignored it.
+		//
+		// M_Ball paints real panels instead. Asymmetric panel colour is precisely the
+		// cue the eye uses to see rotation, so the spin becomes visible by being
+		// lit rather than by being bright. If the ball is ever hard to follow in
+		// play, the fix is a motion trail and a grounded contact shadow — not a
+		// light bulb.
+		if (ApplyAuthoredMaterial("/Game/Materials/M_Ball.M_Ball") == nullptr)
 		{
-			UMaterialInstanceDynamic MID = MeshComp.CreateDynamicMaterialInstance(0, BallMat);
-			if (MID != nullptr)
-				MID.SetVectorParameterValue(n"Color", FLinearColor(2.4f, 2.3f, 0.25f, 1.0f)); // HDR yellow (R≈G), glows
+			UMaterialInterface BallMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+				"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+			if (BallMat != nullptr)
+			{
+				UMaterialInstanceDynamic MID = MeshComp.CreateDynamicMaterialInstance(0, BallMat);
+				if (MID != nullptr)
+					MID.SetVectorParameterValue(n"Color", FLinearColor(0.72f, 0.64f, 0.16f, 1.0f));
+			}
 		}
-
-		UPointLightComponent Glow = UPointLightComponent::Create(this);
-		Glow.AttachToComponent(MeshComp);
-		Glow.SetLightColor(FLinearColor(1.0f, 0.95f, 0.3f));
-		Glow.SetIntensity(1500.0f);
-		Glow.SetAttenuationRadius(350.0f);
-		Glow.SetCastShadows(false);
 	}
 
 	UFUNCTION(BlueprintOverride)
@@ -245,6 +258,17 @@ class ABall : AActor
 		}
 	}
 
+	private UMaterialInstanceDynamic ApplyAuthoredMaterial(FString Path)
+	{
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr, Path));
+		if (Base == nullptr)
+		{
+			Log("MATERIAL missing: " + Path + " — falling back to flat colour");
+			return nullptr;
+		}
+		return MeshComp.CreateDynamicMaterialInstance(0, Base);
+	}
+
 	private void BuildSphereMesh()
 	{
 		TArray<FVector> Verts;
@@ -255,8 +279,12 @@ class ABall : AActor
 		TArray<FVector2D> NoUV;
 		TArray<FProcMeshTangent> Tangents;
 
-		int Stacks = 12;
-		int Slices = 16;
+		// 12x16 gave a silhouette that read as a polygon at any distance, and a
+		// shading terminator coarse enough that the unlit half looked like a hole in
+		// the ball. ~3k triangles is free for a single object the camera follows in
+		// every frame of the game.
+		int Stacks = 32;
+		int Slices = 48;
 		float R = BallRadius;
 
 		for (int i = 0; i <= Stacks; i++)
@@ -274,6 +302,15 @@ class ABall : AActor
 				Normals.Add(N);
 				UVs.Add(FVector2D(float(j) / Slices, float(i) / Stacks));
 				Colors.Add(FLinearColor(1, 1, 1, 1));
+				// TANGENTS ARE NOT OPTIONAL HERE. This array was declared and never
+				// filled, which means a tangent-space normal map could not work on the
+				// ball at all. The sand gets away with a world-space normal because it
+				// never moves; a ball that spins does not. For a UV sphere the tangent
+				// along increasing Theta is simply (-sin Theta, cos Theta, 0).
+				FProcMeshTangent Tan;
+				Tan.TangentX = FVector(-Math::Sin(Theta), Math::Cos(Theta), 0.0f);
+				Tan.bFlipTangentY = false;
+				Tangents.Add(Tan);
 			}
 		}
 

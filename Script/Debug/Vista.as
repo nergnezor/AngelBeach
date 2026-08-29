@@ -50,7 +50,7 @@ class AVistaGameMode : ABeachVolleyballGameMode
 
 	// Where the ball is parked. Chosen to sit in Team A's half, clear of the net,
 	// at roughly contact height so the "ball" shot reads as a ball in play.
-	const FVector BallMark = FVector(-300, 0, 120);
+	const FVector BallMark = FVector(-450, 200, 120);
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
@@ -85,7 +85,10 @@ class AVistaGameMode : ABeachVolleyballGameMode
 
 		// 3. The ball, close. It is the object the camera follows in every frame of
 		//    the real game, and today it is a flat HDR-yellow sphere.
-		S.Name = "ball";     S.Pos = FVector(-425, 55, 148);   S.Look = BallMark;
+		// Re-aimed once: the first placement put a player directly behind the ball
+		// along the view ray, so the subject of the shot was read against a body
+		// instead of against sand. Clear sand behind it now.
+		S.Name = "ball";     S.Pos = FVector(-565, 272, 162);  S.Look = BallMark;
 		S.Note = "ball at ~130cm: panel seams, shading gradient, silhouette tessellation";
 		Shots.Add(S);
 
