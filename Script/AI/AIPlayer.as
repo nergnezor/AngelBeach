@@ -107,6 +107,15 @@ class AAIPlayer : AVolleyballPlayer
 			bOnTwoLoggedNotViable = false;
 			bSpikeCueOn = false;    // a committed attack cue must not outlive its ball
 			bServeRecvLogged = false;
+			bRecvPlanLogged = false;
+			// Start every rally in Base with the dwell already spent. StateDwell
+			// only advances inside UpdateAI, which the dead ball returns before —
+			// so without this a player carried the previous rally's state AND a
+			// frozen dwell into the next serve, and could be barred from taking
+			// the Job for up to 0.35s of a ~1.7s serve flight. The dwell exists
+			// to stop mid-rally churn, not to make players slow off the mark.
+			PlayState = EPlayState::Play_Base;
+			StateDwell = StateMinDwell;
 
 			// The one player the GameMode nominated fetches the ball instead of
 			// strolling to formation. RunFetchSequence returns false once it is
@@ -659,8 +668,31 @@ class AAIPlayer : AVolleyballPlayer
 			// teammates swapped hitter/support every AI tick and both shuttled
 			// between two goals. The incumbent keeps the ball unless the partner
 			// is CLEARLY closer.
-			float Margin = bWasHitter ? 60.0f : -60.0f;
-			bMine = MyDist <= TheirDist + Margin;
+			//
+			// The margin comes from the PAIR's state, not from my own flag, and
+			// that is what makes this decision have exactly one winner. It used
+			// to be `bWasHitter ? +60 : -60`, evaluated independently by both
+			// players with the SAME sign — so at the start of every rally, when
+			// both flags are false, both used -60 and each claimed only if it was
+			// 60cm closer than the other. Any ball landing between them, with the
+			// two within 60cm of equal distance, was claimed by NEITHER and
+			// simply dropped. (Both flags true inverted it: both claimed and both
+			// chased.) With the support state now gone, "neither claims" means
+			// both walk to base and watch the ball land.
+			//
+			// Reading both flags makes the comparison antisymmetric: whoever
+			// holds the claim gets +60, the other gets -60, and if nobody holds
+			// it both get 0 and pure distance decides. One of the two conditions
+			// is always true and never both.
+			bool bIHoldIt = bWasHitter && !Teammate.bWasHitter;
+			bool bTheyHoldIt = Teammate.bWasHitter && !bWasHitter;
+			float Margin = bIHoldIt ? 60.0f : (bTheyHoldIt ? -60.0f : 0.0f);
+			// Exact ties still need a winner, and a coin flip would alternate.
+			// Role is stable and opposite for the two players, so it decides once
+			// and identically on both sides.
+			bMine = (MyDist != TheirDist)
+				? (MyDist <= TheirDist + Margin)
+				: (Role == EPlayerRole::Role_Back);
 		}
 
 		// One line per player per deep receive, so who takes it can be COUNTED
@@ -694,6 +726,8 @@ class AAIPlayer : AVolleyballPlayer
 
 	// One SERVERECV line per dead-ball-to-contact cycle; reset on every dead ball.
 	private bool bServeRecvLogged = false;
+	// One RECVPLAN line per ball, reset with the other per-rally flags.
+	private bool bRecvPlanLogged = false;
 
 	// Hysteresis state for AmIHitter (who owns the current ball).
 	private bool bWasHitter = false;
@@ -828,6 +862,29 @@ class AAIPlayer : AVolleyballPlayer
 		// exact run speed the budget demands, when the reach must start, and
 		// whether the ball is only reachable by diving.
 		FInterceptPlan Plan = this.PlanIntercept(ContactHeightFor(Intend), FloorZ + 112.0f);
+
+		// WHY DID THE RECEIVE FAIL? Roughly half of all rallies end with the
+		// serve landing untouched (measured: seq=[ ] with crossings=1), and the
+		// receiver is typically standing 66-77cm from where it lands — so it is
+		// not a distance problem. One line per ball while this is being chased.
+		// Gated on the ball being CLOSE (tau < 0.7s), not on the first tick of
+		// the rally. The first version logged whichever plan happened to exist
+		// when the ball had only just launched and was still 10m away, which
+		// reports a contact point the receiver was never expected to be near
+		// yet — dist=554 for a player who ends up 35cm from the landing spot.
+		// The last moment before contact is the one that decides the outcome.
+		if (Touches == 0 && !bRecvPlanLogged && Plan.BallTime < 0.7f)
+		{
+			bRecvPlanLogged = true;
+			Log("RECVPLAN " + DebugTag()
+				+ " reach=" + (Plan.bReachable ? 1 : 0)
+				+ " dive=" + (Plan.bDive ? 1 : 0)
+				+ " tau=" + int(Plan.BallTime * 100)
+				+ " bodyT=" + int(Plan.BodyTime * 100)
+				+ " handT=" + int(Plan.HandTime * 100)
+				+ " slack=" + int(Plan.Slack * 100)
+				+ " dist=" + int((Plan.Contact - GetActorLocation()).Size2D()));
+		}
 
 		// Desperate ball: nothing playable on foot but the dive window is open.
 		if (Plan.bDive && CanDive())
