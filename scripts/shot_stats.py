@@ -34,18 +34,23 @@ STATE_DIR = os.path.join(os.path.dirname(__file__), "..", "Saved", "ShotStats")
 # parks every player and the ball on a fixed mark before it shoots.
 REGIONS = {
     "Vista_1_wide": {
-        "sky_zenith":  (560, 4, 720, 40),
-        "sky_horizon": (560, 236, 720, 254),
+        # Re-aimed once SkyAtmosphere replaced the dome: what these used to call
+        # "zenith" and "horizon" were the cloud layer and the sea.
+        "sky_zenith":  (560, 60, 720, 100),
+        "sky_horizon": (560, 130, 720, 150),
         "sand_far":    (540, 296, 740, 326),
         "sand_near":   (260, 600, 420, 660),
-        "sea":         (40, 350, 160, 420),
+        "sea":         (560, 185, 720, 240),
     },
     "Vista_2_two_shot": {
         "body":        (686, 300, 726, 430),
         "sand_lit":    (300, 560, 420, 620),
         # The BALL's cast shadow: an isolated ellipse on clean sand, where the
         # net's shadow stripes would have made the reading half lit, half dark.
-        "sand_shadow": (455, 592, 505, 614),
+        # Re-aimed when the sun moved from the zenith to (-45, 70) — a cast
+        # shadow's position is a function of the sun angle, so this rectangle
+        # has to move whenever the sun does.
+        "sand_shadow": (620, 522, 662, 542),
     },
     "Vista_3_ball": {
         "ball":        (600, 320, 690, 400),

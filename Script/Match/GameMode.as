@@ -118,7 +118,49 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// so the lit side matches the camera's usual framing. Desktop is
 		// untouched (still exactly -90) since it was not broken.
 		// Fixed, measured on device: body torso ~(89-102,...) out of 255.
-		FRotator SunRotation = bMobile ? FRotator(-70, 180, 0) : FRotator(-90, 0, 0);
+		//
+		// DESKTOP IS NOW -55, NOT -90. A dead-vertical sun is the flattest light
+		// there is: it puts no shadow anywhere the camera can see, gives a standing
+		// body no lit side and no shadow side, and leaves sand with no visible
+		// relief at all, because relief is only ever visible as shading.
+		//
+		// -90 was never an art decision. It was a mobile fix: the old low backlit
+		// sunset (pitch -6) rendered Android bodies as black silhouettes because
+		// mobile has no GI to fill the camera-facing side, and moving the sun
+		// overhead is what stopped it. That let the platform with the weakest
+		// renderer dictate the look on the platform with the strongest, which is
+		// exactly backwards.
+		//
+		// -55 keeps direct light on the top AND the front of a standing figure
+		// (sin 55 = 0.82 of full on a horizontal surface, cos 55 = 0.57 on a
+		// vertical one) while throwing shadows long enough to read the ground, and
+		// stays far enough from grazing to avoid the specular aliasing a low sun
+		// causes on a rough surface. Yaw 200 puts it front-left of the match
+		// camera. Yaw 35 puts it BEHIND and to the left of the match camera, which
+		// looks down +X from -X. Yaw 200 was tried first and was wrong for exactly
+		// one reason: it threw every shadow back TOWARD the camera, where each one
+		// hides behind the figure that casts it. The wide shot came back with no
+		// readable shadow anywhere on the sand. Shadows only do their job — telling
+		// you where a body is standing and how the ground lies — when they fall
+		// AWAY from the viewer. Yaw 35 still ran them nearly straight up the screen,
+		// where a figure stands on its own shadow; 50 angles them across the frame.
+		//
+		// Pitch settled at -45 rather than -55 for the same reason: shadow length is
+		// height/tan(pitch), so -55 gives a 1.8m player a 1.26m shadow and -45 gives
+		// a full 1.8m one. -45 is still far from grazing.
+		//
+		// DO NOT RAISE THE YAW TO 70. It is not an art constraint, it is a driver
+		// one: yaw 70 kills the GPU with VK_ERROR_DEVICE_LOST (invalid read, device
+		// fault report) while rendering the close-up reference shot, reproducibly,
+		// at both pitch -45 and -55, while yaw 35 and 50 complete the same six-shot
+		// series cleanly every time. Bisected one variable at a time. If a wider
+		// shadow angle is ever wanted, re-test it the same way rather than assuming
+		// the crash was a one-off — it was not.
+		//
+		// MOBILE IS DELIBERATELY UNTOUCHED at (-70,180): its fill values were tuned
+		// against that angle on a real device, and -55 is near enough that the
+		// parity gap stays small — which the old low sun would not have been.
+		FRotator SunRotation = bMobile ? FRotator(-70, 180, 0) : FRotator(-45, 50, 0);
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
 			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), SunRotation));
 		if (SunActor != nullptr)
@@ -127,8 +169,11 @@ class ABeachVolleyballGameMode : AGameModeBase
 				SunActor.GetComponentByClass(UDirectionalLightComponent));
 			if (LC != nullptr)
 			{
-				LC.SetIntensity(6.0f);                                 // bright enough; atmosphere adds glow
-				LC.SetLightColor(FLinearColor(1.0f, 0.98f, 0.92f));   // neutral noon sun, not sunset-warm
+				// Brighter on desktop now that SkyAtmosphere is actually VISIBLE (it used
+					// to render behind the dome): the atmosphere's colour and the sun disc are
+					// both driven by this value. Mobile keeps the 6.0 it was measured at.
+					LC.SetIntensity(bMobile ? 6.0f : 10.0f);
+				LC.SetLightColor(FLinearColor(1.0f, 0.96f, 0.90f));   // midday sun, barely warm
 				LC.CastShadows = true;
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 			}
@@ -138,8 +183,52 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// sunset horizon-glow-to-blue gradient driven by the low sun above.
 		SpawnActor(ASkyAtmosphere, FVector::ZeroVector, FRotator::ZeroRotator);
 
-		// Surrounding environment: water plane beyond the sand (sky is the atmosphere).
+		// Surrounding environment. On desktop this builds ONLY the sea skirt now —
+		// SkyAtmosphere owns everything above the waterline. On mobile it is still
+		// the whole dome, because mobile has no atmosphere. See Environment.as.
 		SpawnActor(AEnvironment, FVector::ZeroVector, FRotator::ZeroRotator);
+
+		if (!bMobile)
+		{
+			// CLOUDS. An empty gradient is the tell that a sky is a shader and not a
+			// place: nothing in it sits at any distance, so it gives the eye no scale
+			// and the sun nothing to break through. Clouds also feed the SkyLight's
+			// real-time capture, so for the first time the ambient light in the scene
+			// comes from the sky that is actually on screen. Engine content — this
+			// costs the repo nothing.
+			AVolumetricCloud CloudActor = Cast<AVolumetricCloud>(
+				SpawnActor(AVolumetricCloud, FVector::ZeroVector, FRotator::ZeroRotator));
+			if (CloudActor != nullptr)
+			{
+				UVolumetricCloudComponent VC = Cast<UVolumetricCloudComponent>(
+					CloudActor.GetComponentByClass(UVolumetricCloudComponent));
+				if (VC != nullptr)
+				{
+					UMaterialInterface CloudMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+						"/Engine/EngineSky/VolumetricClouds/m_SimpleVolumetricCloud_Inst.m_SimpleVolumetricCloud_Inst"));
+					if (CloudMat != nullptr)
+						VC.SetMaterial(CloudMat);
+					// Fair-weather cumulus: base well above the court, shallow layer, so the
+					// clouds sit IN the sky instead of swallowing it.
+					// 8km, not 4. The match camera's axis is only ~22 degrees down, so the top
+					// of frame sits just a few degrees above the horizon — and a low cloud base
+					// puts the SHADED UNDERSIDES of the clouds exactly there. The wide shot came
+					// back with a grey lid over a sunlit court. Higher base, and that band is sky.
+					// Capped at 6.5: 8.0 reproducibly took the GPU down with VK_ERROR_DEVICE_LOST
+					// two runs in a row while rendering the close-up shot.
+					VC.SetLayerBottomAltitude(6.5f);   // km
+					// A THIN layer. At 5km thick the camera looks along the underside of the
+					// clouds at low elevation and sees only their shaded bases, which reads as
+					// overcast however sunny the ground is.
+					VC.SetLayerHeight(2.5f);
+				}
+			}
+
+			// One capture at court centre. Lumen reflections fall back to it wherever
+			// screen-space traces run off the edge of frame and hardware traces miss,
+			// which on a scene this open is most of the horizon.
+			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
+		}
 
 		// SkyLight captures the sky for soft ambient fill so the court isn't black.
 		ASkyLight SkyLightActor = Cast<ASkyLight>(
@@ -156,7 +245,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// crush the players, who are dark-skinned meshes sitting in their own
 				// shadow. More fill, less overall exposure: the sand comes down, the
 				// bodies do not go to pure black.
-				SLC.SetIntensity(bMobile ? MobileSkyLightIntensity : 3.0f);
+				// Desktop drops 3.0 -> 1.0. With real-time capture the SkyLight already
+					// carries the true radiance of the sky it captured, so 1.0 IS the physical
+					// answer and anything above it is triple-counting the sky. 3.0 was set to
+					// stop a -1.5 EV exposure cut from crushing the players — a cut that no
+					// longer exists — and its real cost is that it fills every shadow three
+					// times too brightly, which flattens exactly the modelling the sun angle
+					// was moved to create.
+					SLC.SetIntensity(bMobile ? MobileSkyLightIntensity : 1.0f);
 
 				if (bMobile)
 				{
@@ -206,7 +302,9 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// unfogged and still rendered warm, because it is reflecting the
 				// sky, and the sky was warm haze. Hence the SkyAtmosphere change.)
 				//
-				FC.SetFogDensity(0.002f);
+				// Desktop is thinner AND, crucially, a normal sea-level layer again —
+					// see the falloff below.
+					FC.SetFogDensity(bMobile ? 0.002f : 0.006f);
 				// Stretching the fog layer upward (falloff 0.5 -> 0.1) was an attempt
 				// to make the fog double as the sky on Android, where SkyAtmosphere
 				// was switched off. It did not work — the top of frame went from
@@ -232,12 +330,23 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// 0.02 is five times taller than the tallest tried, chosen to put
 				// the seam decisively out of frame rather than to interpolate a
 				// trend. Court level is unaffected: the fog still starts at 3500.
-				FC.SetFogHeightFalloff(0.02f);
+				// DESKTOP GOES BACK TO A NORMAL FALLOFF. 0.02 is a layer five times
+					// taller than the tallest ever tried, and it exists for one reason: on
+					// Android the fog had to double as the sky. On desktop it now has a real
+					// sky above it, and a layer that tall greys out that sky along every
+					// near-horizontal view ray — which is exactly what the wide shot came
+					// back looking like: a bright sunlit court under an overcast evening.
+					// 0.25 keeps the haze down where the sea is.
+					FC.SetFogHeightFalloff(bMobile ? 0.02f : 0.25f);
 				// Was a warm (0.9,0.5,0.3) orange to match the old low sunset sun;
 				// with the sun overhead there's no horizon glow to match, so this
 				// substitute Android "sky" goes neutral midday blue instead.
 				FC.SetFogInscatteringColor(FLinearColor(0.55f, 0.68f, 0.85f));
-				FC.SetVolumetricFog(false);
+				// Volumetric fog is back ON for desktop. It was off because the fog was
+					// standing in for a sky it could never draw, and a dense flat layer read as
+					// smoke. With SkyAtmosphere drawing the sky, fog goes back to the job it is
+					// actually for: aerial perspective, and shafts where the sun cuts through.
+					FC.SetVolumetricFog(!bMobile);
 				// Must stay OUTSIDE the sky dome (radius 5000 in Environment.as).
 				// Fog saturates to its inscattering colour within a couple of
 				// thousand units at this density, so anything it reaches turns warm
@@ -245,7 +354,12 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// providing the sky, fog has no job left except far-field haze, and
 				// starting it past the dome keeps it from bleaching the gradient or
 				// the water.
-				FC.SetStartDistance(5200.0f);
+				// 5200 existed only to stay outside the 5000-radius dome. On desktop the
+					// dome no longer covers the sky, so fog can come in to where it does some
+					// good: 2200 leaves the court and the near sand completely clear (the match
+					// camera is 1050 out) while the sea beyond it fades with distance, which is
+					// the cue that makes a flat surface read as kilometres instead of metres.
+					FC.SetStartDistance(bMobile ? 5200.0f : 2200.0f);
 				// Was warm to glow toward the low sunset sun disc; with the sun
 				// at the zenith this glow isn't visible from a horizontal camera
 				// anyway, so keep it neutral rather than falsely warm.
@@ -261,41 +375,122 @@ class ABeachVolleyballGameMode : AGameModeBase
 			PPV.bUnbound = true;
 			PPV.Priority = 1.0f;
 			FPostProcessSettings PP = PPV.Settings;
+			// ---------------------------------------------------------------------
+			// THE GRADE. Until now this volume had bloom, an exposure bias, a lens
+			// flare and a vignette — and no colour grading of ANY kind: no white
+			// balance, no saturation, no contrast, no tone curve. A render with no
+			// grade does not look like a photograph of anything, however good the
+			// lighting under it is, because no camera has ever produced that image.
+			// ---------------------------------------------------------------------
+
+			// --- Bloom. Lower than before: with SkyAtmosphere finally visible there is
+			// a real sun disc in frame, and 0.8 around it read as glare rather than lens.
 			PP.bOverride_BloomIntensity = true;
-			PP.BloomIntensity = 0.8f;
+			PP.BloomIntensity = 0.55f;
 			PP.bOverride_BloomThreshold = true;
 			PP.BloomThreshold = 1.0f;
-			// EXPOSURE — measured, not guessed. The scene was blowing out: sand
-			// rendered (243,225,196) at albedo 0.93, and after dropping the albedo
-			// by a third to 0.62 it still rendered (241,218,184). Linear red moved
-			// 0.878 -> 0.880, i.e. not at all, which only happens when the surface
-			// is clipping. Albedo was never the lever — the light was.
-			//
-			// Sand at 0.62 albedo wants to land near 0.35 linear (a proper tan), so
-			// the scene needs about 0.56x the light it was getting. That is -1.5 EV,
-			// hence +1.0 -> -0.5. Everything else falls out of clipping with it:
-			// line paint and net tape stop being pure white, and the near-black net
-			// cord finally reads as cord instead of grey.
-			//
-			// Nudged back up (-0.5 -> +0.25) now the sky dome exists. -1.5 EV was
-			// measured against a scene lit partly by a very bright fog "sky"; the
-			// dome that replaced it is darker, so the sky light bouncing off it is
-			// weaker and the sand fell from 117 to 82 grey — muddy. This is about
-			// +0.75 EV back, which puts the sand near 107 without going anywhere
-			// near the clipping it started at.
-			PP.bOverride_AutoExposureBias = true;
-			PP.AutoExposureBias = 0.25f;
+
+			// --- Physical camera. Exposure and depth of field then both derive from
+			// the same three numbers instead of being tuned against each other. f/4 at
+			// 1/500s and ISO 100 is a sports lens on a bright day — roughly sunny-16.
+			PP.bOverride_CameraShutterSpeed = true;
+			PP.CameraShutterSpeed = 500.0f;
+			PP.bOverride_CameraISO = true;
+			PP.CameraISO = 100.0f;
+			PP.bOverride_DepthOfFieldFstop = true;
+			PP.DepthOfFieldFstop = 4.0f;
+
+			// --- Exposure. The old settings were a manual bias plus a min/max pair in
+			// LEGACY LUMINANCE units, and the long comment justifying them was measured
+			// against a scene lit by a fog "sky" that no longer exists AND captured with
+			// this machine's scalability pinned to low. All of it is history. This is a
+			// histogram auto-exposure with a deliberately WIDE EV100 range: wide enough
+			// that it genuinely adapts as the sun, the sky and the materials change
+			// through this pass rather than silently clamping and making every later
+			// measurement a lie about a different scene.
+			PP.bOverride_AutoExposureMethod = true;
+			PP.AutoExposureMethod = EAutoExposureMethod::AEM_Histogram;
 			PP.bOverride_AutoExposureMinBrightness = true;
-			PP.AutoExposureMinBrightness = 0.5f;
+			// MEASURED, and the first values were wrong in a way worth recording:
+			// 6..18 clamped the whole series ~2.3 stops dark (sand 148 -> 28). The
+			// scene does not sit at a photographic EV, because the sun is 10 "lux" on
+			// a relative scale rather than the ~100000 of real daylight. Sand at 0.62
+			// albedo under a 55-degree 10-lux sun is about 1.6 cd/m2, i.e. EV100 ~3.7,
+			// so a floor of 6 pinned it. -2..16 brackets that with room for the sun,
+			// sky and materials to move through the rest of this pass.
+			PP.AutoExposureMinBrightness = -2.0f;   // EV100
 			PP.bOverride_AutoExposureMaxBrightness = true;
-			PP.AutoExposureMaxBrightness = 3.0f;
-			// Lens flare on the bright sun disc.
+			PP.AutoExposureMaxBrightness = 16.0f;   // EV100
+			PP.bOverride_AutoExposureBias = true;
+			PP.AutoExposureBias = 0.0f;
+
+			// --- Local exposure. A sunlit beach is a genuinely high-dynamic-range
+			// subject and a high sun makes it more so, not less: sand near its clipping
+			// point in the same frame as a body in its own shadow. Local exposure is
+			// what lets both survive one exposure, and it is the single most
+			// under-used post-process feature for outdoor work.
+			PP.bOverride_LocalExposureHighlightContrastScale = true;
+			PP.LocalExposureHighlightContrastScale = 0.8f;
+			PP.bOverride_LocalExposureShadowContrastScale = true;
+			PP.LocalExposureShadowContrastScale = 0.9f;
+
+			// --- White balance. 6500K is neutral daylight: it keeps the sun white and
+			// lets the sky-lit shadows stay blue, which is the honest signature of this
+			// sun rather than a filter laid over it.
+			PP.bOverride_WhiteTemp = true;
+			PP.WhiteTemp = 6500.0f;
+			PP.bOverride_WhiteTint = true;
+			PP.WhiteTint = 0.0f;
+
+			// --- Tone curve. The default response is close to straight; a film shoulder
+			// is what stops bright sand from marching to white in a hard edge, and a toe
+			// is what keeps shadows off pure black.
+			PP.bOverride_ToneCurveAmount = true;
+			PP.ToneCurveAmount = 1.0f;
+			PP.bOverride_FilmSlope = true;
+			PP.FilmSlope = 0.90f;
+			PP.bOverride_FilmToe = true;
+			PP.FilmToe = 0.55f;
+			PP.bOverride_FilmShoulder = true;
+			PP.FilmShoulder = 0.28f;
+			PP.bOverride_ExpandGamut = true;
+			PP.ExpandGamut = 0.4f;
+			PP.bOverride_BlueCorrection = true;
+			// 0.6 is the engine default and it exists to tame OVER-saturated blues.
+			// This sky is not over-saturated — measured (71,94,109), an R/B of 0.65
+			// where a real clear sky is nearer 0.5 — so the default was pulling the one
+			// colour in frame that should be strongest.
+			PP.BlueCorrection = 0.2f;
+
+			// --- Grade. Slightly DESATURATED overall: raw albedo through a renderer is
+			// more saturated than any camera records, and pulling it back is most of
+			// what separates "rendered" from "photographed". Then split-range: shadows
+			// cool and very slightly lifted (they are lit by a blue sky, so this is
+			// physics, not style), highlights a touch warm toward the sun.
+			PP.bOverride_ColorSaturation = true;
+			PP.ColorSaturation = FVector4(1.0f, 1.0f, 1.0f, 0.96f);
+			PP.bOverride_ColorContrast = true;
+			PP.ColorContrast = FVector4(1.0f, 1.0f, 1.0f, 1.05f);
+			PP.bOverride_ColorGainShadows = true;
+			PP.ColorGainShadows = FVector4(0.95f, 0.99f, 1.08f, 1.0f);
+			PP.bOverride_ColorOffsetShadows = true;
+			PP.ColorOffsetShadows = FVector4(0.0f, 0.002f, 0.006f, 0.0f);
+			PP.bOverride_ColorGainHighlights = true;
+			PP.ColorGainHighlights = FVector4(1.03f, 1.0f, 0.96f, 1.0f);
+
+			// --- Lens. Grain is disproportionately effective against the too-clean CG
+			// tell for how cheap it is; the vignette comes down from 0.35, which read as
+			// an effect rather than as a lens.
+			PP.bOverride_FilmGrainIntensity = true;
+			PP.FilmGrainIntensity = 0.15f;
+			PP.bOverride_SceneFringeIntensity = true;
+			PP.SceneFringeIntensity = 0.5f;
 			PP.bOverride_LensFlareIntensity = true;
 			PP.LensFlareIntensity = 1.0f;
 			PP.bOverride_LensFlareBokehSize = true;
 			PP.LensFlareBokehSize = 3.0f;
 			PP.bOverride_VignetteIntensity = true;
-			PP.VignetteIntensity = 0.35f;
+			PP.VignetteIntensity = 0.22f;
 			PPV.Settings = PP;
 		}
 

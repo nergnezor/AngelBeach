@@ -60,6 +60,9 @@ class AEnvironment : AActor
 	const int   SkySegments  = 32;
 	// The dome runs well below the horizon because these lower bands ARE the sea.
 	const float SkyBottomDeg = -30.0f;
+	// On desktop only the bands BELOW the waterline are built. Everything above
+	// is SkyAtmosphere's job now — see BuildSky().
+	const int   SeaBands     = 11;
 
 	// THESE BLUES LOOK ABSURD ON PURPOSE — read this before "fixing" them.
 	//
@@ -80,6 +83,24 @@ class AEnvironment : AActor
 	private FLinearColor SkySeaColor     = FLinearColor(0.03f, 0.14f, 0.85f, 1.0f);
 	private FLinearColor SkyHorizonColor = FLinearColor(0.95f, 0.58f, 0.34f, 1.0f);
 	private FLinearColor SkyZenithColor  = FLinearColor(0.05f, 0.22f, 1.34f, 1.0f);
+
+	// DESKTOP sea colours. These are NOT pre-divided: the division above exists to
+	// push an honest blue through a deeply warm sunset light, and the desktop sun
+	// is now a high, near-neutral midday one. Straight albedos land where they are
+	// aimed again. Deep water away from the viewer, hazier toward the waterline —
+	// that lightening at the horizon is aerial perspective and it is most of what
+	// makes a flat surface read as distance.
+	private FLinearColor DeepSeaColor      = FLinearColor(0.015f, 0.055f, 0.110f, 1.0f);
+	private FLinearColor WaterlineSeaColor = FLinearColor(0.110f, 0.210f, 0.290f, 1.0f);
+
+	// Same single platform predicate as GameMode::IsMobilePlatform. Duplicated
+	// rather than shared because this fork compiles each .as as its own module and
+	// a global function is invisible across files (see ApplySolidColorMaterial).
+	private bool IsMobile() const
+	{
+		FString P = Gameplay::GetPlatformName();
+		return P == "Android" || P == "IOS";
+	}
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
@@ -110,11 +131,27 @@ class AEnvironment : AActor
 	private void BuildSky()
 	{
 		// CRITICAL: a closed dome around the whole scene that casts shadows would
-		// occlude the directional light — the sun sits at pitch -6, so its rays
-		// come in through the dome WALL — and put the entire court in shadow.
+		// occlude the directional light and put the entire court in shadow.
 		SkyMesh.SetCastShadow(false);
 
-		for (int b = 0; b < SkyBands; b++)
+		// DESKTOP BUILDS ONLY THE SEA. The dome is opaque geometry at radius 5000
+		// and the camera stands inside it, so for as long as it spanned -30..+90
+		// degrees it covered the whole upper hemisphere and SkyAtmosphere rendered
+		// BEHIND it — invisible. So was the sun disc that SetAtmosphereSunLight
+		// enables, which is what the post-process lens flare was aiming at. The
+		// SkyLight's real-time capture, meanwhile, only ingests SkyAtmosphere and
+		// VolumetricCloud (a lit BasicShapeMaterial is not flagged Is Sky), so the
+		// ambient light in the scene came from an atmosphere nobody could see while
+		// the visible sky contributed no light at all. That decoupling is why these
+		// band colours ever needed hand-calibrating against a measured light gain.
+		//
+		// Above the waterline is now SkyAtmosphere's job on desktop, and the dome
+		// keeps only the job it is genuinely better at: being the sea. Mobile still
+		// builds the whole dome — it has no SkyAtmosphere at all.
+		bool bMobile = IsMobile();
+		int BandCount = bMobile ? SkyBands : SeaBands;
+
+		for (int b = 0; b < BandCount; b++)
 		{
 			float t0 = float(b) / float(SkyBands);
 			float t1 = float(b + 1) / float(SkyBands);
@@ -125,7 +162,8 @@ class AEnvironment : AActor
 			TArray<FVector2D> UV; TArray<FLinearColor> C;
 			TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
 
-			FLinearColor Col = SkyBandColor((t0 + t1) * 0.5f);
+			FLinearColor Col = bMobile ? SkyBandColor((t0 + t1) * 0.5f)
+			                          : SeaBandColor((t0 + t1) * 0.5f);
 
 			for (int s = 0; s < SkySegments; s++)
 			{
@@ -198,6 +236,16 @@ class AEnvironment : AActor
 		float k = Math::Clamp((T - 0.25f) / 0.208f, 0.0f, 1.0f);
 		k = k * k * (3.0f - 2.0f * k);
 		return Blend(SkyHorizonColor, SkyZenithColor, k);
+	}
+
+	// Desktop sea ramp: deep water at the bottom of the dome climbing to a hazier
+	// band right under the waterline. T runs 0..1 over the dome's full -30..+90,
+	// so the waterline is T=0.25 and SeaBands stops just past it.
+	private FLinearColor SeaBandColor(float T) const
+	{
+		float k = Math::Clamp(T / 0.25f, 0.0f, 1.0f);
+		k = k * k * (3.0f - 2.0f * k);
+		return Blend(DeepSeaColor, WaterlineSeaColor, k);
 	}
 
 	private FLinearColor Blend(FLinearColor A, FLinearColor B, float K) const
