@@ -90,7 +90,8 @@ public class UnrealMCPBridge : ModuleRules
 				"StateTreeModule",
 				"StateTreeEditorModule",
 				"GameplayTags",
-				"PropertyBindingUtils"
+				"PropertyBindingUtils",
+				"AnimGraph"
 			}
 		);
 

@@ -1,7 +1,7 @@
 #include "Commands/BlueprintGraph/BPConnector.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
-#include "K2Node.h"
+#include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
@@ -115,9 +115,9 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Find nodes
-    UK2Node* SourceNode = FindNodeById(Graph, SourceNodeId);
-    UK2Node* TargetNode = FindNodeById(Graph, TargetNodeId);
+    // Find nodes (AnimGraph nodes are UEdGraphNode, not UK2Node)
+    UEdGraphNode* SourceNode = FindNodeById(Graph, SourceNodeId);
+    UEdGraphNode* TargetNode = FindNodeById(Graph, TargetNodeId);
 
     if (!SourceNode || !TargetNode)
     {
@@ -126,7 +126,7 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Trouver pins
+    // Find pins
     UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName, EGPD_Output);
     UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName, EGPD_Input);
 
@@ -144,6 +144,10 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         Result->SetStringField("error", "Pins not compatible");
         return Result;
     }
+
+    // Replace existing links on both ends (pose pins are one-to-one).
+    SourcePin->BreakAllPinLinks();
+    TargetPin->BreakAllPinLinks();
 
     // Create connection
     SourcePin->MakeLinkTo(TargetPin);
@@ -167,7 +171,7 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
     return Result;
 }
 
-UK2Node* FBPConnector::FindNodeById(UEdGraph* Graph, const FString& NodeId)
+UEdGraphNode* FBPConnector::FindNodeById(UEdGraph* Graph, const FString& NodeId)
 {
     if (!Graph)
     {
@@ -184,22 +188,20 @@ UK2Node* FBPConnector::FindNodeById(UEdGraph* Graph, const FString& NodeId)
         // Try matching by NodeGuid first
         if (Node->NodeGuid.ToString().Equals(NodeId, ESearchCase::IgnoreCase))
         {
-            UK2Node* K2Node = Cast<UK2Node>(Node);
-            return K2Node;  // Return even if nullptr (caller will handle)
+            return Node;
         }
 
         // Try matching by GetName()
         if (Node->GetName().Equals(NodeId, ESearchCase::IgnoreCase))
         {
-            UK2Node* K2Node = Cast<UK2Node>(Node);
-            return K2Node;  // Return even if nullptr (caller will handle)
+            return Node;
         }
     }
 
     return nullptr;
 }
 
-UEdGraphPin* FBPConnector::FindPinByName(UK2Node* Node, const FString& PinName, EEdGraphPinDirection Direction)
+UEdGraphPin* FBPConnector::FindPinByName(UEdGraphNode* Node, const FString& PinName, EEdGraphPinDirection Direction)
 {
     for (UEdGraphPin* Pin : Node->Pins)
     {

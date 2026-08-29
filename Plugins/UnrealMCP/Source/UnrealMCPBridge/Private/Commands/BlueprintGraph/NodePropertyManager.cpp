@@ -25,6 +25,7 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "EditorAssetLibrary.h"
 #include "Json.h"
+#include "AnimGraphNode_Base.h"
 
 TSharedPtr<FJsonObject> FNodePropertyManager::SetNodeProperty(const TSharedPtr<FJsonObject>& Params)
 {
@@ -112,6 +113,37 @@ TSharedPtr<FJsonObject> FNodePropertyManager::SetNodeProperty(const TSharedPtr<F
 	if (!Node)
 	{
 		return CreateErrorResponse(FString::Printf(TEXT("Node not found: %s"), *NodeID));
+	}
+
+	// Expose optional AnimGraph pins (e.g. LookAtLocation) — needs ReconstructNode.
+	if (PropertyName.Equals(TEXT("show_pin"), ESearchCase::IgnoreCase))
+	{
+		FString PinPropertyName;
+		if (!PropertyValue->TryGetString(PinPropertyName))
+		{
+			return CreateErrorResponse(TEXT("show_pin requires a string property_value (struct field name)"));
+		}
+
+		UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(Node);
+		if (!AnimNode)
+		{
+			return CreateErrorResponse(TEXT("show_pin requires an AnimGraph node"));
+		}
+
+		if (!SetAnimGraphShowPin(AnimNode, PinPropertyName))
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Optional pin not found on AnimGraph node: %s"), *PinPropertyName));
+		}
+
+		Graph->NotifyGraphChanged();
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+		UE_LOG(LogTemp, Display,
+			TEXT("Exposed AnimGraph pin '%s' on node '%s' in %s"),
+			*PinPropertyName, *NodeID, *BlueprintName);
+
+		return CreateSuccessResponse(PropertyName);
 	}
 
 	// Attempt to set property based on node type
@@ -473,6 +505,43 @@ bool FNodePropertyManager::SetGenericNodeProperty(
 	}
 
 	return false;
+}
+
+bool FNodePropertyManager::SetAnimGraphShowPin(
+	UAnimGraphNode_Base* AnimNode,
+	const FString& PinPropertyName)
+{
+	if (!AnimNode || PinPropertyName.IsEmpty())
+	{
+		return false;
+	}
+
+	const FName PinName(*PinPropertyName);
+	TArray<FOptionalPinFromProperty> ShowPins = AnimNode->ShowPinForProperties;
+	bool bFound = false;
+
+	for (FOptionalPinFromProperty& Pin : ShowPins)
+	{
+		if (Pin.PropertyName == PinName)
+		{
+			if (!Pin.bShowPin)
+			{
+				AnimNode->Modify();
+				Pin.bShowPin = true;
+			}
+			bFound = true;
+			break;
+		}
+	}
+
+	if (!bFound)
+	{
+		return false;
+	}
+
+	AnimNode->ShowPinForProperties = ShowPins;
+	AnimNode->ReconstructNode();
+	return true;
 }
 
 UEdGraph* FNodePropertyManager::GetGraph(UBlueprint* Blueprint, const FString& FunctionName)

@@ -5,7 +5,7 @@
 #include "Dom/JsonObject.h"
 
 // Forward declarations
-class UK2Node;
+class UEdGraphNode;
 class UEdGraph;
 class UEdGraphPin;
 enum EEdGraphPinDirection : int;
@@ -27,12 +27,12 @@ private:
     /**
      * Finds a node by its ID in the graph
      */
-    static UK2Node* FindNodeById(UEdGraph* Graph, const FString& NodeId);
+    static UEdGraphNode* FindNodeById(UEdGraph* Graph, const FString& NodeId);
 
     /**
      * Finds a pin by its name in a node
      */
-    static UEdGraphPin* FindPinByName(UK2Node* Node, const FString& PinName, EEdGraphPinDirection Direction);
+    static UEdGraphPin* FindPinByName(UEdGraphNode* Node, const FString& PinName, EEdGraphPinDirection Direction);
 
     /**
      * Checks compatibility between two pins

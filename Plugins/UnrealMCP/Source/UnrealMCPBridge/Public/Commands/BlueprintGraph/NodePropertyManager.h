@@ -10,6 +10,7 @@ class UEdGraph;
 class UEdGraphNode;
 class UBlueprint;
 class UK2Node;
+class UAnimGraphNode_Base;
 
 /**
  * Manages Blueprint node property modification
@@ -76,6 +77,11 @@ private:
 		UEdGraphNode* Node,
 		const FString& PropertyName,
 		const TSharedPtr<FJsonValue>& Value);
+
+	/** Expose an optional AnimGraph struct pin and reconstruct the node. */
+	static bool SetAnimGraphShowPin(
+		UAnimGraphNode_Base* AnimNode,
+		const FString& PinPropertyName);
 
 	/**
 	 * Load a Blueprint by name
