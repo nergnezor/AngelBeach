@@ -53,9 +53,16 @@ class AEnvironment : AActor
 	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent PropsMesh;
 
-	// Shared shoreline. The sand skirt ends at -(CourtHalfWidth+500) = -900 on
-	// the sea side; wet band and foam sit just inland of that edge.
-	const float ShoreY = -920.0f;
+	// THE ISLAND IS A CIRCLE, centred on the court (the court is spawned at the
+	// world origin — GameMode.as). The sand skirt's furthest corner sits at
+	// sqrt(1300^2+900^2) ~= 1581 from centre, and the dune ridge below reaches
+	// ~1749; 1950 clears both with a visible ring of beach all the way round —
+	// this used to be a straight line on the sea side only (ShoreY = -920),
+	// which put open ocean along one edge and dry land on the rest, i.e. a
+	// coastline, not an island. M_Sand and M_Water both mask off this same
+	// radius (parameter "IslandRadius") so the wet band, the foam and the
+	// water's depth fade all read as a ring instead of a line.
+	const float IslandRadius = 1950.0f;
 	const float WaterZ = -40.0f;
 	const float WaterHalf = 20000.0f;   // 400 m square ocean
 
@@ -297,36 +304,45 @@ class AEnvironment : AActor
 	// Sits 2cm below the court sand so the deformable playfield always wins the
 	// depth test; the step is far too small to see and it never meets the camera
 	// edge-on. Same M_Sand, so the macro variation runs continuously from the
-	// court out to the dunes without a seam.
+	// court out to the beach without a seam.
+	//
+	// A DISC, not a rectangle: polar grid, rings from the centre out to
+	// IslandRadius, indexed exactly like every other flat grid in this file (ring
+	// = outer/row index, segment = inner/fast index) so the winding formula below
+	// is the same one already proven correct on the rectangular version of this
+	// mesh — see BuildWater's comment for what happens when that assumption is
+	// wrong. The innermost ring has radius 0, so every one of its verts sits on
+	// the same point; that ring is entirely inside the court's own sand skirt and
+	// is never seen.
 	private void BuildBackshore()
 	{
 		BackshoreMesh.SetCastShadow(false);
 
-		const int N = 16;
-		const float H = WaterHalf;
+		const int Rings = 18;
+		const int Segs  = 48;
 		TArray<FVector> V; TArray<int32> T2; TArray<FVector> Nrm;
 		TArray<FVector2D> UV; TArray<FLinearColor> C;
 		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
 
-		for (int iy = 0; iy <= N; iy++)
+		for (int ri = 0; ri <= Rings; ri++)
 		{
-			for (int ix = 0; ix <= N; ix++)
+			float R = IslandRadius * float(ri) / float(Rings);
+			for (int sj = 0; sj <= Segs; sj++)
 			{
-				float fx = float(ix) / float(N);
-				float fy = float(iy) / float(N);
-				V.Add(FVector((fx - 0.5f) * 2.0f * H, ShoreY + fy * (H - ShoreY), -2.0f));
+				float Ang = 2.0f * PI * float(sj) / float(Segs);
+				V.Add(FVector(Math::Cos(Ang) * R, Math::Sin(Ang) * R, -2.0f));
 				Nrm.Add(FVector(0, 0, 1));
-				UV.Add(FVector2D(fx, fy));
+				UV.Add(FVector2D(float(ri) / float(Rings), float(sj) / float(Segs)));
 				C.Add(FLinearColor(1, 1, 1, 1));
 			}
 		}
-		for (int iy = 0; iy < N; iy++)
+		for (int ri = 0; ri < Rings; ri++)
 		{
-			for (int ix = 0; ix < N; ix++)
+			for (int sj = 0; sj < Segs; sj++)
 			{
-				int A = iy * (N + 1) + ix;
+				int A = ri * (Segs + 1) + sj;
 				int B = A + 1;
-				int Cidx = A + N + 1;
+				int Cidx = A + Segs + 1;
 				int D = Cidx + 1;
 				T2.Add(A); T2.Add(Cidx); T2.Add(B);
 				T2.Add(B); T2.Add(Cidx); T2.Add(D);
@@ -337,14 +353,21 @@ class AEnvironment : AActor
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(BackshoreMesh, 0, "/Game/Materials/M_Sand.M_Sand");
 		if (MID != nullptr)
 		{
-			MID.SetScalarParameterValue(n"ShoreY", ShoreY);
+			MID.SetScalarParameterValue(n"IslandRadius", IslandRadius);
 			MID.SetScalarParameterValue(n"WetWidth", 160.0f);
 		}
 	}
 
 	// Desktop ocean: a vast horizontal plane below the sand so Lumen can reflect
-	// the sky and clouds — the painted dome bands never could. Only the SEA side
-	// of the shoreline now: BuildBackshore owns everything inland of ShoreY.
+	// the sky and clouds — the painted dome bands never could. Plain square, no
+	// shoreline math in the geometry at all: the island disc (BuildBackshore)
+	// sits 38cm above this plane and occludes it out to IslandRadius in every
+	// direction, and M_Water's own radial mask (IslandRadius) handles the
+	// depth-fade and foam ring where the two meet. This used to clip the mesh
+	// itself to one side of a straight shoreline, which needed the vertex order
+	// mirrored on one axis — that mirroring is what inverted the winding and
+	// culled the entire ocean; a plain, symmetric square has no such axis to
+	// get wrong.
 	private void BuildWater()
 	{
 		WaterMesh.SetCastShadow(false);
@@ -361,13 +384,7 @@ class AEnvironment : AActor
 			{
 				float fx = float(ix) / float(N);
 				float fy = float(iy) / float(N);
-				// fy must still run in the +Y direction. Mapping it the other way (from
-				// the shoreline out to sea) mirrors the plane, which INVERTS THE TRIANGLE
-				// WINDING built below — the whole ocean then faces downward, gets
-				// backface-culled, and what fills the frame is SkyAtmosphere below the
-				// horizon: a flat pale band that looks almost exactly like calm water and
-				// took three material fixes to stop believing.
-				V.Add(FVector((fx - 0.5f) * 2.0f * H, -H + fy * (H + ShoreY), WaterZ));
+				V.Add(FVector((fx - 0.5f) * 2.0f * H, (fy - 0.5f) * 2.0f * H, WaterZ));
 				Nrm.Add(FVector(0, 0, 1));
 				UV.Add(FVector2D(fx, fy));
 				C.Add(FLinearColor(1, 1, 1, 1));
@@ -389,7 +406,7 @@ class AEnvironment : AActor
 		WaterMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(WaterMesh, 0, "/Game/Materials/M_Water.M_Water");
 		if (MID != nullptr)
-			MID.SetScalarParameterValue(n"ShoreY", ShoreY);
+			MID.SetScalarParameterValue(n"IslandRadius", IslandRadius);
 	}
 
 	// Low dunes behind the court (+Y) so the sand does not end in a hard line

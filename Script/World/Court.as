@@ -195,9 +195,11 @@ class ACourt : AActor
 		}
 		else
 		{
-			// Wet band inland of the sea edge — see Environment.as::ShoreY and
-			// M_Sand's shoreline mask (Etapp 4).
-			SandMID.SetScalarParameterValue(n"ShoreY", -920.0f);
+			// Wet band near the island's edge — see Environment.as::IslandRadius and
+			// M_Sand's shoreline mask (Etapp 4). Duplicated rather than shared for
+			// the same module-isolation reason as ApplySolidColorMaterial: keep this
+			// number in step with Environment.as::IslandRadius by hand.
+			SandMID.SetScalarParameterValue(n"IslandRadius", 1950.0f);
 			SandMID.SetScalarParameterValue(n"WetWidth", 160.0f);
 		}
 	}
