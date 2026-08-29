@@ -633,11 +633,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// AIPlayer.as), so a crouch-only fade stays near full weight during every
 	// walk and the legs stay pinned. A planted foot is only meaningful when
 	// the player is not travelling: once they are, the gait has to own the
-	// legs no matter how deep the stance is. Fade out across 40-120 cm/s, so
-	// a standing receive keeps its full plant, a hard run is pure animation,
-	// and the two blend smoothly through a walk.
+	// legs no matter how deep the stance is. Fade out across 30-80 cm/s (was
+	// 40-120). The old window left ~25% plant weight up to 120 cm/s; the AI
+	// repositions at ~100 while holding a 0.18-0.30 athletic crouch, so feet were
+	// partially pinned during every jog — measured footSlide 900+ even with the
+	// blendspace wired. A standing receive below 30 cm/s keeps full plant;
+	// anything above 80 is pure gait animation.
 	float PlantSpeed = FVector(Self.PlayerVelocity.X, Self.PlayerVelocity.Y, 0).Size();
-	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 40.0f) / 80.0f, 0.0f, 1.0f);
+	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 30.0f) / 50.0f, 0.0f, 1.0f);
 	float LegAlpha = Math::Clamp(Self.SmCrouch / 0.25f, 0.0f, 1.0f) * MoveFade;
 	Self.Anim.LegIKAlpha = LegAlpha;
 	Self.Anim.FootTargetL = FootL + (PlantL - FootL) * LegAlpha;
