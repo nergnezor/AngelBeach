@@ -732,7 +732,10 @@ class AVolleyballPlayer : APawn
 		float IKSpeed = (TargetIK > IKWeight) ? 12.0f : 6.0f;
 		IKWeight = IKWeight + (TargetIK - IKWeight) * Math::Clamp(IKSpeed * DeltaTime, 0.0f, 1.0f);
 
-		Anim.HitAlpha = CurrentPose;
+		// Attack clips are full-body mocap — blending them during the reach hold
+		// (CurrentPose 0.85) overrides the legs and reads as crawling backwards.
+		// IK owns reach; reserve HitAlpha for the contact swing only.
+		Anim.HitAlpha = (HitAnimTimer > 0.0f) ? CurrentPose : 0.0f;
 		Anim.IKAlpha  = IKWeight;
 		// Pose shape uses the full 0..1 gesture curve, remapped so even the 0.85
 		// reach hold reaches the contact shape (reach should look committed).
