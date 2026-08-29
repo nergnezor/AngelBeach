@@ -41,15 +41,28 @@ class AEnvironment : AActor
 	UPROPERTY(DefaultComponent, Attach = Root)
 	UProceduralMeshComponent SkyMesh;
 
+	UPROPERTY(DefaultComponent, Attach = Root)
+	UProceduralMeshComponent WaterMesh;
+
+	UPROPERTY(DefaultComponent, Attach = Root)
+	UProceduralMeshComponent DuneMesh;
+
+	UPROPERTY(DefaultComponent, Attach = Root)
+	UProceduralMeshComponent PropsMesh;
+
+	// Shared shoreline. The sand skirt ends at -(CourtHalfWidth+500) = -900 on
+	// the sea side; wet band and foam sit just inland of that edge.
+	const float ShoreY = -920.0f;
+	const float WaterZ = -40.0f;
+	const float WaterHalf = 20000.0f;   // 400 m square ocean
+
 	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
 	// match camera sits 1400 out) and stay under the fog's start distance so the
 	// gradient is not hazed away.
-	//
-	// 3000 was too tight. The sand skirt now reaches 900 along the view axis, so
 	// it left only ~700 units of sea between the beach and the dome — a sliver
 	// that vanished into the horizon, and every sample below the horizon came
 	// back sand-coloured. 5000 gives the sea roughly 4000 units to be a sea in.
-	// The fog start moves with it (GameMode.as).
+	// The fog start moves with it (GameMode.as). (Desktop now uses BuildWater.)
 	const float SkyRadius    = 5000.0f;
 	// Each band is a separate mesh section, so band count is also the draw-call
 	// count for the sky — 40 is a deliberate ceiling. It is needed because a solid
@@ -106,13 +119,28 @@ class AEnvironment : AActor
 	void BeginPlay()
 	{
 		BuildSky();
+		if (!IsMobile())
+		{
+			BuildWater();
+			BuildDunes();
+			BuildProps();
+		}
 	}
 
-	// Deliberate duplicate of ACourt::ApplySolidColorMaterial (see there for why
-	// BasicShapeMaterial and what it trades off). It cannot be shared: this fork
-	// compiles each .as file as its own module, so a global function is only
-	// visible inside its own file — nothing in Script/ calls a global across files.
-	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
+	private UMaterialInstanceDynamic ApplyAuthoredMaterial(UProceduralMeshComponent Comp, int Section, FString Path)
+	{
+		if (Comp == nullptr) return nullptr;
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr, Path));
+		if (Base == nullptr)
+		{
+			Log("MATERIAL missing: " + Path + " — skipping section");
+			return nullptr;
+		}
+		return Comp.CreateDynamicMaterialInstance(Section, Base);
+	}
+
+	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section,
+		FLinearColor Color, float Roughness = 0.9f)
 	{
 		if (Comp == nullptr) return nullptr;
 
@@ -122,7 +150,10 @@ class AEnvironment : AActor
 
 		UMaterialInstanceDynamic MID = Comp.CreateDynamicMaterialInstance(Section, Base);
 		if (MID != nullptr)
+		{
 			MID.SetVectorParameterValue(n"Color", Color);
+			MID.SetScalarParameterValue(n"Roughness", Roughness);
+		}
 		return MID;
 	}
 
@@ -149,7 +180,9 @@ class AEnvironment : AActor
 		// keeps only the job it is genuinely better at: being the sea. Mobile still
 		// builds the whole dome — it has no SkyAtmosphere at all.
 		bool bMobile = IsMobile();
-		int BandCount = bMobile ? SkyBands : SeaBands;
+		// Desktop: a real water plane with Lumen reflections replaces the dome's
+		// painted sea bands. Mobile keeps the dome — Etapp 6 adds its stand-in.
+		int BandCount = bMobile ? SkyBands : 0;
 
 		for (int b = 0; b < BandCount; b++)
 		{
@@ -246,6 +279,259 @@ class AEnvironment : AActor
 		float k = Math::Clamp(T / 0.25f, 0.0f, 1.0f);
 		k = k * k * (3.0f - 2.0f * k);
 		return Blend(DeepSeaColor, WaterlineSeaColor, k);
+	}
+
+	// Desktop ocean: a vast horizontal plane below the sand so Lumen can reflect
+	// the sky and clouds — the painted dome bands never could.
+	private void BuildWater()
+	{
+		WaterMesh.SetCastShadow(false);
+
+		const int N = 32;
+		const float H = WaterHalf;
+		TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+		TArray<FVector2D> UV; TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+		for (int iy = 0; iy <= N; iy++)
+		{
+			for (int ix = 0; ix <= N; ix++)
+			{
+				float fx = float(ix) / float(N);
+				float fy = float(iy) / float(N);
+				V.Add(FVector((fx - 0.5f) * 2.0f * H, (fy - 0.5f) * 2.0f * H, WaterZ));
+				Nrm.Add(FVector(0, 0, 1));
+				UV.Add(FVector2D(fx, fy));
+				C.Add(FLinearColor(1, 1, 1, 1));
+			}
+		}
+		for (int iy = 0; iy < N; iy++)
+		{
+			for (int ix = 0; ix < N; ix++)
+			{
+				int A = iy * (N + 1) + ix;
+				int B = A + 1;
+				int Cidx = A + N + 1;
+				int D = Cidx + 1;
+				T.Add(A); T.Add(Cidx); T.Add(B);
+				T.Add(B); T.Add(Cidx); T.Add(D);
+			}
+		}
+
+		WaterMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(WaterMesh, 0, "/Game/Materials/M_Water.M_Water");
+		if (MID != nullptr)
+			MID.SetScalarParameterValue(n"ShoreY", ShoreY);
+	}
+
+	// Low dunes behind the court (+Y) so the sand does not end in a hard line
+	// against the sky when the camera looks along the shoreline.
+	private void BuildDunes()
+	{
+		DuneMesh.SetCastShadow(false);
+
+		const int GX = 24;
+		const int GY = 10;
+		const float X0 = -900.0f;
+		const float X1 = 900.0f;
+		const float Y0 = 950.0f;
+		const float Y1 = 1500.0f;
+
+		TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+		TArray<FVector2D> UV; TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+		for (int iy = 0; iy <= GY; iy++)
+		{
+			for (int ix = 0; ix <= GX; ix++)
+			{
+				float fx = float(ix) / float(GX);
+				float fy = float(iy) / float(GY);
+				float X = X0 + fx * (X1 - X0);
+				float Y = Y0 + fy * (Y1 - Y0);
+				float Z = DuneHeight(X, Y);
+				V.Add(FVector(X, Y, Z));
+				Nrm.Add(FVector(0, 0, 1));
+				UV.Add(FVector2D(fx, fy));
+				C.Add(FLinearColor(1, 1, 1, 1));
+			}
+		}
+		for (int iy = 0; iy < GY; iy++)
+		{
+			for (int ix = 0; ix < GX; ix++)
+			{
+				int A = iy * (GX + 1) + ix;
+				int B = A + 1;
+				int Cidx = A + GX + 1;
+				int D = Cidx + 1;
+				T.Add(A); T.Add(Cidx); T.Add(B);
+				T.Add(B); T.Add(Cidx); T.Add(D);
+			}
+		}
+
+		// Recompute normals from height.
+		for (int iy = 1; iy < GY; iy++)
+		{
+			for (int ix = 1; ix < GX; ix++)
+			{
+				int I = iy * (GX + 1) + ix;
+				float dzx = (V[I + 1].Z - V[I - 1].Z) / ((X1 - X0) / float(GX) * 2.0f);
+				float dzy = (V[I + GX + 1].Z - V[I - GX - 1].Z) / ((Y1 - Y0) / float(GY) * 2.0f);
+				Nrm[I] = FVector(-dzx, -dzy, 1).GetSafeNormal();
+			}
+		}
+
+		DuneMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		ApplyAuthoredMaterial(DuneMesh, 0, "/Game/Materials/M_Sand.M_Sand");
+	}
+
+	private float DuneHeight(float X, float Y) const
+	{
+		float u = (Y - 950.0f) / 550.0f;
+		float v = X / 900.0f;
+		float h = Math::Sin(u * 3.14159f) * 55.0f;
+		h += Math::Sin(v * 6.28318f + 0.4f) * 18.0f;
+		h += Math::Cos(u * 9.0f + v * 4.0f) * 10.0f;
+		return Math::Max(h * u, 0.0f);
+	}
+
+	// Cheap scale references: parasol, towels, a chair, distant palm cards.
+	// One mesh section per solid colour — BasicShapeMaterial ignores vertex colour.
+	private void BuildProps()
+	{
+		PropsMesh.SetCastShadow(false);
+
+		// 0: parasol pole
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(-955, 645, 8), FVector(-945, 655, 260));
+			UploadPropSection(0, V, T, Nrm, UV, C,
+				FLinearColor(0.15f, 0.15f, 0.16f, 1.0f), 0.55f);
+		}
+		// 1: parasol canopy + base
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropCone(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(-950, 650, 260), 130.0f, 8);
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(-980, 620, 0), FVector(-920, 680, 8));
+			UploadPropSection(1, V, T, Nrm, UV, C,
+				FLinearColor(0.95f, 0.90f, 0.82f, 1.0f), 0.72f);
+		}
+		// 2: blue towel
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(-1010, 700, 2), FVector(-930, 760, 4));
+			UploadPropSection(2, V, T, Nrm, UV, C,
+				FLinearColor(0.18f, 0.45f, 0.72f, 1.0f), 0.80f);
+		}
+		// 3: white towel
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(940, -680, 2), FVector(1020, -610, 4));
+			UploadPropSection(3, V, T, Nrm, UV, C,
+				FLinearColor(0.95f, 0.92f, 0.86f, 1.0f), 0.85f);
+		}
+		// 4: referee chair
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(980, 700, 0), FVector(1040, 760, 45));
+			AddPropBox(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(990, 710, 45), FVector(1030, 750, 110));
+			UploadPropSection(4, V, T, Nrm, UV, C,
+				FLinearColor(0.55f, 0.48f, 0.38f, 1.0f), 0.65f);
+		}
+		// 5: distant palm cards
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			AddPropCard(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(-1900, -1200, 0), FVector(-1900, -1200, 900), 320.0f);
+			AddPropCard(V, T, Nrm, UV, C, FLinearColor(1,1,1,1),
+				FVector(1700, -1400, 0), FVector(1700, -1400, 850), 280.0f);
+			UploadPropSection(5, V, T, Nrm, UV, C,
+				FLinearColor(0.05f, 0.22f, 0.10f, 1.0f), 0.90f);
+		}
+	}
+
+	private void UploadPropSection(int Section, TArray<FVector> V, TArray<int32> T,
+		TArray<FVector> Nrm, TArray<FVector2D> UV, TArray<FLinearColor> C,
+		FLinearColor Col, float Rough)
+	{
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+		PropsMesh.CreateMeshSection_LinearColor(Section, V, T, Nrm, UV,
+			NoUV, NoUV, NoUV, C, Tan, false);
+		ApplySolidColorMaterial(PropsMesh, Section, Col, Rough);
+	}
+
+	private void AddPropBox(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& Nrm,
+		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
+		FVector Min, FVector Max)
+	{
+		int B = V.Num();
+		V.Add(FVector(Min.X, Min.Y, Min.Z)); V.Add(FVector(Max.X, Min.Y, Min.Z));
+		V.Add(FVector(Max.X, Max.Y, Min.Z)); V.Add(FVector(Min.X, Max.Y, Min.Z));
+		V.Add(FVector(Min.X, Min.Y, Max.Z)); V.Add(FVector(Max.X, Min.Y, Max.Z));
+		V.Add(FVector(Max.X, Max.Y, Max.Z)); V.Add(FVector(Min.X, Max.Y, Max.Z));
+		T.Add(B+0); T.Add(B+2); T.Add(B+1); T.Add(B+0); T.Add(B+3); T.Add(B+2);
+		T.Add(B+4); T.Add(B+5); T.Add(B+6); T.Add(B+4); T.Add(B+6); T.Add(B+7);
+		for (int i = 0; i < 8; i++)
+		{
+			Nrm.Add(FVector(0, 0, 1));
+			UV.Add(FVector2D(0, 0));
+			C.Add(Col);
+		}
+	}
+
+	private void AddPropCone(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& Nrm,
+		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
+		FVector Apex, float Radius, int Segs)
+	{
+		int Base = V.Num();
+		V.Add(Apex);
+		for (int i = 0; i <= Segs; i++)
+		{
+			float A = 2.0f * PI * float(i) / float(Segs);
+			V.Add(Apex + FVector(Math::Cos(A) * Radius, Math::Sin(A) * Radius, 0));
+		}
+		for (int i = 0; i < Segs; i++)
+		{
+			T.Add(Base); T.Add(Base + 1 + i); T.Add(Base + 2 + i);
+		}
+		for (int i = 0; i <= Segs + 1; i++)
+		{
+			Nrm.Add(FVector(0, 0, 1));
+			UV.Add(FVector2D(0, 0));
+			C.Add(Col);
+		}
+	}
+
+	private void AddPropCard(TArray<FVector>& V, TArray<int32>& T, TArray<FVector>& Nrm,
+		TArray<FVector2D>& UV, TArray<FLinearColor>& C, FLinearColor Col,
+		FVector Base, FVector Top, float HalfW)
+	{
+		FVector Fwd = (FVector(0, 0, 0) - Base).GetSafeNormal2D();
+		FVector Side = FVector(-Fwd.Y, Fwd.X, 0) * HalfW;
+		int B = V.Num();
+		V.Add(Base - Side); V.Add(Base + Side);
+		V.Add(Top + Side); V.Add(Top - Side);
+		T.Add(B+0); T.Add(B+1); T.Add(B+2);
+		T.Add(B+0); T.Add(B+2); T.Add(B+3);
+		for (int i = 0; i < 4; i++)
+		{
+			Nrm.Add(Fwd);
+			UV.Add(FVector2D(0, 0));
+			C.Add(Col);
+		}
 	}
 
 	private FLinearColor Blend(FLinearColor A, FLinearColor B, float K) const

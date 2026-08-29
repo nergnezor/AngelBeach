@@ -193,6 +193,13 @@ class ACourt : AActor
 				SandMID.SetScalarParameterValue(n"Metallic", 0.0f);
 			}
 		}
+		else
+		{
+			// Wet band inland of the sea edge — see Environment.as::ShoreY and
+			// M_Sand's shoreline mask (Etapp 4).
+			SandMID.SetScalarParameterValue(n"ShoreY", -920.0f);
+			SandMID.SetScalarParameterValue(n"WetWidth", 160.0f);
+		}
 	}
 
 	// Per-vertex COMPACTION SHADE for craters and footprints — a mask, not a colour.
