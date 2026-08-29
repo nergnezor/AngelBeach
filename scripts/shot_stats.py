@@ -53,7 +53,8 @@ REGIONS = {
         "sand_shadow": (620, 522, 662, 542),
     },
     "Vista_3_ball": {
-        "ball":        (600, 320, 690, 400),
+        # BallMark (-280,-320) seen from (-420,-180): centred on sand, no body behind.
+        "ball":        (520, 300, 720, 480),
     },
     "Vista_4_sand": {
         "sand_fg":     (300, 480, 700, 620),

@@ -958,7 +958,7 @@ class AVolleyballPlayer : APawn
 	const float RevisitMinCrouch = 0.15f;
 	// Per-frame waveform dump for shake_scope.py. ~4 lines/frame; a 90s run is
 	// about 3MB of log, which is why it is a switch and not always on.
-	const bool bTraceMotion = true;
+	const bool bTraceMotion = false;
 	private float MonTraceT = 0.0f;
 
 	private void UpdateRotRevisit(float DeltaTime, float Yaw, float Crouch)

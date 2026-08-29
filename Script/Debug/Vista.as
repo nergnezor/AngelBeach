@@ -48,9 +48,9 @@ class AVistaGameMode : ABeachVolleyballGameMode
 	const float ShotHold = 0.6f;
 	private bool bDone = false;
 
-	// Where the ball is parked. Chosen to sit in Team A's half, clear of the net,
-	// at roughly contact height so the "ball" shot reads as a ball in play.
-	const FVector BallMark = FVector(-450, 200, 120);
+	// Where the ball is parked. Open sand in Team A's back court — every player
+	// mark is at least 3m away so the ball shot reads ball-on-sand, not ball-on-body.
+	const FVector BallMark = FVector(-280, -320, 118);
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
@@ -88,8 +88,8 @@ class AVistaGameMode : ABeachVolleyballGameMode
 		// Re-aimed once: the first placement put a player directly behind the ball
 		// along the view ray, so the subject of the shot was read against a body
 		// instead of against sand. Clear sand behind it now.
-		S.Name = "ball";     S.Pos = FVector(-565, 272, 162);  S.Look = BallMark;
-		S.Note = "ball at ~130cm: panel seams, shading gradient, silhouette tessellation";
+		S.Name = "ball";     S.Pos = FVector(-420, -180, 148);  S.Look = BallMark;
+		S.Note = "ball at ~118cm on clean sand: panel seams, shading gradient, spin cue";
 		Shots.Add(S);
 
 		// 4. Sand at a grazing angle. Micro-normal, sparkle and crater relief only
