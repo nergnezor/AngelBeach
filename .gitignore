@@ -94,3 +94,11 @@ Script/Binds.Cache*
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Project-authored materials. These are the one kind of binary asset this repo
+# does keep: a material is a node graph, tens of kilobytes, and it computes its
+# detail in the shader rather than shipping textures — which is the whole point
+# of building the look rather than buying it. Keep it that way: no texture
+# imports in here without a very good reason. See CLAUDE.md.
+!Content/Materials/
+!Content/Materials/**

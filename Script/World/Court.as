@@ -165,25 +165,46 @@ class ACourt : AActor
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			SandColors(), SandTan, true, false);
 
-		// The sand is the mesh that made the packaged-build material bug obvious: it
-		// is the only section whose UVs span 0..1, so the engine's fallback material
-		// stretched its checker texture right across the court. see ACourt::ApplySolidColorMaterial
-		// for why /Engine/EngineDebugMaterials/VertexColorMaterial (used here before)
-		// never applied on Android. SandColors() still writes the per-vertex crater
-		// tint into the section; a solid-colour material cannot show it, but the data
-		// is there for an authored vertex-colour material later.
-		UMaterialInstanceDynamic SandMID = ApplySolidColorMaterial(SandMesh, 0, SandBaseColor);
-		// Sand is about as matte as a surface gets. Left glossy, a big flat plane
-		// picks up a broad specular sheen from the low sun and washes out on top of
-		// the exposure problem.
-		if (SandMID != nullptr)
+		// THE SAND HAS ITS OWN MATERIAL NOW. /Game/Materials/M_Sand computes its
+		// grain, its macro colour variation and its sparkle from world position in
+		// the shader — no textures, so it costs the repo tens of kilobytes and owes
+		// nothing to an asset pack — and, crucially, it READS VERTEX COLOUR, which is
+		// where SandColors() has been writing crater and footprint shading every
+		// frame for as long as the deformation system has existed. BasicShapeMaterial
+		// is opaque and ignores vertex colour, so all of that was computed and thrown
+		// away; it now shows up for free.
+		//
+		// Its normal output is WORLD SPACE (bTangentSpaceNormal = false on the asset):
+		// SandTan is declared above and never filled, so there is no tangent basis on
+		// this mesh — or on any procedural mesh in this project — for a tangent-space
+		// normal to be expressed in. The shader perturbs VertexNormalWS instead, which
+		// also preserves the crater relief RebuildSandMesh already computes correctly.
+		//
+		// Falls back to the flat colour if the material is missing — which is what a
+		// cook that forgets /Game/Materials looks like. See DefaultGame.ini.
+		UMaterialInstanceDynamic SandMID = ApplyAuthoredMaterial(SandMesh, 0,
+			"/Game/Materials/M_Sand.M_Sand");
+		if (SandMID == nullptr)
 		{
-			SandMID.SetScalarParameterValue(n"Roughness", 0.95f);
-			SandMID.SetScalarParameterValue(n"Metallic", 0.0f);
+			SandMID = ApplySolidColorMaterial(SandMesh, 0, SandBaseColor);
+			if (SandMID != nullptr)
+			{
+				SandMID.SetScalarParameterValue(n"Roughness", 0.95f);
+				SandMID.SetScalarParameterValue(n"Metallic", 0.0f);
+			}
 		}
 	}
 
-	// Sand colour, darkened slightly inside craters (compacted/shadowed sand).
+	// Per-vertex COMPACTION SHADE for craters and footprints — a mask, not a colour.
+	//
+	// This used to bake SandBaseColor into the vertex colour, which made the mesh and
+	// the material two sources of truth for the same albedo. M_Sand owns the colour
+	// now (SandDry/SandDark, plus its own macro variation) and reads this as a plain
+	// multiplier, so a footprint is one number in one place. White is undisturbed
+	// sand; a full-depth crater comes back at 0.65.
+	//
+	// The fallback path still works: BasicShapeMaterial ignores vertex colour
+	// entirely, so if M_Sand ever fails to load the sand goes flat, not white.
 	private TArray<FLinearColor> SandColors() const
 	{
 		TArray<FLinearColor> C;
@@ -191,8 +212,7 @@ class ACourt : AActor
 		{
 			float depth = Math::Clamp(-SandHeight[i] / -SandMinZ, 0.0f, 1.0f);
 			float shade = 1.0f - depth * 0.35f;
-			C.Add(FLinearColor(SandBaseColor.R * shade,
-				SandBaseColor.G * shade, SandBaseColor.B * shade, 1));
+			C.Add(FLinearColor(shade, shade, shade, 1));
 		}
 		return C;
 	}
@@ -514,6 +534,23 @@ class ACourt : AActor
 	// that was tried and rejected at runtime with "missing bUsedWithSkeletalMesh=True!".
 	// Typed to UProceduralMeshComponent rather than the UMeshComponent base because
 	// this fork's bindings do not implicitly upcast the component handle.
+	// Same shape as ApplySolidColorMaterial, but for a material this project owns.
+	// Returns nullptr rather than asserting so every caller can fall back to the
+	// flat colour: a material loaded by string is invisible to the cook's reference
+	// gatherer, so "missing in the packaged build" is a real, quiet failure mode and
+	// a flat-coloured court beats a checkerboard one.
+	private UMaterialInstanceDynamic ApplyAuthoredMaterial(UProceduralMeshComponent Comp, int Section, FString Path)
+	{
+		if (Comp == nullptr) return nullptr;
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr, Path));
+		if (Base == nullptr)
+		{
+			Log("MATERIAL missing: " + Path + " — falling back to flat colour");
+			return nullptr;
+		}
+		return Comp.CreateDynamicMaterialInstance(Section, Base);
+	}
+
 	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section, FLinearColor Color)
 	{
 		if (Comp == nullptr) return nullptr;
