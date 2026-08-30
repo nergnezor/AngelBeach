@@ -2436,12 +2436,41 @@ class AVolleyballPlayer : APawn
 		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
 		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
 		float Demand = InDir.Size();               // 0..1 commanded speed fraction
-		// Square-up for contact only when nearly stopped (or diving). A live
-		// reach at Demand ≥ SquareUpDemand used to force ball-facing and read
-		// as crawling backwards across the court.
+		// Alignment between commanded travel and the held facing request.
+		// Neutral (no conflict) when there is no real direction to compare —
+		// GetSafeNormal degenerates near zero input, and standing still can
+		// always afford to square up.
+		float Align = (Demand > 0.05f)
+			? InDir.GetSafeNormal().DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal())
+			: 1.0f;
+
+		// BACKPEDAL GUARD, CHECKED BEFORE THE SQUARE-UP GATE BELOW.
+		//
+		// This is the case Erik reported watching live ("spelarna böjer sig
+		// framåt och backar hela tiden") and it is confirmed in headless POSE
+		// telemetry across dozens of non-dive samples. It does not care how
+		// FAST the retreat is: a slow backward shuffle reads exactly as wrong
+		// as a fast one, because it's the DIRECTION conflict that's visible,
+		// not the speed.
+		//
+		// The bMustSquareUp check just below only ever asked "is Demand under
+		// 0.40", never "which way" — so ANY reach at moderate input forced
+		// ball-facing regardless of Align. Both real escape hatches (the
+		// Demand>0.40 engage below, and the old "clear reverse" branch)
+		// required Demand above 0.28-0.40 to even be evaluated, which meant a
+		// whole band of ordinary AI repositioning shuffles — real movement,
+		// just not a full "purposeful run" — lived in a dead zone: too slow to
+		// ever earn turn-and-run, too fast/reach-gated to be allowed to just
+		// face where they were actually going.
+		const float BackpedalAlign = -0.15f;
+		bool bBackpedaling = Demand > 0.05f && Align < BackpedalAlign;
+
+		// Square-up for contact only when nearly stopped (or diving) AND not
+		// actively retreating — a real dig/set benefits from facing the ball
+		// while gathering, but not at the cost of a backward crawl.
 		const float SquareUpDemand = 0.40f;
 		bool bMustSquareUp = IsDiving()
-			|| ((bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
+			|| (!bBackpedaling && (bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
 		bool bDesired = bTurnRun;
 
 		if (!bWantFacing || bMustSquareUp || !bIsGrounded)
@@ -2452,27 +2481,24 @@ class AVolleyballPlayer : APawn
 		{
 			bDesired = false;
 		}
+		else if (bBackpedaling)
+		{
+			bDesired = true;   // face travel — whatever the speed, however slight
+		}
+		else if (bTurnRun)
+		{
+			// Release when the run winds down (MoveToward2D's arrival taper
+			// drops the demand ~50cm out) or the travel no longer fights the
+			// facing (ball ahead again: the two agree anyway).
+			if (Demand < 0.28f || Align > 0.55f) bDesired = false;
+		}
 		else
 		{
-			float Align = InDir.GetSafeNormal()
-				.DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal());
-			if (bTurnRun)
-			{
-				// Release when the run winds down (MoveToward2D's arrival taper
-				// drops the demand ~50cm out) or the travel no longer fights the
-				// facing (ball ahead again: the two agree anyway).
-				if (Demand < 0.28f || Align > 0.55f) bDesired = false;
-			}
-			else
-			{
-				// Engage for a purposeful run well off the facing. Threshold is
-				// below MotionPlan's typical SpeedFraction (~0.35–0.55): the old
-				// 0.55 gate never fired on paced approaches, so src=2 never
-				// appeared in MatchFilmer telemetry.
-				if (Demand > 0.40f && Align < 0.35f) bDesired = true;
-				// Clear reverse at even a jog — the "bent-forward backpedal".
-				else if (Demand > 0.28f && Align < -0.15f) bDesired = true;
-			}
+			// Engage for a purposeful run well off the facing. Threshold is
+			// below MotionPlan's typical SpeedFraction (~0.35–0.55): the old
+			// 0.55 gate never fired on paced approaches, so src=2 never
+			// appeared in MatchFilmer telemetry.
+			if (Demand > 0.40f && Align < 0.35f) bDesired = true;
 		}
 
 		if (bDesired != bTurnRun)
