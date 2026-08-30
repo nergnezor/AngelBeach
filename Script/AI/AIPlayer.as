@@ -107,7 +107,17 @@ class AAIPlayer : AVolleyballPlayer
 		// Guarded on bHasFacing so a branch that ran this frame and asked for
 		// something MORE specific (the spike approach's open shoulder, a dive)
 		// still wins; this only fills the frames where nothing asked at all.
-		if (!bHasFacing && !bServing && Ball != nullptr && Ball.bInPlay && !IsDiving())
+		//
+		// STOPPED ONLY. This used to fire every in-play frame with no other
+		// request — including every jog back to base and every dig approach we
+		// had just stopped FaceBall()-ing. FacingHoldTimer never lapsed, the
+		// body stayed chest-to-ball, and travel ran the other way: the exact
+		// "böjer sig framåt och backar" look. The vibration this exists to
+		// kill is a PLANTED receiver rocking when the hold gaps; a moving
+		// player should face travel (UpdatePlayer) and does not need this.
+		float WatchHSpeed = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+		if (!bHasFacing && !bServing && Ball != nullptr && Ball.bInPlay && !IsDiving()
+			&& WatchHSpeed < 80.0f)
 			RequestBallFacing();
 	}
 
@@ -150,7 +160,7 @@ class AAIPlayer : AVolleyballPlayer
 			if (bFetching && RunFetchSequence(DeltaTime))
 				return true;
 
-			MoveToHold(ReadyPosition(), DeltaTime, 0.5f);
+			MoveToHold(ReadyPosition(), DeltaTime, 0.7f);
 			PreFaceForServe();
 			return true;
 		}
@@ -1021,9 +1031,11 @@ class AAIPlayer : AVolleyballPlayer
 		if (bHitterPlanted || DistToGoal < 150.0f)
 			FaceBall();
 
-		// Wind up when the budget says the hand clock has started — no distance
-		// condition: a late receive is saved by arms extending WHILE closing.
-		if (Plan.bStartGesture)
+		// Wind up on the last stretch only. Reach-while-sprinting handed FBIK
+		// a platform target in front of a running torso and the solver folded
+		// the spine to meet it — the "böjer sig framåt" silhouette on every
+		// approach. Late balls still get AutoReach at arm's length.
+		if (Plan.bStartGesture && (bHitterPlanted || DistToGoal < 160.0f))
 			Reach(Intend);
 	}
 

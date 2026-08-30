@@ -479,6 +479,20 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		WantHandR = ReadyR + (ContactR - ReadyR) * Ramp;
 		WantHandL = ReadyL + (ContactL - ReadyL) * Ramp;
 	}
+	// No gesture: park effectors on the live hands so FBIK is a no-op and
+	// the walk/run clip can play. The constructed Ready pose is in front
+	// and down — leaving that as the target with IKAlpha=1 is what froze
+	// every player in one reach silhouette.
+	if (Blend < 0.05f)
+	{
+		FVector LiveR = Self.Mesh.GetBoneTransform(n"hand_r").Location;
+		FVector LiveL = Self.Mesh.GetBoneTransform(n"hand_l").Location;
+		FVector Actor = Self.GetActorLocation();
+		if ((LiveR - Actor).SizeSquared() < 200.0f * 200.0f)
+			WantHandR = LiveR;
+		if ((LiveL - Actor).SizeSquared() < 200.0f * 200.0f)
+			WantHandL = LiveL;
+	}
 	// A triggered through-swing on a genuine whip stroke (spike/serve set their
 	// own, higher SinkBoost above) is deliberate ballistic motion worth opening
 	// the sink for. The bump/set swing-through is a much smaller, slower motion
@@ -534,6 +548,13 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	Self.SinkBoostLog = SinkBoost;
 	Self.SmHandR = MoveTowardClamped(Self.SmHandR, WantHandR, MaxStep);
 	Self.SmHandL = MoveTowardClamped(Self.SmHandL, WantHandL, MaxStep);
+	// Passthrough must be exact: a leftover Ready target lerping in still
+	// folds the spine for a beat after every gesture.
+	if (Blend < 0.05f)
+	{
+		Self.SmHandR = WantHandR;
+		Self.SmHandL = WantHandL;
+	}
 	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
 	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);
 	// Wrist keeps pace with the hand: the palm SNAPS through contact at swing
@@ -664,7 +685,10 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// blendspace wired. A standing receive below 30 cm/s keeps full plant;
 	// anything above 80 is pure gait animation.
 	float PlantSpeed = FVector(Self.PlayerVelocity.X, Self.PlayerVelocity.Y, 0).Size();
-	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 30.0f) / 50.0f, 0.0f, 1.0f);
+	// Walk clip lives at ~175 cm/s. The old 30–80 fade left plant weight on
+	// through the whole shuffle/walk band, so the Two Bone IK pinned the
+	// feet and "vanlig gång" was a slide with twitching toes.
+	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 15.0f) / 25.0f, 0.0f, 1.0f);
 	// Plant/pelvis Modify Bone is a GROUNDED crouch tool. Leaving it on in the
 	// air (jump-load crouch) pins a sunk pelvis under a rising capsule — the
 	// silhouette goes up butt-first. Dive/ragdoll own the body through bDiving
@@ -678,11 +702,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// FloorZ+12 falsely flagged every idle frame as under-sand and forced
 	// LegIKAlpha=1 permanently → skating. Only lift when a bone is truly buried.
 	float FloorFix = 0.0f;
-	if (Self.bIsGrounded && !Self.bRagdollActive)
+	// Never steal the gait: a walk cycle dips an ankle below MinFootZ every
+	// step, and FloorFix=1 pinned that foot → slide. Lift only while planted.
+	if (Self.bIsGrounded && !Self.bRagdollActive && MoveFade > 0.5f)
 	{
 		if (FootL.Z < MinFootZ || FootR.Z < MinFootZ)
 			FloorFix = 1.0f;
 	}
+
 	float FootAlpha = Math::Max(PlantAlpha, FloorFix);
 
 	Self.Anim.LegIKAlpha = FootAlpha;

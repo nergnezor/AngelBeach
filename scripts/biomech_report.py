@@ -148,7 +148,7 @@ def main():
         print(f"\n  {jit_fail} jitter metric(s) over limit\n")
 
         print("RELATIVE — per second of motion (compare against the last run)")
-        for key in ("footSlide", "kneeWalkTravel", "pelvisFlips", "ikTeleports",
+        for key in ("footSlide", "kneeWalkTravel", "kneeOpp", "pelvisFlips", "ikTeleports",
                     "moveFlips", "yawFlips", "crouchFlips"):
             if key in motion:
                 vals = motion[key]

@@ -539,36 +539,34 @@ class AVolleyballPlayer : APawn
 		else
 			FacingHoldTimer -= DeltaTime;
 
-		UpdateTurnRun(DeltaTime);
+		FVector InFlat = FVector(MoveInput.X, MoveInput.Y, 0);
+		FVector VelFlat = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+		// Face where the CAPSULE is going, not the AI's latest command.
+		// Command-as-travel made every reverse a backpedal: input flips 180°,
+		// the chest follows, velocity is still the old way for the whole
+		// brake — ForwardSpeed stays negative until the slide dies. Velocity
+		// as travel keeps the run clip honest (forward run while braking,
+		// then turn as the new direction actually starts).
+		FVector TravelFlat = (HSpeed2 > 80.0f) ? VelFlat
+			: ((InFlat.SizeSquared() > 0.01f) ? InFlat : VelFlat);
+		// TRAVEL WINS WHILE MOVING. FaceBall / the tick-rate watch fallback
+		// keep a facing request live almost every in-play frame; if that
+		// request is allowed to own yaw during a jog, the blendspace plays
+		// the forward-run clip while the capsule goes the other way — bent
+		// forward, backpedaling, "nästan hela tiden". Square up to the ball
+		// only in the air (spike uncoil) or once the run has actually stopped.
+		bool bTravelWins = bIsGrounded && !IsDiving()
+			&& (HSpeed2 > 80.0f || InFlat.Size() > 0.15f)
+			&& TravelFlat.SizeSquared() > 0.01f;
+		bTurnRun = bTravelWins;
 
 		FVector RawWant = FVector::ZeroVector;
-		if (bTurnRun)
-		{
-			// Prefer commanded travel; if Demand has already tapered (arrival /
-			// coast) but turn-run is still engaged from a velocity conflict,
-			// face the actual slide so we don't hand the body a near-zero input.
-			FVector InFlat = FVector(MoveInput.X, MoveInput.Y, 0);
-			if (InFlat.SizeSquared() > 0.01f)
-				RawWant = InFlat;
-			else if (HSpeed2 > 30.0f)
-				RawWant = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
-		}
+		if (bTravelWins)
+			RawWant = TravelFlat;
 		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
-		{
 			RawWant = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
-			// Residual after Demand drops: still FaceBall-holding while the
-			// capsule slides the last metres opposite the chest. Prefer travel.
-			if (HSpeed2 > 80.0f)
-			{
-				FVector VelFlat = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).GetSafeNormal();
-				float FaceAlign = FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal()
-					.DotProduct(VelFlat);
-				if (FaceAlign < 0.15f)
-					RawWant = VelFlat;
-			}
-		}
 		else if (HSpeed2 > 30.0f)
-			RawWant = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+			RawWant = VelFlat;
 
 		// ALL THREE SOURCES pass through one rate-limited target, not just the
 		// held-request one. Only src=1 was smoothed before, so the two unsmoothed
@@ -582,8 +580,14 @@ class AVolleyballPlayer : APawn
 			if (SmWantDir.SizeSquared() < 0.01f) SmWantDir = RawWant.GetSafeNormal2D();
 			float CurWantYaw = SmWantDir.Rotation().Yaw;
 			float NewWantYaw = RawWant.Rotation().Yaw;
+			// Ball-watch tracks at 300 deg/s so a swinging bearing doesn't
+			// whip the chest. Travel retargets faster — the old 300° cap on
+			// THIS vector meant a 180° "turn and run" spent 0.6s with
+			// ForwardSpeed still negative (body chasing a target that itself
+			// was only halfway around). BodyMaxTurnRate still caps the actor.
+			float WantRate = bTravelWins ? 1800.0f : FacingDirMaxTurnRate;
 			float WStep = Math::Clamp(Math::FindDeltaAngleDegrees(CurWantYaw, NewWantYaw),
-				-FacingDirMaxTurnRate * DeltaTime, FacingDirMaxTurnRate * DeltaTime);
+				-WantRate * DeltaTime, WantRate * DeltaTime);
 			SmWantDir = FRotator(0.0f, CurWantYaw + WStep, 0.0f).Vector();
 		}
 		FVector Want = SmWantDir;
@@ -627,16 +631,12 @@ class AVolleyballPlayer : APawn
 			// 720 (still under a snap) only while the body is still opposing
 			// the commanded travel.
 			float MaxRate = BodyMaxTurnRate;
-			if (bTurnRun)
+			if (bTravelWins && TravelFlat.SizeSquared() > 0.01f)
 			{
-				FVector InFlat = FVector(MoveInput.X, MoveInput.Y, 0);
-				if (InFlat.SizeSquared() > 0.01f)
-				{
-					float BodyAlign = GetActorForwardVector().GetSafeNormal2D()
-						.DotProduct(InFlat.GetSafeNormal());
-					if (BodyAlign < -0.2f)
-						MaxRate = 720.0f;
-				}
+				float BodyAlign = GetActorForwardVector().GetSafeNormal2D()
+					.DotProduct(TravelFlat.GetSafeNormal());
+				if (BodyAlign < -0.2f)
+					MaxRate = 720.0f;
 			}
 			float MaxStep = MaxRate * DeltaTime;
 			Step = Math::Clamp(Step, -MaxStep, MaxStep);
@@ -679,7 +679,7 @@ class AVolleyballPlayer : APawn
 		FVector Right = GetActorRightVector();
 		FVector FlatVel = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
 
-		Anim.Speed         = HSpeed;
+		Anim.Speed = HSpeed;
 		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
 		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
 		// Travel-vs-facing angle for an orientation-aware blendspace. Only updated
@@ -707,10 +707,21 @@ class AVolleyballPlayer : APawn
 		// node, which nothing outside the editor GUI can create.
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
-		// Death_Front (bDiving) + physics blend flipped bodies butt-over-head
-		// and drove knees through the sand. Dive is a grounded speed burst with
-		// a mild crouch until the Anim BP has a real dig clip that stays above
-		// the floor. Keep the flag false so locomotion/crouch own the pose.
+		// bDiving=true was tried as a fix for "every player spends the whole
+		// match hunched" on the theory that this BlendListByBool's pins were
+		// inverted vs. its name. Checked directly against the live AnimGraph
+		// (analyze_blueprint_graph, traced node-by-node): they are not.
+		// AnimGraphNode_BlendListByBool_0.BlendPose_0 is the real chain —
+		// BlendSpacePlayer (locomotion) -> pelvis Modify Bone -> two Two Bone
+		// IK nodes (legs) -> the hit-overlay TwoWayBlend -> LookAt -> Root.
+		// BlendPose_1 is a single AnimGraphNode_SequencePlayer whose node
+		// title is literally "MM_Death_Front_01". UE's own
+		// FAnimNode_BlendListByBool::GetActiveChildIndex() is
+		// `bActiveValue ? 1 : 0` — standard, not inverted — so bDiving=true
+		// selects BlendPose_1, locking EVERY player onto that one static
+		// dive/death clip permanently, which is what was actually seen:
+		// identical frozen pose across every MatchFilmer frame regardless of
+		// game state. bDiving=false correctly selects the real chain.
 		Anim.bDiving       = false;
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
@@ -719,9 +730,16 @@ class AVolleyballPlayer : APawn
 		Anim.HitClipBranch = (Clip > 0) ? 1 : 0;
 		Anim.HitSetSpikeBlend = (Clip == 2) ? 1.0f : 0.0f;
 
-		// Head tracks the ball: always look at it while it's in play, so every
-		// player keeps their eyes on the ball. The Anim BP drives a Look At node on
-		// the head bone toward LookTarget with weight LookAlpha.
+		// Head tracks the ball: ALWAYS look at it while it's in play, so every
+		// player keeps their eyes on the ball — Erik's own stated design goal
+		// for this project. A HSpeed<120 gate was added here at some point,
+		// turning head tracking off while running; reverted; it isn't
+		// physically necessary (a real player watches the ball over their
+		// shoulder mid-run — see the comment on the near-field bearing fix in
+		// AIPlayer.as) and the head LookAt is a separate skeletal control
+		// from body facing, so it doesn't fight travel the way the body's own
+		// rotation authority can. The Anim BP drives a Look At node on the
+		// head bone toward LookTarget with weight LookAlpha.
 		{
 			ABall LB = GetWorldBall();
 			if (LB != nullptr && LB.bInPlay)
@@ -776,7 +794,19 @@ class AVolleyballPlayer : APawn
 		// (CurrentPose 0.85) overrides the legs and reads as crawling backwards.
 		// IK owns reach; reserve HitAlpha for the contact swing only.
 		Anim.HitAlpha = (HitAnimTimer > 0.0f) ? CurrentPose : 0.0f;
-		Anim.IKAlpha  = IKWeight;
+		// IKAlpha=1 (was forced permanently) was working around the IK Rig
+		// node's Source pin being DISCONNECTED in the ABP — with nothing
+		// feeding it a pose, it fell back to the skeleton's bind pose
+		// regardless of Alpha, so forcing Alpha to 1 was the only way to get
+		// the (still bind-pose-based) hand goals to show at all. Fixed at the
+		// graph level instead: Source is now wired to the real locomotion +
+		// hit-overlay chain (execute_python, AnimGraphNode_IKRig_0.Source <-
+		// AnimGraphNode_TwoWayBlend_2.Pose, AnimGraphNode_IKRig_0.Pose ->
+		// AnimGraphNode_LocalToComponentSpace_6.LocalPose). With a real pose
+		// now flowing in, Alpha=0 passes it through unmodified — which is
+		// what locomotion needs — and only a live gesture should pull the
+		// hands away from it, so this goes back to the smoothed IKWeight.
+		Anim.IKAlpha = IKWeight;
 		// Pose shape uses the full 0..1 gesture curve, remapped so even the 0.85
 		// reach hold reaches the contact shape (reach should look committed).
 		float Shape = Math::Clamp(CurrentPose / 0.85f, 0.0f, 1.0f);
@@ -1159,6 +1189,11 @@ class AVolleyballPlayer : APawn
 	// near zero no matter how good the mean looks.
 	private float MonKneeWalkTravel = 0.0f;
 	private float MonPrevKneeL = -1.0f;
+	// Opposite-stride tell: actor-forward offset of left knee minus right knee.
+	// A real gait flips the sign every step; locked legs leave this near zero.
+	private float MonKneeOppTravel = 0.0f;
+	private float MonPrevKneeOpp = 0.0f;
+	private bool bMonKneeOppInit = false;
 	// Per-frame leg-chain trace. Diagnostic only — set on ONE player by the
 	// GameMode so the log stays readable; leave false in normal play.
 	bool bKneeTrace = false;
@@ -1449,6 +1484,7 @@ class AVolleyballPlayer : APawn
 			+ " kneeWalkMin=" + int(MonKneeWalkMin < 900.0f ? MonKneeWalkMin : 0.0f)
 			+ " kneeWalkMax=" + int(MonKneeWalkMax)
 			+ " kneeWalkTravel=" + int(MonKneeWalkTravel)
+			+ " kneeOpp=" + int(MonKneeOppTravel)
 			+ " kneeStill=" + int(KneeStillMean())
 			+ " kneeStillMax=" + int(MonKneeStillMax)
 			+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
@@ -1504,6 +1540,8 @@ class AVolleyballPlayer : APawn
 		MonKneeStillSamples = 0.0f;
 		MonKneeStillMax = 0.0f;
 		MonKneeWalkTravel = 0.0f;
+		MonKneeOppTravel = 0.0f;
+		bMonKneeOppInit = false;
 		MonUnderSandTime = 0.0f;
 		MonBackpedalTime = 0.0f;
 		MonTurnRunTime = 0.0f;
@@ -1708,6 +1746,18 @@ class AVolleyballPlayer : APawn
 				}
 				MonPrevKneeL = KneeL;
 
+				FVector KL = Mesh.GetBoneTransform(n"calf_l").Translation;
+				FVector KR = Mesh.GetBoneTransform(n"calf_r").Translation;
+				float KneeOpp = (KL - GetActorLocation()).DotProduct(GetActorForwardVector())
+					- (KR - GetActorLocation()).DotProduct(GetActorForwardVector());
+				if (Spd2D > 80.0f)
+				{
+					if (bMonKneeOppInit)
+						MonKneeOppTravel += Math::Abs(KneeOpp - MonPrevKneeOpp);
+					bMonKneeOppInit = true;
+					MonPrevKneeOpp = KneeOpp;
+				}
+
 				// Per-frame trace on ONE player while walking: the rally totals say
 				// the knees stay locked but not WHY. Prints the whole leg chain so
 				// the pelvis/foot relationship is visible frame by frame.
@@ -1727,6 +1777,8 @@ class AVolleyballPlayer : APawn
 					Log("KNEETRACE " + GetName()
 						+ " spd=" + int(Spd2D)
 						+ " kneeL=" + int(KneeL) + " kneeR=" + int(KneeR)
+						+ " fwdL=" + int((KL - GetActorLocation()).DotProduct(GetActorForwardVector()))
+						+ " fwdR=" + int((KR - GetActorLocation()).DotProduct(GetActorForwardVector()))
 						+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
 						+ " crouch=" + int(SmCrouch * 100.0f)
 						+ " pelvisZ=" + int(Pelvis.Z)
@@ -2428,137 +2480,8 @@ class AVolleyballPlayer : APawn
 	// Desired input this frame (unit length or less). Consumed by UpdatePlayer.
 	private FVector2D MoveInput = FVector2D::ZeroVector;
 
-	// --- TURN-AND-RUN (first principles) -----------------------------------
-	// Nobody runs backward across a court: backpedal/shuffle exist only for
-	// short, slow adjustment steps. A player who has real ground to cover
-	// TURNS, runs facing the travel, and squares back up to the ball while
-	// decelerating into the spot (the head look-at keeps the eyes on the ball
-	// the whole way — exactly how a receiver tracks over the shoulder). So a
-	// ball-facing request is OVERRIDDEN by travel-facing while the commanded
-	// movement is both brisk and clearly against that facing. Judged on the
-	// INTENT (MoveInput demand), not the lagging velocity, so the body turns
-	// as the run starts, not after it. Hysteresis on both gates — demand and
-	// alignment bands don't overlap — so the choice cannot flicker at a
-	// boundary (per-frame conditional facing is exactly what caused the old
-	// two-pose shimmer this replaces). Reach starts early WHILE closing
-	// (Plan.bStartGesture) — blocking turn-and-run for the whole reach made
-	// every approach a forward-bent backpedal. Square up only once the run is
-	// winding down (same Demand gate as the release path) or while diving;
-	// the head LookAt keeps eyes on the ball the whole way.
+	// Mirrors the travel-wins choice in UpdatePlayer (telemetry / DbgFacingSrc).
 	private bool bTurnRun = false;
-	// Minimum time bTurnRun must hold a state before it may flip again. The
-	// Demand/Align hysteresis bands don't overlap, which stops FLICKER from a
-	// signal drifting slowly across a boundary — but FacingDir is the AI's raw
-	// ball-direction request, re-asserted whole-cloth every reaction tick
-	// (~10Hz): it can JUMP 20-40° in one tick near the ball, clearing BOTH
-	// bands in a single step and re-deciding engage/release every tick (a
-	// travel/turn-run source shimmer, same family as the old gesture/crouch
-	// flicker bugs). A dwell timer — the same fix used everywhere else in this
-	// file — gives the noisy comparison time to settle before re-deciding.
-	private float TurnRunDwellTimer = 0.0f;
-	const float TurnRunMinDwell = 0.3f;
-
-	private void UpdateTurnRun(float DeltaTime)
-	{
-		if (TurnRunDwellTimer > 0.0f) TurnRunDwellTimer -= DeltaTime;
-
-		// Compute the DESIRED state first, decide whether to apply it LAST —
-		// every path (including the early-out ones) must cross the same dwell
-		// gate. The previous version force-applied bTurnRun=false from the
-		// early-outs without checking the timer at all, so it never actually
-		// stopped a state that was flapping because bWantFacing itself was
-		// flapping (FacingHoldTimer lapsing between AI ticks) — exactly the
-		// residual src=0<->1<->2 churn the YFLIP telemetry kept showing.
-		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
-		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
-		float Demand = InDir.Size();               // 0..1 commanded speed fraction
-		// When input has tapered but the body is still sliding, treat velocity
-		// as travel — otherwise FaceBall wins the last metres of every approach
-		// (Demand < travel-conflict gate, Align never evaluated) and POSE keeps
-		// logging back=1 with turnRun=0.
-		float HSpdTurn = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
-		if (Demand < 0.12f && HSpdTurn > 80.0f)
-		{
-			InDir = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).GetSafeNormal();
-			Demand = Math::Clamp(HSpdTurn / MoveSpeed, 0.0f, 1.0f);
-		}
-		// Alignment between commanded travel and the held facing request.
-		// Neutral (no conflict) when there is no real direction to compare —
-		// GetSafeNormal degenerates near zero input, and standing still can
-		// always afford to square up.
-		float Align = (Demand > 0.05f)
-			? InDir.GetSafeNormal().DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal())
-			: 1.0f;
-
-		// BACKPEDAL GUARD, CHECKED BEFORE THE SQUARE-UP GATE BELOW.
-		//
-		// This is the case Erik reported watching live ("spelarna böjer sig
-		// framåt och backar hela tiden") and it is confirmed in headless POSE
-		// telemetry across dozens of non-dive samples. It does not care how
-		// FAST the retreat is: a slow backward shuffle reads exactly as wrong
-		// as a fast one, because it's the DIRECTION conflict that's visible,
-		// not the speed.
-		//
-		// The bMustSquareUp check just below only ever asked "is Demand under
-		// 0.40", never "which way" — so ANY reach at moderate input forced
-		// ball-facing regardless of Align. Both real escape hatches (the
-		// Demand>0.40 engage below, and the old "clear reverse" branch)
-		// required Demand above 0.28-0.40 to even be evaluated, which meant a
-		// whole band of ordinary AI repositioning shuffles — real movement,
-		// just not a full "purposeful run" — lived in a dead zone: too slow to
-		// ever earn turn-and-run, too fast/reach-gated to be allowed to just
-		// face where they were actually going.
-		const float BackpedalAlign = -0.15f;
-		bool bBackpedaling = Demand > 0.05f && Align < BackpedalAlign;
-		// Any purposeful travel that fights the held facing (side-shuffle while
-		// ball-watching, diagonal retreat, etc.) — not only pure reverse.
-		// Measured: after the backpedal-only gate, ~63% of POSE back=1 frames
-		// still had turnRun=0 because Align sat in (-0.15, +0.35) while velocity
-		// ran opposite the chest. Face travel for that whole band.
-		bool bTravelConflict = Demand > 0.12f && Align < 0.35f;
-
-		// Square-up for contact only when nearly stopped (or diving) AND not
-		// actively retreating — a real dig/set benefits from facing the ball
-		// while gathering, but not at the cost of a backward crawl.
-		const float SquareUpDemand = 0.40f;
-		bool bMustSquareUp = IsDiving()
-			|| (!bTravelConflict && (bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
-		bool bDesired = bTurnRun;
-
-		if (!bWantFacing || bMustSquareUp || !bIsGrounded)
-		{
-			bDesired = false;
-		}
-		else if (Demand < 0.05f)
-		{
-			bDesired = false;
-		}
-		else if (bTravelConflict)
-		{
-			bDesired = true;   // face travel — including mild side/back conflict
-		}
-		else if (bTurnRun)
-		{
-			// Release when the run winds down (MoveToward2D's arrival taper
-			// drops the demand ~50cm out) or the travel no longer fights the
-			// facing (ball ahead again: the two agree anyway).
-			if (Demand < 0.28f || Align > 0.55f) bDesired = false;
-		}
-		else
-		{
-			if (Demand > 0.40f && Align < 0.35f) bDesired = true;
-		}
-
-		if (bDesired != bTurnRun)
-		{
-			if (TurnRunDwellTimer > 0.0f) return;   // switched too recently: hold
-			bTurnRun = bDesired;
-			// Engage from a clear reverse: short dwell so we don't sit another
-			// 0.3s in the ball-facing backpedal. Release stays at full dwell to
-			// stop flicker at the Align boundary.
-			TurnRunDwellTimer = (bDesired && bBackpedaling) ? 0.12f : TurnRunMinDwell;
-		}
-	}
 
 	// Horizontal acceleration rates (cm/s²). Ground values give a sprinter-like
 	// first step (0→full in ~0.2s) and a decisive plant (full→0 in ~0.13s, sliding
