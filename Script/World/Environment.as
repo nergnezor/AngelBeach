@@ -77,7 +77,14 @@ class AEnvironment : AActor
 	const float IslandRadius = 2300.0f;
 	const float IslandBlobAmp = 0.17f;
 	const float WaterZ = -40.0f;
-	const float WaterHalf = 20000.0f;   // 400 m square ocean
+	const float WaterHalf = 20000.0f;   // 400 m square ocean (desktop: SkyAtmosphere above it, no dome to clip through)
+	// Mobile still has no SkyAtmosphere: SkyMesh's dome (BuildSky) is a literal
+	// sphere of radius SkyRadius sitting over everything, and its own lower bands
+	// ARE the distant sea. A flat plane out to WaterHalf would poke straight
+	// through that sphere. Keep it well inside SkyRadius (5000) so the plane's
+	// edge disappears under the dome's curve instead of cutting a visible edge
+	// across it — the near water is this real plane, the far water is the dome.
+	const float WaterHalfMobile = 4000.0f;
 
 	// Dome radius must clear the whole playfield (sand corners reach ~1580, the
 	// match camera sits 1400 out) and stay under the fog's start distance so the
@@ -142,10 +149,17 @@ class AEnvironment : AActor
 	void BeginPlay()
 	{
 		BuildSky();
+		// The coastline and a real water surface are cheap, texture-free procedural
+		// meshes (BackshoreMesh ~2.3k tris, WaterMesh ~2k) using the same M_Sand/
+		// M_Water materials SandMesh already runs on mobile, so both build on every
+		// platform now — mobile no longer shows the sand's rectangular skirt
+		// cutting straight into open space. BuildWater sizes itself down on mobile
+		// (WaterHalfMobile) to stay inside the sky dome. Dunes and props stay
+		// desktop-only: purely decorative background detail, not the coastline.
+		BuildBackshore();
+		BuildWater();
 		if (!IsMobile())
 		{
-			BuildBackshore();
-			BuildWater();
 			BuildDunes();
 			BuildProps();
 		}
@@ -465,7 +479,7 @@ class AEnvironment : AActor
 		WaterMesh.SetCastShadow(false);
 
 		const int N = 32;
-		const float H = WaterHalf;
+		float H = IsMobile() ? WaterHalfMobile : WaterHalf;
 		TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
 		TArray<FVector2D> UV; TArray<FLinearColor> C;
 		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
