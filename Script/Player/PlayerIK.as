@@ -400,6 +400,9 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 			PoleL = ShL - Up * 18.0f - Fwd * 8.0f;
 			PalmL = (-Up).Rotation();
 		}
+		// The script-computed target, not the solved bone — see the field's
+		// comment in VolleyballPlayer.as for why RunServeSequence reads this.
+		Self.ServeTossTarget = ContactL;
 
 		FVector RestR   = ShR + Fwd * 15.0f - Up * 22.0f;
 		FVector DrawR   = Head + Right * 24.0f - Fwd * 14.0f + Up * 4.0f;  // drawn behind the ear

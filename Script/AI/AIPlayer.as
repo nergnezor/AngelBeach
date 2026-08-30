@@ -309,7 +309,11 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			if (ServePhase < TossReleasePhase)
 			{
-				FVector Carry = Mesh.GetBoneTransform(n"hand_l").Location + FVector(0, 0, 16);
+				// The script-computed hand TARGET, not the solved bone — see
+				// ServeTossTarget's comment in VolleyballPlayer.as. +16 keeps
+				// the ball riding above the palm the same way the old
+				// bone-read offset did.
+				FVector Carry = ServeTossTarget + FVector(0, 0, 16);
 				Ball.Position = Carry;
 				Ball.BallVel = FVector::ZeroVector;
 				Ball.SetActorLocation(Carry);
@@ -343,6 +347,10 @@ class AAIPlayer : AVolleyballPlayer
 				// cooldown stops the ball bouncing off the server's own raised
 				// hands on its first in-play frame (it starts near the strike hand).
 				bServeLaunched = true;
+				Log("SERVELAUNCH pos=(" + int(Ball.Position.X) + "," + int(Ball.Position.Y)
+					+ "," + int(Ball.Position.Z) + ") vel=(" + int(PendingServeVel.X)
+					+ "," + int(PendingServeVel.Y) + "," + int(PendingServeVel.Z) + ")"
+					+ " yaw=" + int(GetActorRotation().Yaw) + " actorZ=" + int(GetActorLocation().Z));
 				Ball.Launch(Ball.Position, PendingServeVel);
 				Ball.PlayerHitCooldown = 0.35f;
 				if (GM != nullptr)

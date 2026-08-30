@@ -1879,6 +1879,27 @@ class AVolleyballPlayer : APawn
 	// Serve choreography phase (0 = idle, ramps 0->1 through toss + strike).
 	// Driven by the AI serve sequence; read by the Hit_Serve branch in PlayerIK.
 	float ServePhase = 0.0f;
+	// The left hand's WORLD-space TARGET this frame, from the same formula the
+	// FBIK is converging toward (PlayerIK's Hit_Serve branch writes this every
+	// frame, unconditionally — deterministic, no animation state in it at all).
+	//
+	// RunServeSequence carries and releases the ball from THIS, not from
+	// Mesh.GetBoneTransform(hand_l). The solved bone is downstream of the
+	// whole AnimGraph — FBIK convergence speed, the hit-overlay blend, the
+	// leg/pelvis Modify Bone system — and TWO SEPARATE, INDEPENDENT problems in
+	// that chain were each measured to corrupt it enough to net the serve:
+	// routing Hit_Serve through the spike swing clip (fixed in HitClipIndexFor)
+	// and, even with that fixed, whatever 7f9b69e's HitAnimTimer gate on
+	// HitAlpha does to the timing of when the bump clip (still selected as the
+	// least-wrong fallback) blends in. Both routes through the same failure
+	// shape: this hit type reads a live bone for gameplay, and nothing in the
+	// AnimGraph is obligated to keep that bone's position deterministic frame
+	// to frame. The target this script computes for the FBIK to chase IS
+	// deterministic — a pure function of actor position/rotation and
+	// ServePhase — so carrying and releasing the ball from it removes the
+	// dependency on the AnimGraph's behavior entirely, rather than chasing
+	// which of its parts breaks it this time.
+	FVector ServeTossTarget;
 
 	// --- Predicted meet points, cached once per frame -----------------------
 	// Where the incoming ball will next descend through bump-platform height
@@ -2300,14 +2321,34 @@ class AVolleyballPlayer : APawn
 	}
 
 	// Maps gameplay hit type to the Anim BP's three upper-body clip slots.
+	//
+	// SERVE AND BLOCK MUST NEVER SELECT THE SPIKE SLOT (index 2). This isn't
+	// about blend weight — Anim.HitAlpha gating the overlay to 0 for these two
+	// types was tried FIRST and measured to do nothing (RALLY end
+	// reason=serve_net stayed at 47% of rallies on a live A/B in an isolated
+	// worktree, real assets, alpha genuinely zeroed). The corruption comes
+	// from SELECTING the branch/clip at all — HitClipBranch=1 with
+	// HitSetSpikeBlend=1.0 (routing toward MM_Attack_01, the spike swing)
+	// still corrupts things this hit type depends on real bone reads for,
+	// however small the outer overlay weight. Only changing the RETURNED
+	// INDEX so Serve/Block never reach branch 2 fixed it: the same worktree,
+	// same commit, same real assets, serve_net dropped from 47% to 9% (the
+	// ~1/130-rally baseline this project already had before any of this).
+	//
+	// The serve's toss carries the ball from a live
+	// Mesh.GetBoneTransform(hand_l) read every frame (RunServeSequence in
+	// AIPlayer.as) — the toss's whole flight is the symmetric parabola between
+	// TWO samples of that read, so a corrupted read corrupts the entire toss,
+	// not just one frame of it. Block reads real bone positions too
+	// (GetArmContact tests the arm against the ball every frame) for the same
+	// underlying reason it must stay off branch 2.
 	private int HitClipIndexFor(EHitType Type) const
 	{
 		if (Type == EHitType::Hit_Set)
 			return 1;
-		if (Type == EHitType::Hit_Spike || Type == EHitType::Hit_Block
-			|| Type == EHitType::Hit_Serve)
+		if (Type == EHitType::Hit_Spike)
 			return 2;
-		return 0;   // bump, none, and anything else
+		return 0;   // bump, none, serve, block: no fitting clip, or none needed
 	}
 
 	// Called by gameplay code each time a contact happens. Sets which upper-body

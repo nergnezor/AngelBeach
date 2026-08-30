@@ -725,19 +725,34 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// performs a real toss + overhead strike and launches the ball from the
 		// strike point (see AAIPlayer.RunServeSequence). Rally bookkeeping happens
 		// in OnServeLaunched at the strike moment.
-		// Slightly floaty (780/640 rather than a flat rocket): the extra hang time
+		// Slightly floaty (780/700 rather than a flat rocket): the extra hang time
 		// is what gives the receiver's FBIK arms time to converge on the platform —
 		// rallies need the SERVE to be returnable, not an ace machine.
+		//
+		// Z was 640 until RunServeSequence stopped reading the strike-hand
+		// position off the solved mesh bone (corruptible by whatever else was
+		// blended over the arms that frame) and started reading the script's
+		// own toss target instead — see ServeTossTarget in VolleyballPlayer.as.
+		// That fixed a catastrophic version of this (releases as low as 66cm,
+		// serve_net on ~85% of rallies), but it also means the release height
+		// is now the STABLE ~145-210cm the toss target always intended, not
+		// whatever the old bug happened to average out to. Measured against
+		// that real, steady height: NETHIT logged the ball clearing the net by
+		// only 6-24cm short at 640 (net=253, ball 229-247) on ~34% of serves —
+		// a margin problem now that the target height itself is trustworthy,
+		// not a repeat of the old corruption. 700 adds roughly 40cm of apex
+		// (v^2/2g), comfortably covering that gap while staying a toss, not a
+		// rocket.
 		FVector ServeVel;
 		AAIPlayer Server;
 		if (GS.ServingTeam == ETeam::Team_A)
 		{
-			ServeVel = FVector(780, Math::RandRange(-140.0f, 140.0f), 640);
+			ServeVel = FVector(780, Math::RandRange(-140.0f, 140.0f), 700);
 			Server = HumanPawn;
 		}
 		else
 		{
-			ServeVel = FVector(-780, Math::RandRange(-140.0f, 140.0f), 640);
+			ServeVel = FVector(-780, Math::RandRange(-140.0f, 140.0f), 700);
 			Server = PlayerB1;
 		}
 

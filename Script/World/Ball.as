@@ -241,6 +241,8 @@ class ABall : AActor
 			if (Position.Z < NetTopZ + BallRadius)
 			{
 				// Hit the net.
+				Log("NETHIT z=" + int(Position.Z) + " netTop=" + int(NetTopZ + BallRadius)
+					+ " velX=" + int(BallVel.X) + " velZ=" + int(BallVel.Z));
 				BallVel.X = -BallVel.X * 0.3f;
 				Position.X = (Position.X < NetX)
 					? NetX - NetHalfThickness - BallRadius
