@@ -163,6 +163,65 @@ class AEnvironment : AActor
 		return Comp.CreateDynamicMaterialInstance(Section, Base);
 	}
 
+	// Runtime self-check: does this section's triangle winding actually agree with
+	// the per-vertex normals it was built with? BuildBackshore's disc below failed
+	// exactly this way (Aug 2026) — correct positions, correct material, but wound
+	// backwards because its polar (angle, radius) index pair has the opposite
+	// handedness of a plain (X, Y) grid, the same T2.Add(A,Cidx,B)/(B,Cidx,D) pattern
+	// that IS correct on the Cartesian grids in this file (Water, Dunes). The whole
+	// disc was silently backface-culled from every camera angle, and nothing in the
+	// log said so; it took a human noticing the coastline had gone missing by
+	// comparing screenshots. Call this once, right after building any FLAT,
+	// UP-FACING mesh section (normal ≈ (0,0,1)) — Water, Dunes, Backshore, Lines,
+	// Sand all calibrate cleanly against each other. It does NOT reliably
+	// generalize to curved or non-planar-normal shapes (see the "no
+	// CheckMeshWinding() here" notes on PostsMesh in Court.as and BuildProps
+	// below) — don't wire it into those without re-deriving the sign convention
+	// for that shape first. Skip BuildSky's dome deliberately too: it emits both
+	// windings on purpose (see its comment), so "half the triangles disagree"
+	// there is by design, not a bug. A PRIVATE METHOD, duplicated in ACourt for
+	// the same module-isolation reason as ApplySolidColorMaterial below.
+	private void CheckMeshWinding(FString MeshName, TArray<FVector> V, TArray<int32> T, TArray<FVector> N) const
+	{
+		int Agree = 0;
+		int Disagree = 0;
+		for (int i = 0; i + 2 < T.Num(); i += 3)
+		{
+			FVector A = V[T[i]];
+			FVector B = V[T[i + 1]];
+			FVector C2 = V[T[i + 2]];
+			FVector E1 = B - A;
+			FVector E2 = C2 - A;
+			FVector Face = FVector(E1.Y * E2.Z - E1.Z * E2.Y,
+				E1.Z * E2.X - E1.X * E2.Z, E1.X * E2.Y - E1.Y * E2.X);
+			FVector Nrm = N[T[i]];
+			if (Face.SizeSquared() < 0.001f || Nrm.SizeSquared() < 0.001f) continue; // degenerate
+
+			// Some meshes here (the net strips, the prop cone) assign a uniform
+			// "lit as if flat" normal that is nowhere near the triangle's real
+			// geometric plane on purpose. Comparing winding against a normal that
+			// is roughly PERPENDICULAR to the triangle tells you nothing either
+			// way, so only count triangles where the two are reasonably aligned.
+			float Cos = Face.GetSafeNormal().DotProduct(Nrm.GetSafeNormal());
+			if (Math::Abs(Cos) < 0.3f) continue; // normal not aligned with this face; inconclusive
+
+			// Calibrated against SandMesh's known-good, known-visible winding
+			// (T.Add(A);T.Add(C);T.Add(B) over a +X/+Y grid with normal (0,0,1)):
+			// that triangle's (v1-v0)x(v2-v0), dotted with its own normal, comes
+			// out NEGATIVE. Every other proven-visible mesh in this file agrees.
+			if (Cos < 0.0f) Agree++;
+			else Disagree++;
+		}
+
+		if (Disagree > Agree)
+		{
+			Log("WINDING BUG: " + MeshName + " has " + Disagree + "/" + (Agree + Disagree)
+				+ " triangles wound backwards from their own normals — this section will "
+				+ "render backface-culled (invisible) from the front. Swap two indices per "
+				+ "triangle to fix.");
+		}
+	}
+
 	private UMaterialInstanceDynamic ApplySolidColorMaterial(UProceduralMeshComponent Comp, int Section,
 		FLinearColor Color, float Roughness = 0.9f)
 	{
@@ -254,6 +313,9 @@ class AEnvironment : AActor
 			}
 
 			SkyMesh.CreateMeshSection_LinearColor(b, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			// No CheckMeshWinding() here: this band emits BOTH windings on purpose
+			// (see the comment above), so "half the triangles disagree" is the
+			// intended shape, not the bug that check exists to catch.
 			ApplySolidColorMaterial(SkyMesh, b, Col);
 		}
 	}
@@ -378,6 +440,7 @@ class AEnvironment : AActor
 		}
 
 		BackshoreMesh.CreateMeshSection_LinearColor(0, V, T2, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		CheckMeshWinding("BackshoreMesh", V, T2, Nrm);
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(BackshoreMesh, 0, "/Game/Materials/M_Sand.M_Sand");
 		if (MID != nullptr)
 		{
@@ -433,6 +496,7 @@ class AEnvironment : AActor
 		}
 
 		WaterMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		CheckMeshWinding("WaterMesh", V, T, Nrm);
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(WaterMesh, 0, "/Game/Materials/M_Water.M_Water");
 		if (MID != nullptr)
 		{
@@ -499,6 +563,7 @@ class AEnvironment : AActor
 		}
 
 		DuneMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		CheckMeshWinding("DuneMesh", V, T, Nrm);
 		ApplyAuthoredMaterial(DuneMesh, 0, "/Game/Materials/M_Sand.M_Sand");
 	}
 
@@ -600,6 +665,14 @@ class AEnvironment : AActor
 		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
 		PropsMesh.CreateMeshSection_LinearColor(Section, V, T, Nrm, UV,
 			NoUV, NoUV, NoUV, C, Tan, false);
+		// No CheckMeshWinding() here, same reason as PostsMesh in Court.as:
+		// AddPropBox pairs a bottom quad (Sand-style A,C,B triangulation) with a
+		// top quad built the OTHER way (A,B,C) under the same uniform up-normal,
+		// so this check disagrees with itself within a single prop, let alone
+		// against SandMesh's calibration. These are thin, ground-flush "cheap
+		// scale references" (a towel, a chair seat) where a real reversal on one
+		// face would likely be as invisible as the post's — not verified either
+		// way, left unchecked rather than a claim this method can't back up.
 		ApplySolidColorMaterial(PropsMesh, Section, Col, Rough);
 	}
 

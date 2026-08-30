@@ -164,6 +164,7 @@ class ACourt : AActor
 		SandMesh.CreateMeshSection_LinearColor(0, SandV, T, SandN, SandUV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			SandColors(), SandTan, true, false);
+		CheckMeshWinding("SandMesh", SandV, T, SandN);
 
 		// THE SAND HAS ITS OWN MATERIAL NOW. /Game/Materials/M_Sand computes its
 		// grain, its macro colour variation and its sparkle from world position in
@@ -350,6 +351,7 @@ class ACourt : AActor
 			}
 
 			NetMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			CheckMeshWinding("NetMesh section 0 (band)", V, T, N);
 			ApplySolidColorMaterial(NetMesh, 0, NetBandColor, 0.55f);
 		}
 
@@ -360,6 +362,7 @@ class ACourt : AActor
 
 			AddNetStrip(V, T, N, UV, C, NetTapeColor, -HW, HW, BandTop, NetHeight);
 			NetMesh.CreateMeshSection_LinearColor(1, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			CheckMeshWinding("NetMesh section 1 (tape)", V, T, N);
 
 			ApplySolidColorMaterial(NetMesh, 1, NetTapeColor, 0.72f);
 		}
@@ -423,6 +426,7 @@ class ACourt : AActor
 		LinesMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			TArray<FLinearColor>(), Tan, false, false);
+		CheckMeshWinding("LinesMesh", V, T, N);
 
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(LineColor);
@@ -470,6 +474,19 @@ class ACourt : AActor
 		PostsMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
 			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
 			TArray<FLinearColor>(), Tan, false, false);
+		// No CheckMeshWinding() here: it flags every triangle in this cylinder,
+		// which the posts visibly contradict — they render fine in every shot.
+		// The check is calibrated against SandMesh's flat, up-facing quads
+		// (T.Add(A,C,B), a diagonal-first triangulation); AddCylinder builds its
+		// side wall with a straight A,B,B+1 fan instead, and that different
+		// triangulation choice flips the sign this check keys on even though the
+		// posts are (BasicShapeMaterial IS single-sided, confirmed) actually fine.
+		// Whether AddCylinder's own winding is truly consistent is a separate,
+		// currently-unverified question — a thin post would hide a real reversal
+		// (you'd just see the far wall through the near one, same solid colour)
+		// the way BackshoreMesh's island never could. Left unchecked rather than
+		// asserting an "all clear" this method can't actually back up for curved
+		// geometry.
 
 		TArray<FLinearColor> C;
 		for (int i = 0; i < V.Num(); i++) C.Add(PostColor);
@@ -565,6 +582,61 @@ class ACourt : AActor
 			return nullptr;
 		}
 		return Comp.CreateDynamicMaterialInstance(Section, Base);
+	}
+
+	// Runtime self-check: does this section's triangle winding actually agree with
+	// the per-vertex normals it was built with? BuildBackshore in Environment.as
+	// failed exactly this way (Aug 2026) — correct positions, correct material, but
+	// wound backwards because its polar (angle, radius) index pair has the opposite
+	// handedness of a plain (X, Y) grid. The whole mesh was silently backface-culled
+	// from every camera angle, and nothing in the log said so; it took a human
+	// noticing the coastline had gone missing by comparing screenshots. Call this
+	// once, right after building any FLAT, UP-FACING mesh section (normal ≈
+	// (0,0,1)) — SandMesh, LinesMesh and Environment.as's Water/Dunes/Backshore
+	// all calibrate cleanly against each other. It does NOT reliably generalize
+	// to curved or non-planar-normal shapes: see the "no CheckMeshWinding() here"
+	// note on PostsMesh below before wiring it into anything like a cylinder or
+	// cone. A PRIVATE METHOD, duplicated in AEnvironment for the same
+	// module-isolation reason as ApplySolidColorMaterial above.
+	private void CheckMeshWinding(FString MeshName, TArray<FVector> V, TArray<int32> T, TArray<FVector> N) const
+	{
+		int Agree = 0;
+		int Disagree = 0;
+		for (int i = 0; i + 2 < T.Num(); i += 3)
+		{
+			FVector A = V[T[i]];
+			FVector B = V[T[i + 1]];
+			FVector C2 = V[T[i + 2]];
+			FVector E1 = B - A;
+			FVector E2 = C2 - A;
+			FVector Face = FVector(E1.Y * E2.Z - E1.Z * E2.Y,
+				E1.Z * E2.X - E1.X * E2.Z, E1.X * E2.Y - E1.Y * E2.X);
+			FVector Nrm = N[T[i]];
+			if (Face.SizeSquared() < 0.001f || Nrm.SizeSquared() < 0.001f) continue; // degenerate
+
+			// Some meshes here (the net strips) assign a uniform "lit as if flat"
+			// normal that is nowhere near the triangle's real geometric plane on
+			// purpose. Comparing winding against a normal that is roughly
+			// PERPENDICULAR to the triangle tells you nothing either way, so only
+			// count triangles where the two are reasonably aligned.
+			float Cos = Face.GetSafeNormal().DotProduct(Nrm.GetSafeNormal());
+			if (Math::Abs(Cos) < 0.3f) continue; // normal not aligned with this face; inconclusive
+
+			// Calibrated against SandMesh's known-good, known-visible winding
+			// (T.Add(A);T.Add(C);T.Add(B) over a +X/+Y grid with normal (0,0,1)):
+			// that triangle's (v1-v0)x(v2-v0), dotted with its own normal, comes
+			// out NEGATIVE. Every other proven-visible mesh in this file agrees.
+			if (Cos < 0.0f) Agree++;
+			else Disagree++;
+		}
+
+		if (Disagree > Agree)
+		{
+			Log("WINDING BUG: " + MeshName + " has " + Disagree + "/" + (Agree + Disagree)
+				+ " triangles wound backwards from their own normals — this section will "
+				+ "render backface-culled (invisible) from the front. Swap two indices per "
+				+ "triangle to fix.");
+		}
 	}
 
 	// Roughness is the second half of what a surface IS, and every caller was
