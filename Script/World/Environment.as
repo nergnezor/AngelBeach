@@ -435,8 +435,10 @@ class AEnvironment : AActor
 		WaterMesh.CreateMeshSection_LinearColor(0, V, T, Nrm, UV, NoUV, NoUV, NoUV, C, Tan, false);
 		UMaterialInstanceDynamic MID = ApplyAuthoredMaterial(WaterMesh, 0, "/Game/Materials/M_Water.M_Water");
 		if (MID != nullptr)
+		{
 			MID.SetScalarParameterValue(n"IslandRadius", IslandRadius);
 			MID.SetScalarParameterValue(n"BlobAmplitude", IslandBlobAmp);
+		}
 	}
 
 	// Low dunes behind the court (+Y) so the sand does not end in a hard line
