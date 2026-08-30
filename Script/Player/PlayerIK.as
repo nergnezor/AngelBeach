@@ -732,13 +732,21 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// (the first two attempts) could never fix that, because the feet were
 	// never the thing overriding the walk.
 	//
-	// Same blend trick as the feet: lerp toward the pelvis bone's own animated
-	// position, which makes the node a no-op at alpha 0 without needing an
-	// Alpha pin wired in the AnimGraph.
-	FVector PelvisNow = Self.Mesh.GetBoneTransform(n"pelvis").Location;
-	if ((PelvisNow - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
-		PelvisNow = PelvisPlant;   // not-yet-posed mesh: same guard as the feet
-	Self.Anim.PelvisTarget = PelvisNow + (PelvisPlant - PelvisNow) * PlantAlpha;
+	// PelvisTarget is PelvisPlant, full stop — no script-side blend toward the
+	// pelvis bone's own animated position. That blend trick used to exist here
+	// to fade the node to a no-op without an Alpha pin, but the ModifyBone
+	// node's Alpha IS wired to LegIKAlpha (this same PlantAlpha, via
+	// Anim.LegIKAlpha below) now, so it already fades rawPose -> PelvisTarget
+	// at the graph level. Blending toward Mesh.GetBoneTransform(pelvis) on top
+	// of that closed a feedback loop the ActorLocation-anchored PelvisPlant
+	// above was specifically built to avoid (see that comment): that read
+	// returns THIS node's own output from last frame, which self-reinforces
+	// at any nonzero alpha. Removed on principle, not as a confirmed fix for
+	// any specific symptom — traced telemetry during an unrelated idle-pose
+	// investigation showed PlantAlpha pinned at exactly 0.0 (WantCrouch never
+	// leaves 0 while grounded and stationary), so this path was provably inert
+	// in that case. The wobble under investigation there is still unexplained.
+	Self.Anim.PelvisTarget = PelvisPlant;
 	Self.PrevYawForFeet = CurYaw;
 }
 
