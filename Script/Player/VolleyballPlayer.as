@@ -671,7 +671,11 @@ class AVolleyballPlayer : APawn
 		// node, which nothing outside the editor GUI can create.
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
-		Anim.bDiving       = IsDiving() || bRagdollActive;
+		// Death_Front (bDiving) + physics blend flipped bodies butt-over-head
+		// and drove knees through the sand. Dive is a grounded speed burst with
+		// a mild crouch until the Anim BP has a real dig clip that stays above
+		// the floor. Keep the flag false so locomotion/crouch own the pose.
+		Anim.bDiving       = false;
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
@@ -1124,6 +1128,18 @@ class AVolleyballPlayer : APawn
 	bool bKneeTrace = false;
 	private int MonKneeTraceLogs = 0;
 
+	// POSE ANOMALY TELEMETRY — answers "are feet under the sand / are we
+	// backpedaling bent-forward / is turn-and-run actually on?" without a
+	// human at the flipbook. Aggregates go into MOTIONSTATS; POSE lines fire
+	// on anomalies (rate-limited) so MatchFilmer logs stay greppable.
+	private float MonUnderSandTime = 0.0f;   // seconds with a foot below sole plane
+	private float MonBackpedalTime = 0.0f;   // seconds moving with ForwardSpeed < 0
+	private float MonTurnRunTime = 0.0f;     // seconds bTurnRun engaged
+	private float MonFootZMin = 9999.0f;     // worst (lowest) foot Z this rally
+	private float MonKneeZMin = 9999.0f;
+	private int MonPoseLogs = 0;
+	private float MonPoseLogCooldown = 0.0f;
+
 	// ---------------------------------------------------------------
 	// BIOMECHANICAL PLAUSIBILITY — measured against published human values.
 	//
@@ -1399,7 +1415,12 @@ class AVolleyballPlayer : APawn
 			+ " kneeWalkTravel=" + int(MonKneeWalkTravel)
 			+ " kneeStill=" + int(KneeStillMean())
 			+ " kneeStillMax=" + int(MonKneeStillMax)
-			+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f));
+			+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
+			+ " underSand=" + int(MonUnderSandTime * 100.0f)
+			+ " backpedal=" + int(MonBackpedalTime * 100.0f)
+			+ " turnRun=" + int(MonTurnRunTime * 100.0f)
+			+ " footZMin=" + int(MonFootZMin)
+			+ " kneeZMin=" + int(MonKneeZMin));
 
 		// Absolute plausibility, separate from the relative numbers above so a
 		// regression comparison never gets mixed up with a physics verdict.
@@ -1447,6 +1468,12 @@ class AVolleyballPlayer : APawn
 		MonKneeStillSamples = 0.0f;
 		MonKneeStillMax = 0.0f;
 		MonKneeWalkTravel = 0.0f;
+		MonUnderSandTime = 0.0f;
+		MonBackpedalTime = 0.0f;
+		MonTurnRunTime = 0.0f;
+		MonFootZMin = 9999.0f;
+		MonKneeZMin = 9999.0f;
+		MonPoseLogs = 0;
 	}
 
 	private void UpdateMotionMonitor(float DeltaTime)
@@ -1678,6 +1705,48 @@ class AVolleyballPlayer : APawn
 			MonPrevFootL = FootL;
 			MonPrevFootR = FootR;
 			MonPrevPelvis = Pelvis;
+
+			// --- POSE anomaly sampling (feet under sand / bent-forward backpedal)
+			FVector KneeBoneL = Mesh.GetBoneTransform(n"calf_l").Translation;
+			FVector KneeBoneR = Mesh.GetBoneTransform(n"calf_r").Translation;
+			float FootMinZ = Math::Min(FootL.Z, FootR.Z);
+			float KneeMinZ = Math::Min(KneeBoneL.Z, KneeBoneR.Z);
+			if (FootMinZ < MonFootZMin) MonFootZMin = FootMinZ;
+			if (KneeMinZ < MonKneeZMin) MonKneeZMin = KneeMinZ;
+			const float SoleZ = FloorZ + 2.0f;   // ankle rest is ~3–6; <2 = buried
+			float HSpdPose = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+			float FwdSpd = (Anim != nullptr) ? Anim.ForwardSpeed : 0.0f;
+			if (bIsGrounded && FootMinZ < SoleZ)
+				MonUnderSandTime += DeltaTime;
+			if (HSpdPose > 80.0f && FwdSpd < -40.0f)
+				MonBackpedalTime += DeltaTime;
+			if (bTurnRun)
+				MonTurnRunTime += DeltaTime;
+
+			if (MonPoseLogCooldown > 0.0f) MonPoseLogCooldown -= DeltaTime;
+			bool bUnder = bIsGrounded && FootMinZ < SoleZ;
+			bool bBack = HSpdPose > 120.0f && FwdSpd < -80.0f;
+			if ((bUnder || bBack) && MonPoseLogCooldown <= 0.0f && MonPoseLogs < 240)
+			{
+				MonPoseLogs++;
+				MonPoseLogCooldown = 0.12f;
+				Log("POSE " + GetName()
+					+ " footZ=" + int(FootMinZ)
+					+ " kneeZ=" + int(KneeMinZ)
+					+ " pelvisZ=" + int(Pelvis.Z)
+					+ " actorZ=" + int(GetActorLocation().Z)
+					+ " fwd=" + int(FwdSpd)
+					+ " spd=" + int(HSpdPose)
+					+ " turnRun=" + (bTurnRun ? 1 : 0)
+					+ " crouch=" + int(SmCrouch * 100.0f)
+					+ " legA=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100.0f)
+					+ " hitA=" + int((Anim != nullptr ? Anim.HitAlpha : 0.0f) * 100.0f)
+					+ " dive=" + (IsDiving() ? 1 : 0)
+					+ " ground=" + (bIsGrounded ? 1 : 0)
+					+ " tgtFZ=" + int(Anim != nullptr ? Math::Min(Anim.FootTargetL.Z, Anim.FootTargetR.Z) : 0)
+					+ " under=" + (bUnder ? 1 : 0)
+					+ " back=" + (bBack ? 1 : 0));
+			}
 		}
 
 		MonPrevVel = PlayerVelocity;
@@ -2294,8 +2363,11 @@ class AVolleyballPlayer : APawn
 	// as the run starts, not after it. Hysteresis on both gates — demand and
 	// alignment bands don't overlap — so the choice cannot flicker at a
 	// boundary (per-frame conditional facing is exactly what caused the old
-	// two-pose shimmer this replaces). Never while a gesture is live: contact
-	// needs the squared-up chest the IK targets anchor to.
+	// two-pose shimmer this replaces). Reach starts early WHILE closing
+	// (Plan.bStartGesture) — blocking turn-and-run for the whole reach made
+	// every approach a forward-bent backpedal. Square up only once the run is
+	// winding down (same Demand gate as the release path) or while diving;
+	// the head LookAt keeps eyes on the ball the whole way.
 	private bool bTurnRun = false;
 	// Minimum time bTurnRun must hold a state before it may flip again. The
 	// Demand/Align hysteresis bands don't overlap, which stops FLICKER from a
@@ -2321,40 +2393,44 @@ class AVolleyballPlayer : APawn
 		// flapping (FacingHoldTimer lapsing between AI ticks) — exactly the
 		// residual src=0<->1<->2 churn the YFLIP telemetry kept showing.
 		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
-		bool bGestureLive = bReaching || CurrentPose > 0.15f || IsDiving();
+		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
+		float Demand = InDir.Size();               // 0..1 commanded speed fraction
+		// Square-up for contact only when nearly stopped (or diving). A live
+		// reach at Demand ≥ SquareUpDemand used to force ball-facing and read
+		// as crawling backwards across the court.
+		const float SquareUpDemand = 0.40f;
+		bool bMustSquareUp = IsDiving()
+			|| ((bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
 		bool bDesired = bTurnRun;
 
-		if (!bWantFacing || bGestureLive || !bIsGrounded)
+		if (!bWantFacing || bMustSquareUp || !bIsGrounded)
+		{
+			bDesired = false;
+		}
+		else if (Demand < 0.05f)
 		{
 			bDesired = false;
 		}
 		else
 		{
-			FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
-			float Demand = InDir.Size();               // 0..1 commanded speed fraction
-			if (Demand < 0.05f)
+			float Align = InDir.GetSafeNormal()
+				.DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal());
+			if (bTurnRun)
 			{
-				bDesired = false;
+				// Release when the run winds down (MoveToward2D's arrival taper
+				// drops the demand ~50cm out) or the travel no longer fights the
+				// facing (ball ahead again: the two agree anyway).
+				if (Demand < 0.28f || Align > 0.55f) bDesired = false;
 			}
 			else
 			{
-				float Align = InDir.GetSafeNormal()
-					.DotProduct(FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal());
-				if (bTurnRun)
-				{
-					// Release when the run winds down (MoveToward2D's arrival taper
-					// drops the demand ~50cm out) or the travel no longer fights the
-					// facing (ball ahead again: the two agree anyway).
-					if (Demand < 0.35f || Align > 0.55f) bDesired = false;
-				}
-				else
-				{
-					// Engage only for a genuine hurried run well off the facing
-					// (>70°) — beyond what a shuffle/backpedal covers with the eyes
-					// still useful. The spike approach's open-shoulder facing
-					// (~22° off travel) stays far inside the gate.
-					if (Demand > 0.55f && Align < 0.35f) bDesired = true;
-				}
+				// Engage for a purposeful run well off the facing. Threshold is
+				// below MotionPlan's typical SpeedFraction (~0.35–0.55): the old
+				// 0.55 gate never fired on paced approaches, so src=2 never
+				// appeared in MatchFilmer telemetry.
+				if (Demand > 0.40f && Align < 0.35f) bDesired = true;
+				// Clear reverse at even a jog — the "bent-forward backpedal".
+				else if (Demand > 0.28f && Align < -0.15f) bDesired = true;
 			}
 		}
 
@@ -2449,6 +2525,10 @@ class AVolleyballPlayer : APawn
 	bool bRagdollActive = false;
 	float RagdollTimer = 0.0f;
 	float RagdollBlend = 0.0f;
+	// Set when DiveTimer expires while still airborne — StartRagdollSlide waits
+	// for bIsGrounded so a mid-air Death_Front + physics blend can't flip the
+	// body butt-over-head.
+	bool bPendingRagdollSlide = false;
 	// A BACKSTOP, not the length of a slide — UpdateRagdollSlide ends when the
 	// body stops. Generous enough that it only ever catches a pathological
 	// entry speed.
@@ -2456,11 +2536,11 @@ class AVolleyballPlayer : APawn
 	const float RagdollBlendIn = 0.10f;
 	const float RagdollBlendOut = 0.30f;
 
-	bool IsDiving() const { return DiveTimer > 0.0f; }
+	bool IsDiving() const { return DiveTimer > 0.0f || bPendingRagdollSlide; }
 	bool CanDive() const
 	{
 		return bIsGrounded && DiveTimer <= 0.0f && DiveRecoverTimer <= 0.0f
-			&& !bRagdollActive;
+			&& !bRagdollActive && !bPendingRagdollSlide;
 	}
 
 	void StartDive(FVector WorldDir)
@@ -2469,10 +2549,12 @@ class AVolleyballPlayer : APawn
 		if (Flat.SizeSquared() < 0.01f) return;
 		DiveDir = Flat.GetSafeNormal();
 		DiveTimer = DiveDuration;
-		// Small hop so the lunge leaves the ground for a beat (scaled for the
-		// heavy player gravity).
-		PlayerVelocity.Z = 200.0f;
-		bIsGrounded = false;
+		bPendingRagdollSlide = false;
+		// Stay ON the sand. A Z-hop while a face-plant clip played put the body
+		// in the air butt-first / upside-down. Dive = grounded lunge.
+		PlayerVelocity.Z = 0.0f;
+		bIsGrounded = true;
+		ExtraCrouch = Math::Max(ExtraCrouch, 0.35f);
 	}
 
 	private void UpdateDive(float DeltaTime)
@@ -2485,33 +2567,34 @@ class AVolleyballPlayer : APawn
 			PlayerVelocity.Y = DiveDir.Y * MoveSpeed * DiveSpeedMul;
 			FacingDir = DiveDir;
 			bHasFacing = true;
-			ExtraCrouch = 1.0f;
+			ExtraCrouch = Math::Max(ExtraCrouch, 0.35f);
 			if (DiveTimer <= 0.0f)
 			{
 				DiveRecoverTimer = DiveRecovery;
-				StartRagdollSlide();
+				// No ragdoll: PA_Mannequin blend buried limbs under the sand and
+				// tumbled the mesh. Recovery crouch is enough to sell the landing.
+				bPendingRagdollSlide = false;
 			}
+		}
+		else if (bPendingRagdollSlide)
+		{
+			// Legacy path — ragdoll slide is disabled; clear any stale flag.
+			bPendingRagdollSlide = false;
+			DiveRecoverTimer = Math::Max(DiveRecoverTimer, DiveRecovery * 0.5f);
 		}
 		else if (bRagdollActive)
 		{
-			UpdateRagdollSlide(DeltaTime);
-
-			// RECOVERY RUNS THROUGH THE SLIDE, NOT AFTER IT. Sliding IS the first
-			// part of getting up, and chaining the two made a dive cost
-			// 0.42 + slide + 0.75s instead of 0.42 + 0.75. Measured: with the
-			// slide chained on, no player jumped and spike-approach gather read
-			// 0 across four separate runs — the extra window of a digger being
-			// out was enough that dig -> set -> attack never completed. With the
-			// feature off entirely: 85cm jumps, gather 12 m/s^2, 1.03 contacts
-			// per rally. The cost was never the physics; it was the time.
+			// If a previous build left a slide running, tear it down immediately.
+			EndRagdollSlide();
 			if (DiveRecoverTimer > 0.0f)
 				DiveRecoverTimer -= DeltaTime;
 		}
 		else if (DiveRecoverTimer > 0.0f)
 		{
 			DiveRecoverTimer -= DeltaTime;
-			// Getting up: still low, easing back to standing.
-			ExtraCrouch = Math::Max(ExtraCrouch, 0.85f * (DiveRecoverTimer / DiveRecovery));
+			// Getting up: mild kneel, not a full sink — 0.85 buried the knees
+			// under the sand when combined with pelvis Modify Bone.
+			ExtraCrouch = Math::Max(ExtraCrouch, 0.35f * (DiveRecoverTimer / DiveRecovery));
 		}
 	}
 
@@ -2582,7 +2665,9 @@ class AVolleyballPlayer : APawn
 			RagdollBlend = Math::Min(1.0f, RagdollBlend + DeltaTime / RagdollBlendIn);
 
 		Mesh.SetPhysicsBlendWeight(RagdollBlend);
-		ExtraCrouch = 1.0f;
+		// No ExtraCrouch here: a full crouch during the flat Death_Front slide
+		// buried knees/feet under the sand and fought the dive clip. Getting-up
+		// crouch lives in the DiveRecoverTimer branch after the slide ends.
 
 		// Sand craters under torso and reaching hands — the payoff for
 		// PA_Mannequin, and the one place the simulated bones SHOULD be read:

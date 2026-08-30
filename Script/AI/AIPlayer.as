@@ -1000,9 +1000,9 @@ class AAIPlayer : AVolleyballPlayer
 		// whipping the chest-anchored IK targets around so the arms never
 		// converged — hands ended up 80-115cm from their targets at contact. The
 		// single rotation authority (UpdatePlayer) may still override this with
-		// travel-facing during a genuine hurried run away from the facing
-		// (turn-and-run, hysteretic, suspended once the reach gesture is live) —
-		// one central, flicker-proof decision instead of many per-caller ones.
+		// travel-facing during a genuine run away from the facing (turn-and-run,
+		// hysteretic; squares back up as the arrival demand drops) — one central,
+		// flicker-proof decision instead of many per-caller ones.
 		FaceBall();
 
 		// Wind up when the budget says the hand clock has started — no distance
