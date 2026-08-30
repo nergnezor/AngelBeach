@@ -362,8 +362,18 @@ class AEnvironment : AActor
 				int B = A + 1;
 				int Cidx = A + Segs + 1;
 				int D = Cidx + 1;
-				T2.Add(A); T2.Add(Cidx); T2.Add(B);
-				T2.Add(B); T2.Add(Cidx); T2.Add(D);
+				// NOT the same winding as the Cartesian grids in this file (Sand/Water/
+				// Dunes all use A,Cidx,B / B,Cidx,D with a fast index along X and a slow
+				// index along Y). Here the fast index (sj) runs TANGENTIALLY and the slow
+				// index (ri) runs RADIALLY — swapping which axis is "fast" flips the
+				// local handedness of the (fast,slow) frame relative to those grids, so
+				// the Cartesian-grid triangle order comes out back-facing here and the
+				// whole disc was silently backface-culled: from any normal camera angle
+				// you saw straight through it to the flat WaterMesh underneath, with only
+				// M_Water's own coastline mask (the foam ring) drawn where the island
+				// should have been. Reversed (A,B,Cidx / B,D,Cidx) so it faces up.
+				T2.Add(A); T2.Add(B); T2.Add(Cidx);
+				T2.Add(B); T2.Add(D); T2.Add(Cidx);
 			}
 		}
 
