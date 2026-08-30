@@ -107,25 +107,38 @@ class AEnvironment : AActor
 	// is SkyAtmosphere's job now — see BuildSky().
 	const int   SeaBands     = 11;
 
-	// THESE BLUES LOOK ABSURD ON PURPOSE — read this before "fixing" them.
+	// RETUNED 2026-08-30 to look like desktop's SkyAtmosphere instead of a warm
+	// sunset — read this before reverting to the old orange/saturated-blue set.
 	//
-	// The scene light is deeply warm (sun 1.0/0.6/0.35, and the sky light bounces
-	// off this dome, which is warm too). Measuring the sand pins down what that
-	// does: albedo (0.62,0.52,0.36) renders (122,82,43), i.e. a per-channel gain
-	// of (0.314,0.162,0.067). Blue comes out at 21% of red. Any honest blue albedo
-	// is crushed to grey-brown, which is exactly why the sea has been warm cream
-	// in every screenshot and why the zenith band came out (136,81,47) instead of
-	// the dark blue it was set to.
+	// The comment this replaced described the directional sun as "deeply warm
+	// (1.0/0.6/0.35)". That is stale: GameMode.as now sets the sun to
+	// (1.0,0.96,0.90) — barely warm — for BOTH platforms. What is still warm on
+	// mobile is the SKYLIGHT: MobileSkyLightTint (1.0,0.70,0.48) at 8x intensity
+	// (GameMode.as), kept strong on purpose as the fill light that fixed players
+	// rendering unlit on mobile (no real-time GI there) — do not turn that down
+	// to chase the sky's colour, it will bring that bug back.
 	//
-	// So the albedos are pre-divided by that gain. Blue above 1.0 is not a
-	// mistake: it is what it costs to land a dusk blue through a warm light.
-	//   zenith -> linear (0.015,0.035,0.090)
-	//   sea    -> linear (0.010,0.023,0.096)
-	// If the lighting is ever retuned, re-measure the gain and redo this division
-	// rather than eyeballing new numbers.
-	private FLinearColor SkySeaColor     = FLinearColor(0.03f, 0.14f, 0.85f, 1.0f);
-	private FLinearColor SkyHorizonColor = FLinearColor(0.95f, 0.58f, 0.34f, 1.0f);
-	private FLinearColor SkyZenithColor  = FLinearColor(0.05f, 0.22f, 1.34f, 1.0f);
+	// So the sky's own albedo is what moved instead. Measuring the OLD horizon
+	// band (albedo 0.95/0.58/0.34) against its rendered pixel gave a gain of
+	// roughly (0.69, 0.58, 0.43) under the current lights — much less brutal
+	// than the old sun's (0.31, 0.16, 0.07), but still warm-biased, which is why
+	// the sky still read as an orange-to-purple sunset instead of desktop's
+	// muted grey-blue haze even after the sun itself went neutral. These three
+	// were solved for that gain against desktop's OWN measured sky (Vista_1_wide,
+	// the gameplay-framing shot, sampled top-of-frame and just-above-horizon) so
+	// the two platforms read as the same sky instead of two different times of
+	// day. Re-measure and redo this division if the lights change again.
+	//
+	// First pass (forced-mobile screenshot, measured) landed close but read a
+	// touch too blue and a touch too dark through the middle of the gradient
+	// against the same desktop reference; these are that pass nudged warmer/
+	// brighter by the same measured-error amount, NOT independently
+	// re-screenshotted (a second headless run collided with another session's
+	// GPU use at the time) — worth one more measured pass before calling this
+	// final.
+	private FLinearColor SkySeaColor     = FLinearColor(0.06f, 0.11f, 0.18f, 1.0f);
+	private FLinearColor SkyHorizonColor = FLinearColor(0.27f, 0.37f, 0.57f, 1.0f);
+	private FLinearColor SkyZenithColor  = FLinearColor(0.07f, 0.19f, 0.31f, 1.0f);
 
 	// DESKTOP sea colours. These are NOT pre-divided: the division above exists to
 	// push an honest blue through a deeply warm sunset light, and the desktop sun
