@@ -497,8 +497,17 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	float ExtraC = Math::Max(Self.ExtraCrouch, Self.HeldCrouch);
 	// Hard cap: beyond ~0.55 the folded thigh/shin has no room above the sand
 	// and knees clip through. Bump's 0.5–0.7 knee key was the worst offender.
-	float WantCrouch = Math::Clamp(Crouch * Blend + ExtraC, 0.0f, 0.55f);
-	Self.DbgPoseCrouch = Crouch * Blend;
+	//
+	// GESTURE CROUCH vs GAIT: Reach starts early while still closing
+	// (Plan.bStartGesture), so Crouch*Blend used to slam WantCrouch to the 0.55
+	// cap mid-jog — same silhouette as "böjer sig framåt och backar" even when
+	// facing was already fixed. Fade the POSE crouch with horizontal speed;
+	// ExtraC (land absorb, dive, jump tuck) stays full — those are real.
+	float CrouchSpeed = FVector(Self.PlayerVelocity.X, Self.PlayerVelocity.Y, 0).Size();
+	float CrouchMoveFade = 1.0f - Math::Clamp((CrouchSpeed - 60.0f) / 140.0f, 0.0f, 1.0f);
+	float PoseCrouch = Crouch * Blend * CrouchMoveFade;
+	float WantCrouch = Math::Clamp(PoseCrouch + ExtraC, 0.0f, 0.55f);
+	Self.DbgPoseCrouch = PoseCrouch;
 	Self.DbgWantCrouch = WantCrouch;
 
 	// --- ANTI-FLICKER GUARD (the sink) --------------------------------------

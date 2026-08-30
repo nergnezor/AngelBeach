@@ -543,12 +543,30 @@ class AVolleyballPlayer : APawn
 
 		FVector RawWant = FVector::ZeroVector;
 		if (bTurnRun)
-			// Face the commanded travel (the intent), not the lagging velocity:
-			// the turn starts the same frame the run does. Demand ≥ 0.35 while
-			// engaged, so this is never a degenerate direction.
-			RawWant = FVector(MoveInput.X, MoveInput.Y, 0);
+		{
+			// Prefer commanded travel; if Demand has already tapered (arrival /
+			// coast) but turn-run is still engaged from a velocity conflict,
+			// face the actual slide so we don't hand the body a near-zero input.
+			FVector InFlat = FVector(MoveInput.X, MoveInput.Y, 0);
+			if (InFlat.SizeSquared() > 0.01f)
+				RawWant = InFlat;
+			else if (HSpeed2 > 30.0f)
+				RawWant = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
+		}
 		else if (FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f)
+		{
 			RawWant = FVector(SmFacingDir.X, SmFacingDir.Y, 0);
+			// Residual after Demand drops: still FaceBall-holding while the
+			// capsule slides the last metres opposite the chest. Prefer travel.
+			if (HSpeed2 > 80.0f)
+			{
+				FVector VelFlat = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).GetSafeNormal();
+				float FaceAlign = FVector(SmFacingDir.X, SmFacingDir.Y, 0).GetSafeNormal()
+					.DotProduct(VelFlat);
+				if (FaceAlign < 0.15f)
+					RawWant = VelFlat;
+			}
+		}
 		else if (HSpeed2 > 30.0f)
 			RawWant = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
 
@@ -602,7 +620,25 @@ class AVolleyballPlayer : APawn
 			// the cap only catching the outliers.
 			float Alpha = Math::Clamp(8.0f * DeltaTime, 0.0f, 1.0f);
 			float Step = Delta * Alpha;
-			float MaxStep = BodyMaxTurnRate * DeltaTime;
+			// Clear backpedal: rotate out of the conflict faster than the athletic
+			// cruise rate. 450 deg/s needs ~0.4s for a 180° — during that whole
+			// window ForwardSpeed stays negative and the eye reads "crawling
+			// backwards" even though turn-and-run already picked travel. Cap at
+			// 720 (still under a snap) only while the body is still opposing
+			// the commanded travel.
+			float MaxRate = BodyMaxTurnRate;
+			if (bTurnRun)
+			{
+				FVector InFlat = FVector(MoveInput.X, MoveInput.Y, 0);
+				if (InFlat.SizeSquared() > 0.01f)
+				{
+					float BodyAlign = GetActorForwardVector().GetSafeNormal2D()
+						.DotProduct(InFlat.GetSafeNormal());
+					if (BodyAlign < -0.2f)
+						MaxRate = 720.0f;
+				}
+			}
+			float MaxStep = MaxRate * DeltaTime;
 			Step = Math::Clamp(Step, -MaxStep, MaxStep);
 			SetActorRotation(FRotator(Cur.Pitch, Cur.Yaw + Step, Cur.Roll));
 		}
@@ -2436,6 +2472,16 @@ class AVolleyballPlayer : APawn
 		bool bWantFacing = FacingHoldTimer > 0.0f && FacingDir.SizeSquared() > 0.01f;
 		FVector InDir = FVector(MoveInput.X, MoveInput.Y, 0);
 		float Demand = InDir.Size();               // 0..1 commanded speed fraction
+		// When input has tapered but the body is still sliding, treat velocity
+		// as travel — otherwise FaceBall wins the last metres of every approach
+		// (Demand < travel-conflict gate, Align never evaluated) and POSE keeps
+		// logging back=1 with turnRun=0.
+		float HSpdTurn = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+		if (Demand < 0.12f && HSpdTurn > 80.0f)
+		{
+			InDir = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).GetSafeNormal();
+			Demand = Math::Clamp(HSpdTurn / MoveSpeed, 0.0f, 1.0f);
+		}
 		// Alignment between commanded travel and the held facing request.
 		// Neutral (no conflict) when there is no real direction to compare —
 		// GetSafeNormal degenerates near zero input, and standing still can
@@ -2464,13 +2510,19 @@ class AVolleyballPlayer : APawn
 		// face where they were actually going.
 		const float BackpedalAlign = -0.15f;
 		bool bBackpedaling = Demand > 0.05f && Align < BackpedalAlign;
+		// Any purposeful travel that fights the held facing (side-shuffle while
+		// ball-watching, diagonal retreat, etc.) — not only pure reverse.
+		// Measured: after the backpedal-only gate, ~63% of POSE back=1 frames
+		// still had turnRun=0 because Align sat in (-0.15, +0.35) while velocity
+		// ran opposite the chest. Face travel for that whole band.
+		bool bTravelConflict = Demand > 0.12f && Align < 0.35f;
 
 		// Square-up for contact only when nearly stopped (or diving) AND not
 		// actively retreating — a real dig/set benefits from facing the ball
 		// while gathering, but not at the cost of a backward crawl.
 		const float SquareUpDemand = 0.40f;
 		bool bMustSquareUp = IsDiving()
-			|| (!bBackpedaling && (bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
+			|| (!bTravelConflict && (bReaching || CurrentPose > 0.15f) && Demand < SquareUpDemand);
 		bool bDesired = bTurnRun;
 
 		if (!bWantFacing || bMustSquareUp || !bIsGrounded)
@@ -2481,9 +2533,9 @@ class AVolleyballPlayer : APawn
 		{
 			bDesired = false;
 		}
-		else if (bBackpedaling)
+		else if (bTravelConflict)
 		{
-			bDesired = true;   // face travel — whatever the speed, however slight
+			bDesired = true;   // face travel — including mild side/back conflict
 		}
 		else if (bTurnRun)
 		{
@@ -2494,10 +2546,6 @@ class AVolleyballPlayer : APawn
 		}
 		else
 		{
-			// Engage for a purposeful run well off the facing. Threshold is
-			// below MotionPlan's typical SpeedFraction (~0.35–0.55): the old
-			// 0.55 gate never fired on paced approaches, so src=2 never
-			// appeared in MatchFilmer telemetry.
 			if (Demand > 0.40f && Align < 0.35f) bDesired = true;
 		}
 
@@ -2505,7 +2553,10 @@ class AVolleyballPlayer : APawn
 		{
 			if (TurnRunDwellTimer > 0.0f) return;   // switched too recently: hold
 			bTurnRun = bDesired;
-			TurnRunDwellTimer = TurnRunMinDwell;
+			// Engage from a clear reverse: short dwell so we don't sit another
+			// 0.3s in the ball-facing backpedal. Release stays at full dwell to
+			// stop flicker at the Align boundary.
+			TurnRunDwellTimer = (bDesired && bBackpedaling) ? 0.12f : TurnRunMinDwell;
 		}
 	}
 

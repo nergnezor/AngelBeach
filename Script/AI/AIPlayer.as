@@ -595,11 +595,11 @@ class AAIPlayer : AVolleyballPlayer
 		else if (bWantBlock)  SetPlayState(EPlayState::Play_Block);
 		else                  SetPlayState(EPlayState::Play_Base);
 
-		// ALWAYS watch the ball. Requested first so every state inherits it and
-		// only an active gesture can override — "follow the ball with the eyes"
-		// should not be something each branch remembers to ask for.
-		FaceBall();
-
+		// Watch the ball only when planted or in a job that needs it. Unconditional
+		// FaceBall() here held net/ball-facing for every jog back to base — the
+		// classic "bent forward and backpedaling" look on PlayBase repositioning.
+		// PlayHitter / PlayBlock still request it themselves; turn-and-run can
+		// override when travel fights the facing.
 		if (PlayState == EPlayState::Play_Job)
 		{
 			if (bDebugAI) Log(DebugTag() + " JOB t=" + TeamTouches());
@@ -607,6 +607,7 @@ class AAIPlayer : AVolleyballPlayer
 		}
 		else if (PlayState == EPlayState::Play_Block)
 		{
+			FaceBall();
 			PlayBlock(DeltaTime);
 		}
 		else
@@ -621,7 +622,15 @@ class AAIPlayer : AVolleyballPlayer
 	{
 		if (bDebugAI) Log(DebugTag() + " BASE");
 		MoveToHold(ClampToCourt(BasePosition()), DeltaTime, 0.75f);
-		RequestCrouch(0.22f);
+		// Crouch + ball-face only when ARRIVED. Asking for both while jogging
+		// back to base is exactly "böjer sig framåt och backar": chest toward
+		// the ball/net, travel toward the baseline, hips sunk for a dig that
+		// isn't happening yet. Head LookAt still tracks the ball every frame.
+		if (bHolding)
+		{
+			RequestCrouch(0.22f);
+			FaceBall();
+		}
 	}
 
 	// The one spot a player returns to whenever they have no job. Same formation
@@ -1003,15 +1012,14 @@ class AAIPlayer : AVolleyballPlayer
 			RequestCrouch(Intend == EHitType::Hit_Bump ? 0.45f : 0.25f);
 		}
 
-		// The HITTER requests ball-facing. Conditional facing decided HERE (travel
-		// vs ball, re-judged every AI tick) oscillated at the gate boundary,
-		// whipping the chest-anchored IK targets around so the arms never
-		// converged — hands ended up 80-115cm from their targets at contact. The
-		// single rotation authority (UpdatePlayer) may still override this with
-		// travel-facing during a genuine run away from the facing (turn-and-run,
-		// hysteretic; squares back up as the arrival demand drops) — one central,
-		// flicker-proof decision instead of many per-caller ones.
-		FaceBall();
+		// Ball-face only once we're ON the dig/set spot (or nearly there). Asking
+		// for it during the whole approach kept chest-to-ball while travel ran
+		// toward a receive spot behind the player — turn-and-run cleaned some of
+		// that up, but every sprint still spent a beat bent-forward backpedaling
+		// before the body caught the travel yaw. Head LookAt still tracks the
+		// ball every frame; square-up happens in the last ~1.5m / when planted.
+		if (bHitterPlanted || DistToGoal < 150.0f)
+			FaceBall();
 
 		// Wind up when the budget says the hand clock has started — no distance
 		// condition: a late receive is saved by arms extending WHILE closing.
@@ -1126,7 +1134,22 @@ class AAIPlayer : AVolleyballPlayer
 	// something to LOOK AT, it is something ARRIVING: face where it is coming
 	// FROM. The flight chord is stable all the way to contact, and squaring up to
 	// the incoming ball is also what a real player does on a dig.
-	private void RequestBallFacing()
+	// A WORLD-space direction toward the ball, computed so it never produces
+	// the degenerate high-angular-rate sweep a raw bearing gets as the player
+	// closes on it (rate goes as v/r — blows up as r->0; the ORIGINAL "de
+	// vibrerar" bug, see the long comment that used to sit here and now sits
+	// on RequestBallFacing below).
+	//
+	// Returns FVector::ZeroVector to mean "no new bearing — hold whatever
+	// facing is already active": either I just hit this ball myself (BallVel
+	// is now MY outgoing swing, not something arriving, and chasing its
+	// reversal is the same bug with a different trigger — see
+	// RequestBallFacing), or a near-vertical drop has no horizontal bearing
+	// at all. Every caller must treat a zero result as "hold", not "face
+	// world +X" — GetSafeNormal of a zero vector IS FVector(1,0,0), so
+	// skipping the zero-check silently reintroduces a degenerate direction
+	// instead of holding.
+	private FVector StableBallBearing() const
 	{
 		FVector To = Ball.Position - GetActorLocation();
 		To.Z = 0.0f;
@@ -1136,20 +1159,42 @@ class AAIPlayer : AVolleyballPlayer
 		// track without lagging into oscillation.
 		const float FaceNearRadius = 150.0f;
 		if (To.SizeSquared() > FaceNearRadius * FaceNearRadius)
-		{
-			FacingDir = To.GetSafeNormal();
-			bHasFacing = true;
-			return;
-		}
+			return To.GetSafeNormal();
+
+		if (bIMadeLastTouch)
+			return FVector::ZeroVector;
 
 		// Close in: face the ball's approach instead of its position.
 		FVector From = FVector(-Ball.BallVel.X, -Ball.BallVel.Y, 0.0f);
 		if (From.SizeSquared() > 100.0f * 100.0f)   // 100 cm/s of usable horizontal flight
-			FacingDir = From.GetSafeNormal();
-		// else: a near-vertical drop has no horizontal bearing at all. HOLD the
-		// last one — still asserting bHasFacing so the request does not lapse
-		// into velocity-facing, which would hand the body a fresh target and
-		// restart the very oscillation this exists to prevent.
+			return From.GetSafeNormal();
+		return FVector::ZeroVector;
+	}
+
+	// This one line was the shake reported as "de vibrerar mellan två positioner,
+	// innan varje mottag". The old guard was SizeSquared() > 1.0f — one square
+	// CENTIMETRE — so a ball 2cm from the player's vertical axis still produced a
+	// facing target, and that target's angular rate goes as v/r: at r = 10cm a
+	// ball crossing at 400 cm/s sweeps the bearing at 2300 deg/s. The body chases
+	// it through three cascaded rate limiters (SmFacingDir 300, SmWantDir 300,
+	// the body 450 deg/s), and cascaded lags chasing a target that sweeps faster
+	// than they can follow is the textbook recipe for a limit cycle.
+	//
+	// This same degenerate bearing was independently duplicated at the spike
+	// approach's 22°-open-shoulder call site (raw To.GetSafeNormal() gated on
+	// SizeSquared() > 1.0f, unfixed) — found by tracing a live yaw sweep back
+	// to its source and discovering it wasn't THIS function at all. Fixed by
+	// having both call StableBallBearing() above instead of each computing
+	// their own bearing.
+	private void RequestBallFacing()
+	{
+		FVector Dir = StableBallBearing();
+		if (Dir.SizeSquared() > 0.01f)
+			FacingDir = Dir;
+		// else: hold the last direction — still asserting bHasFacing so the
+		// request does not lapse into velocity-facing, which would hand the
+		// body a fresh target and restart the very oscillation this exists to
+		// prevent.
 		bHasFacing = true;
 	}
 
@@ -1252,17 +1297,21 @@ class AAIPlayer : AVolleyballPlayer
 				// hitter overshoot and violently shuttle back and forth over it
 				// while waiting for the jump window.
 				MoveToward2D(Plant, DeltaTime, DistToPlant > 90.0f);
-				FVector To = Ball.Position - GetActorLocation();
-				To.Z = 0;
-				if (To.SizeSquared() > 1.0f)
+				// Was a raw To.GetSafeNormal() gated on SizeSquared() > 1.0f — the
+				// same degenerate-bearing bug StableBallBearing() exists to kill
+				// (see its comment), duplicated here rather than shared, and the
+				// worst place for it to hide: this runs during the committed
+				// sprint into the plant, exactly the highest-speed, smallest-r
+				// combination the bug needs.
+				FVector N = StableBallBearing();
+				if (N.SizeSquared() > 0.01f)
 				{
 					const float OpenRad = -22.0f * PI / 180.0f;
 					float C = Math::Cos(OpenRad);
 					float Sn = Math::Sin(OpenRad);
-					FVector N = To.GetSafeNormal();
 					FacingDir = FVector(N.X * C - N.Y * Sn, N.X * Sn + N.Y * C, 0);
-					bHasFacing = true;
 				}
+				bHasFacing = true;
 				// Leave the ground one apex-time before the ball reaches the strike
 				// height; stop driving so the jump converts momentum, not input.
 				// MARGIN BIAS MATTERS: an EARLY jump tops out while the ball is
