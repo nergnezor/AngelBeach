@@ -492,7 +492,9 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// channels: a 0.45 planted stance and a 0.5 split-step dip are the SAME
 	// lowering of the hips, not 0.95 of stacked bend.
 	float ExtraC = Math::Max(Self.ExtraCrouch, Self.HeldCrouch);
-	float WantCrouch = Math::Clamp(Crouch * Blend + ExtraC, 0.0f, 1.0f);
+	// Hard cap: beyond ~0.55 the folded thigh/shin has no room above the sand
+	// and knees clip through. Bump's 0.5–0.7 knee key was the worst offender.
+	float WantCrouch = Math::Clamp(Crouch * Blend + ExtraC, 0.0f, 0.55f);
 	Self.DbgPoseCrouch = Crouch * Blend;
 	Self.DbgWantCrouch = WantCrouch;
 
@@ -547,6 +549,10 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	Self.Anim.ElbowPoleL   = Self.SmPoleL;
 	Self.Anim.HandRotR     = Self.SmRotR;
 	Self.Anim.HandRotL     = Self.SmRotL;
+	// Airborne crouch is what made jump silhouettes go up butt-first: a sunk
+	// pelvis under a rising capsule. Force the stance upright in the air.
+	if (!Self.bIsGrounded)
+		Self.SmCrouch = Math::Min(Self.SmCrouch, 0.05f);
 	Self.Anim.CrouchAmount = Self.SmCrouch;
 
 	// Pelvis sink target: lower it from its rest height by CrouchAmount. Anchored
@@ -567,7 +573,13 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// at crouch speed and self-stabilizes once the pelvis stops moving.
 	const float PelvisRestZ = 5.9f;
 	const float PelvisSinkDepth = 35.0f;  // cm of hip drop at full CrouchAmount
+	// Never sink the pelvis so low that a bent knee has nowhere to go but
+	// through the floor (deep crouch + plant put knees under the sand).
+	const float MinPelvisClearance = 42.0f;   // cm above FloorZ
 	FVector PelvisPlant = Self.GetActorLocation() + Up * (PelvisRestZ - PelvisSinkDepth * Self.SmCrouch);
+	float MinPelvisZ = Self.FloorZ + MinPelvisClearance;
+	if (PelvisPlant.Z < MinPelvisZ)
+		PelvisPlant.Z = MinPelvisZ;
 	// Echo last frame's solved foot position back as this frame's target (as
 	// above), rotated by this frame's yaw change and CLAMPED to a plausible
 	// stance around the actor. Both corrections are needed and they fix
@@ -641,10 +653,36 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// anything above 80 is pure gait animation.
 	float PlantSpeed = FVector(Self.PlayerVelocity.X, Self.PlayerVelocity.Y, 0).Size();
 	float MoveFade = 1.0f - Math::Clamp((PlantSpeed - 30.0f) / 50.0f, 0.0f, 1.0f);
-	float LegAlpha = Math::Clamp(Self.SmCrouch / 0.25f, 0.0f, 1.0f) * MoveFade;
-	Self.Anim.LegIKAlpha = LegAlpha;
-	Self.Anim.FootTargetL = FootL + (PlantL - FootL) * LegAlpha;
-	Self.Anim.FootTargetR = FootR + (PlantR - FootR) * LegAlpha;
+	// Plant/pelvis Modify Bone is a GROUNDED crouch tool. Leaving it on in the
+	// air (jump-load crouch) pins a sunk pelvis under a rising capsule — the
+	// silhouette goes up butt-first. Dive/ragdoll own the body through bDiving
+	// + physics blend; never fight them with a pelvis plant.
+	if (!Self.bIsGrounded || Self.IsDiving() || Self.bRagdollActive)
+		MoveFade = 0.0f;
+	float PlantAlpha = Math::Clamp(Self.SmCrouch / 0.25f, 0.0f, 1.0f) * MoveFade;
+
+	const float MinFootZ = Self.FloorZ + 2.0f;
+	// Ankle bones rest around Z≈3–6 on this mesh (measured via POSE telemetry).
+	// FloorZ+12 falsely flagged every idle frame as under-sand and forced
+	// LegIKAlpha=1 permanently → skating. Only lift when a bone is truly buried.
+	float FloorFix = 0.0f;
+	if (Self.bIsGrounded && !Self.bRagdollActive)
+	{
+		if (FootL.Z < MinFootZ || FootR.Z < MinFootZ)
+			FloorFix = 1.0f;
+	}
+	float FootAlpha = Math::Max(PlantAlpha, FloorFix);
+
+	Self.Anim.LegIKAlpha = FootAlpha;
+	FVector OutFootL = FootL + (PlantL - FootL) * FootAlpha;
+	FVector OutFootR = FootR + (PlantR - FootR) * FootAlpha;
+	if (Self.bIsGrounded)
+	{
+		if (OutFootL.Z < MinFootZ) OutFootL.Z = MinFootZ;
+		if (OutFootR.Z < MinFootZ) OutFootR.Z = MinFootZ;
+	}
+	Self.Anim.FootTargetL = OutFootL;
+	Self.Anim.FootTargetR = OutFootR;
 
 	// THE PELVIS IS THE ONE THAT ACTUALLY BROKE THE WALK. Modify Bone replaces
 	// the pelvis with PelvisTarget in WORLD space at full weight every frame,
@@ -661,7 +699,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	FVector PelvisNow = Self.Mesh.GetBoneTransform(n"pelvis").Location;
 	if ((PelvisNow - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
 		PelvisNow = PelvisPlant;   // not-yet-posed mesh: same guard as the feet
-	Self.Anim.PelvisTarget = PelvisNow + (PelvisPlant - PelvisNow) * LegAlpha;
+	Self.Anim.PelvisTarget = PelvisNow + (PelvisPlant - PelvisNow) * PlantAlpha;
 	Self.PrevYawForFeet = CurYaw;
 }
 
@@ -675,7 +713,11 @@ FVector GroundFootTarget(AVolleyballPlayer Self, FVector Target, FVector ActorLo
 	// floor. While airborne the feet hang under the (raised) actor instead of
 	// reaching for distant sand, so a jump doesn't stretch the legs downward.
 	const float StanceWidth = 12.0f;
-	float PlantZ = Self.bIsGrounded ? Self.FloorZ : (ActorLoc.Z - Self.PlayerHeight);
+	// Ankle bone, not sole — see FootSoleZ note at PelvisPlant.
+	const float FootSoleZ = 5.0f;
+	float PlantZ = Self.bIsGrounded
+		? (Self.FloorZ + FootSoleZ)
+		: (ActorLoc.Z - Self.PlayerHeight + FootSoleZ);
 	FVector Rest = FVector(ActorLoc.X, ActorLoc.Y, PlantZ) + SideDir * StanceWidth;
 
 	// Feet live on the floor plane: a planted foot has no business floating,
