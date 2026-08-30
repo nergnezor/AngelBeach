@@ -679,6 +679,35 @@ class AVolleyballPlayer : APawn
 		FVector Right = GetActorRightVector();
 		FVector FlatVel = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0);
 
+		// Tried flooring this to bias the blend space away from its Speed=0
+		// (MM_Idle) sample toward Walk, on the theory that Idle alone carried
+		// a bad forward lean. Measured and reverted: a live bone trace during
+		// ACTUAL movement (spd=300-350, real AI running) showed headFwd still
+		// 57-60 — Walk carries the identical lean. It's not one bad sample,
+		// it's this whole asset pack's body language (a combat-alert stance
+		// pulled from a shooter template), baked into the spine bones' own
+		// rotation keyframes in EVERY locomotion clip, so no blend-space bias
+		// could ever fix it.
+		//
+		// Also tried and REVERTED: a Modify Bone node on spine_01
+		// (AnimGraphNode_ModifyBone_1), added fresh via MCP's
+		// add_blueprint_node and spliced in right after the raw blend-space
+		// pose, meant to rotate the lean back out. Fully wired and configured
+		// (verified via Python reflection: correct bone, BMM_ADDITIVE and
+		// BMM_REPLACE both tried, BCS_BONE_SPACE, Alpha=1, and — after finding
+		// the node's struct property and its PIN default are two separate
+		// stores that do not sync from Python — set at the pin level too).
+		// Zero measured effect at any rotation value up to 150deg, in either
+		// mode. A node this session created from scratch, unlike the earlier
+		// IKRig reconnection (which only rewired EXISTING nodes and worked),
+		// so the leading theory is that AnimGraph's specialized compile pass
+		// isn't fully regenerating the runtime evaluation list for a
+		// brand-new node via this MCP path. Removed rather than left in a
+		// state that looks wired but silently does nothing. The lean is
+		// still real, still unfixed, and now precisely characterized (see
+		// the TRACE block below) for whoever picks this up next — most
+		// likely a human placing the same node by hand in the editor GUI, or
+		// swapping in genuinely different (non-combat) source animations.
 		Anim.Speed = HSpeed;
 		Anim.ForwardSpeed  = FlatVel.DotProduct(Fwd);
 		Anim.StrafeSpeed   = FlatVel.DotProduct(Right);
@@ -1576,6 +1605,33 @@ class AVolleyballPlayer : APawn
 			FVector Pv = (Mesh != nullptr)
 				? Mesh.GetBoneTransform(n"pelvis").Translation - GetActorLocation()
 				: FVector::ZeroVector;
+			// SPINE CHAIN, ABSOLUTE WORLD Z — the idle pose (crouch=0, ikAlpha=0,
+			// neither the pelvis Modify Bone nor the arm IK meant to be doing
+			// anything) still shows the mesh folded double: pelvis and head at
+			// nearly the same height. Dumping every bone from pelvis to head
+			// pinpoints WHERE the fold actually is, instead of guessing from the
+			// two systems whose scripted weights say they should be off.
+			float SpZ1 = 0.0f, SpZ2 = 0.0f, SpZ3 = 0.0f, NeckZ = 0.0f, HeadZ = 0.0f, PelvZ = 0.0f;
+			// Forward offset of head/spine3 from the pelvis, along the actor's OWN
+			// forward vector — this is the number that actually distinguishes
+			// "upright" from "folded at the same height range": a fold reads as a
+			// large FORWARD number here even when the Z climb alone looks normal.
+			float HeadFwd = 0.0f, Sp3Fwd = 0.0f;
+			if (Mesh != nullptr)
+			{
+				FVector FwdV = GetActorForwardVector();
+				FVector PelvLoc = Mesh.GetBoneTransform(n"pelvis").Location;
+				PelvZ = PelvLoc.Z;
+				SpZ1 = Mesh.GetBoneTransform(n"spine_01").Location.Z;
+				SpZ2 = Mesh.GetBoneTransform(n"spine_02").Location.Z;
+				FVector Sp3Loc = Mesh.GetBoneTransform(n"spine_03").Location;
+				SpZ3 = Sp3Loc.Z;
+				NeckZ = Mesh.GetBoneTransform(n"neck_01").Location.Z;
+				FVector HeadLoc = Mesh.GetBoneTransform(n"head").Location;
+				HeadZ = HeadLoc.Z;
+				HeadFwd = (HeadLoc - PelvLoc).DotProduct(FwdV);
+				Sp3Fwd = (Sp3Loc - PelvLoc).DotProduct(FwdV);
+			}
 			Log("TRACE " + GetName() + " t=" + int(MonTraceT * 1000.0f)
 				+ " px=" + int(Pv.X * 10.0f)
 				+ " py=" + int(Pv.Y * 10.0f)
@@ -1589,7 +1645,16 @@ class AVolleyballPlayer : APawn
 				+ " spd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
 				+ " hit=" + int(CurrentHit)
 				+ " x=" + int(GetActorLocation().X)
-				+ " y=" + int(GetActorLocation().Y));
+				+ " y=" + int(GetActorLocation().Y)
+				+ " actorZ=" + int(GetActorLocation().Z)
+				+ " pelvZ=" + int(PelvZ)
+				+ " sp1Z=" + int(SpZ1)
+				+ " sp2Z=" + int(SpZ2)
+				+ " sp3Z=" + int(SpZ3)
+				+ " neckZ=" + int(NeckZ)
+				+ " headZ=" + int(HeadZ)
+				+ " headFwd=" + int(HeadFwd)
+				+ " sp3Fwd=" + int(Sp3Fwd));
 		}
 
 		if (!bMonInit)
