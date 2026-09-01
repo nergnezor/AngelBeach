@@ -165,10 +165,10 @@ def measure(path):
     return out
 
 
-def collect():
+def collect(shot_dir=SHOT_DIR):
     shots = {}
     for name in sorted(REGIONS):
-        p = os.path.join(SHOT_DIR, name + ".png")
+        p = os.path.join(shot_dir, name + ".png")
         if os.path.exists(p):
             shots[name] = measure(p)
         else:
@@ -238,13 +238,16 @@ def main():
     ap.add_argument("--save", metavar="NAME", help="store these numbers as a named baseline")
     ap.add_argument("--against", metavar="NAME", help="print deltas against a named baseline")
     ap.add_argument("--overlay", action="store_true", help="write region-annotated copies")
+    ap.add_argument("--dir", metavar="PATH",
+                     help="read Vista_*.png from PATH instead of Saved/Screenshots/LinuxEditor "
+                          "(e.g. a pulled device capture directory)")
     args = ap.parse_args()
 
     if args.overlay:
         overlay(os.path.join(STATE_DIR, "overlay"))
         return
 
-    shots = collect()
+    shots = collect(args.dir or SHOT_DIR)
     base = None
     if args.against:
         bp = os.path.join(STATE_DIR, args.against + ".json")
