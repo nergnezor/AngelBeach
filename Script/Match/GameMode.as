@@ -265,6 +265,21 @@ class ABeachVolleyballGameMode : AGameModeBase
 			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
 		}
 
+		// MOBILE GETS A CAPTURE TOO, outside the Lumen-fallback block above.
+		//
+		// Reflection captures predate Lumen and are the standard mobile specular
+		// source in forward rendering — mobile has no SSR and no Lumen, so
+		// without one there is nothing at all for a specular surface (wet sand,
+		// water) to reflect, which is part of why the measured mobile reference
+		// shot never got past a peak of 207/255: nothing in frame could catch a
+		// highlight. Cheap (one bake, no per-frame cost) and standard enough that
+		// it should be safe, but the actual gain is unverified without a device
+		// — check peak luminance moves past 207 before trusting this comment.
+		if (bMobile)
+		{
+			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
+		}
+
 		// SkyLight captures the sky for soft ambient fill so the court isn't black.
 		ASkyLight SkyLightActor = Cast<ASkyLight>(
 			SpawnActor(ASkyLight, FVector(0, 0, 500), FRotator::ZeroRotator));
