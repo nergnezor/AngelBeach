@@ -197,15 +197,20 @@ class ABeachVolleyballGameMode : AGameModeBase
 				//
 				// Desktop never noticed because DefaultEngine.ini enables Virtual
 				// Shadow Maps (r.Shadow.Virtual.Enable=1), which bypass the CSM path
-				// entirely. Mobile has no VSM, so mobile had no shadows.
+				// entirely and already work fine on the Stationary default — so this
+				// is MOBILE ONLY. Desktop's shadow setup was never the thing that was
+				// broken and has no reason to move.
 				//
 				// Movable takes the DynamicShadowDistanceMovableLight branch instead.
 				// 6000 rather than the 40000 default: Android spreads the radius over
 				// very few cascades, so 40000 puts the texels at roughly 27cm and a
 				// body-width shadow dissolves. 6000 covers the court plus the near
 				// sand at ~6cm texels, which actually resolves a player.
-				LC.SetMobility(EComponentMobility::Movable);
-				LC.SetDynamicShadowDistanceMovableLight(6000.0f);
+				if (bMobile)
+				{
+					LC.SetMobility(EComponentMobility::Movable);
+					LC.SetDynamicShadowDistanceMovableLight(6000.0f);
+				}
 			}
 		}
 
