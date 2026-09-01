@@ -48,7 +48,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// via a different, non-character path) but don't expect it to touch bodies;
 	// the sun-angle change above is what actually fixes body visibility now.
 	const FLinearColor SandBounceColor         = FLinearColor(0.55f, 0.30f, 0.12f, 1.0f);
-	const float        MobileSkyLightIntensity = 8.0f;  // was 5.2 for the old low sun; some headroom for the new one, not the 16 used to isolate the intensity-alone experiment
+	// TRIED 8.0 -> 6.0 alongside the sun going 6.0 -> 8.0 below, 2026-09-01.
+	// MEASURED ON DEVICE AND REVERTED: Vista_6_skin and Vista_2_two_shot's body
+	// p25 (shadow-side of the torso) both dropped to 0.1/255 — pure black — the
+	// exact regression this constant exists to prevent. _form_delta looked fine
+	// (164) because p90 stayed lit, but that number can't tell a genuine lit/
+	// shadow gradient apart from a lit side next to a crushed-black one; only
+	// p25 catches it. Left at 8.0. The sun intensity/pitch changes below are
+	// kept — they don't touch fill and didn't regress p25 — but do not lower
+	// this constant again without re-measuring p25 specifically on device.
+	const float        MobileSkyLightIntensity = 8.0f;
 	// The SkyLight's UPPER hemisphere captures the dome, which is blue-violet, so a
 	// plain intensity boost fills the bodies with cool light. Tinting the SkyLight warm
 	// biases it back toward the sand-bounce cast desktop gets from Lumen. Measured on
@@ -157,10 +166,34 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// shadow angle is ever wanted, re-test it the same way rather than assuming
 		// the crash was a one-off — it was not.
 		//
-		// MOBILE IS DELIBERATELY UNTOUCHED at (-70,180): its fill values were tuned
-		// against that angle on a real device, and -55 is near enough that the
-		// parity gap stays small — which the old low sun would not have been.
-		FRotator SunRotation = bMobile ? FRotator(-70, 180, 0) : FRotator(-45, 50, 0);
+		// MOBILE MOVED FROM -70 TO -55, 2026-09-01. It was "deliberately untouched"
+		// while the mobile fill values were tuned against it and mobile had zero
+		// ground shadows anyway (a Stationary directional light's CSM radius is
+		// hard-zero — see the shadow-mobility fix below), so a shallower sun bought
+		// nothing but risk. Real shadows exist now. Desktop's key:fill ratio is
+		// 10.0:1.0; mobile's was 6.0:8.0 — fill nearly EIGHT TIMES the key relative
+		// to desktop, which is flat by construction regardless of angle. -55 still
+		// keeps 15 degrees more margin from grazing than desktop's -45 (extra
+		// safety against the original black-body regression, which was a LOW sun
+		// problem), while lifting the horizontal light component from cos(70)=0.34
+		// to cos(55)=0.57 and the shadow length for a 1.8m player from 0.66m to
+		// 1.26m. Yaw stays 180 — unrelated to the pitch fix, still the proven
+		// facing for this camera framing.
+		//
+		// MEASURED ON DEVICE, both the pitch AND the key intensity change together
+		// (key:fill went 6:8 to 8:8, fill unchanged — see MobileSkyLightIntensity's
+		// comment for the fill-reduction attempt that regressed and was reverted):
+		// body p25 (shadow side) moved 20.1->3.8 and 16.9->1.7 across the two body
+		// shots — genuinely darker, but nowhere near the 0.1 (pure black) the failed
+		// fill cut produced, and confirmed by eye in both captures as a real lit/
+		// shadow gradient, not a crushed silhouette. Ground shadow contrast
+		// (_shadow_delta) improved 15.7->23.4. Net: a real trade of a somewhat
+		// darker shadow side for a much better-defined shadow overall — expected,
+		// since steepening the sun off zenith is exactly what opens that gradient
+		// up. If the shadow side ever needs to come back up, that is a MATERIAL or
+		// post-process shadow-lift question now, not a light-intensity one — the
+		// fill is already at its ceiling per the reverted experiment above.
+		FRotator SunRotation = bMobile ? FRotator(-55, 180, 0) : FRotator(-45, 50, 0);
 		ADirectionalLight SunActor = Cast<ADirectionalLight>(
 			SpawnActor(ADirectionalLight, FVector(0, 0, 10000), SunRotation));
 		if (SunActor != nullptr)
@@ -171,8 +204,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 			{
 				// Brighter on desktop now that SkyAtmosphere is actually VISIBLE (it used
 					// to render behind the dome): the atmosphere's colour and the sun disc are
-					// both driven by this value. Mobile keeps the 6.0 it was measured at.
-					LC.SetIntensity(bMobile ? 6.0f : 10.0f);
+					// both driven by this value.
+					// Mobile raised 6.0 -> 8.0, 2026-09-01, alongside the pitch change above.
+					// MobileSkyLightIntensity (fill) was tried lower in the same pass and
+					// reverted — see that constant's comment — so this key increase stands
+					// on its own against the ORIGINAL fill of 8.0, not a reduced one. Not
+					// all the way to desktop's 10.0: still moving one conservative step at
+					// a time rather than jumping straight to parity.
+					LC.SetIntensity(bMobile ? 8.0f : 10.0f);
 				LC.SetLightColor(FLinearColor(1.0f, 0.96f, 0.90f));   // midday sun, barely warm
 				LC.CastShadows = true;
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
