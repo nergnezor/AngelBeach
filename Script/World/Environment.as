@@ -334,8 +334,31 @@ class AEnvironment : AActor
 		// out uncalibrated (too bright, wrong hue). Falls back to the old flat-
 		// per-band build if the material is missing, which is what a cook that
 		// forgets /Game/Materials looks like.
-		UMaterialInterface SkyBase = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Game/Materials/M_Sky.M_Sky"));
+		// EXPERIMENT 2026-09-01: on mobile, try the engine's own SkyAtmosphere dome
+		// material first. On-device testing this session showed a real, on-screen
+		// engine warning once r.SupportSkyAtmosphere was re-enabled for Android —
+		// "[SkyAtmosphere] component needs a mesh with a material tagged as IsSky
+		// and using the SkyAtmosphere nodes to visualize the Atmosphere" — meaning
+		// ASkyAtmosphere (already spawned unconditionally in GameMode.as) was never
+		// going to draw anything without exactly this: a mesh with an Is-Sky
+		// material sampling it. /Engine/EngineSky/SkyAtmosphere/
+		// SkyAtmosphere_MaterialSkyDome is the same material stock BP_Sky_Sphere
+		// uses (confirmed via python: MSM_UNLIT, MD_SURFACE, is_sky=True, contains
+		// MaterialExpressionSkyAtmosphereLightIlluminance /
+		// …DistantLightScatteredLuminance nodes) — reusing it needs no material
+		// authoring. It ignores our vertex colours entirely (it samples the
+		// atmosphere by world position/view ray), so the geometry below is shared
+		// with the M_Sky fallback path but the colours on it go unused when this
+		// loads. If this doesn't actually render on device, fall back to M_Sky
+		// below — do not delete that path.
+		UMaterialInterface SkyBase = bMobile ? Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/EngineSky/SkyAtmosphere/SkyAtmosphere_MaterialSkyDome.SkyAtmosphere_MaterialSkyDome")) : nullptr;
+		bool bUsingSkyAtmosphereMat = SkyBase != nullptr;
+		if (SkyBase == nullptr)
+		{
+			SkyBase = Cast<UMaterialInterface>(LoadObject(nullptr,
+				"/Game/Materials/M_Sky.M_Sky"));
+		}
 
 		if (SkyBase != nullptr)
 		{
@@ -389,7 +412,10 @@ class AEnvironment : AActor
 			// No CheckMeshWinding() here: this emits BOTH windings on purpose, so
 			// "half the triangles disagree" is the intended shape, not the bug that
 			// check exists to catch.
-			SkyMesh.CreateDynamicMaterialInstance(0, SkyBase);
+			if (bUsingSkyAtmosphereMat)
+				SkyMesh.SetMaterial(0, SkyBase);
+			else
+				SkyMesh.CreateDynamicMaterialInstance(0, SkyBase);
 			return;
 		}
 

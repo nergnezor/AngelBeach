@@ -262,7 +262,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// the whole dome, because mobile has no atmosphere. See Environment.as.
 		SpawnActor(AEnvironment, FVector::ZeroVector, FRotator::ZeroRotator);
 
-		if (!bMobile)
 		{
 			// CLOUDS. An empty gradient is the tell that a sky is a shader and not a
 			// place: nothing in it sits at any distance, so it gives the eye no scale
@@ -270,6 +269,13 @@ class ABeachVolleyballGameMode : AGameModeBase
 			// real-time capture, so for the first time the ambient light in the scene
 			// comes from the sky that is actually on screen. Engine content — this
 			// costs the repo nothing.
+			//
+			// MOBILE 2026-09-01: moved out of the desktop-only block now that
+			// SkyAtmosphere itself is confirmed rendering on Android (see
+			// Environment.as::BuildSky — mobile needed the engine's own Is-Sky
+			// dome material, force-cooked, not just the CVars). Clouds need the
+			// same force-cook treatment (see DefaultGame.ini) or LoadObject
+			// silently returns null on device exactly like the sky material did.
 			AVolumetricCloud CloudActor = Cast<AVolumetricCloud>(
 				SpawnActor(AVolumetricCloud, FVector::ZeroVector, FRotator::ZeroRotator));
 			if (CloudActor != nullptr)
@@ -289,7 +295,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 					// puts the SHADED UNDERSIDES of the clouds exactly there. The wide shot came
 					// back with a grey lid over a sunlit court. Higher base, and that band is sky.
 					// Capped at 6.5: 8.0 reproducibly took the GPU down with VK_ERROR_DEVICE_LOST
-					// two runs in a row while rendering the close-up shot.
+					// two runs in a row while rendering the close-up shot (desktop GPU; unverified
+					// on mobile hardware, so the cap stays conservative there too).
 					VC.SetLayerBottomAltitude(6.5f);   // km
 					// A THIN layer. At 5km thick the camera looks along the underside of the
 					// clouds at low elevation and sees only their shaded bases, which reads as
@@ -297,10 +304,14 @@ class ABeachVolleyballGameMode : AGameModeBase
 					VC.SetLayerHeight(2.5f);
 				}
 			}
+		}
 
+		if (!bMobile)
+		{
 			// One capture at court centre. Lumen reflections fall back to it wherever
 			// screen-space traces run off the edge of frame and hardware traces miss,
-			// which on a scene this open is most of the horizon.
+			// which on a scene this open is most of the horizon. Mobile has its own,
+			// separate capture below — do not spawn a second one here.
 			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
 		}
 
