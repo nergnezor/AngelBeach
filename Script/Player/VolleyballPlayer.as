@@ -736,22 +736,21 @@ class AVolleyballPlayer : APawn
 		// node, which nothing outside the editor GUI can create.
 		Anim.bIsInAir      = !bIsGrounded;
 		Anim.VerticalSpeed = PlayerVelocity.Z;
-		// bDiving=true was tried as a fix for "every player spends the whole
-		// match hunched" on the theory that this BlendListByBool's pins were
-		// inverted vs. its name. Checked directly against the live AnimGraph
-		// (analyze_blueprint_graph, traced node-by-node): they are not.
-		// AnimGraphNode_BlendListByBool_0.BlendPose_0 is the real chain —
-		// BlendSpacePlayer (locomotion) -> pelvis Modify Bone -> two Two Bone
-		// IK nodes (legs) -> the hit-overlay TwoWayBlend -> LookAt -> Root.
-		// BlendPose_1 is a single AnimGraphNode_SequencePlayer whose node
-		// title is literally "MM_Death_Front_01". UE's own
-		// FAnimNode_BlendListByBool::GetActiveChildIndex() is
-		// `bActiveValue ? 1 : 0` — standard, not inverted — so bDiving=true
-		// selects BlendPose_1, locking EVERY player onto that one static
-		// dive/death clip permanently, which is what was actually seen:
-		// identical frozen pose across every MatchFilmer frame regardless of
-		// game state. bDiving=false correctly selects the real chain.
-		Anim.bDiving       = false;
+		// THIS WAS HARDCODED false AND IT LOCKED EVERY PLAYER INTO THE DEATH
+		// CLIP FOR MONTHS. The old comment here claimed BlendListByBool is
+		// "standard, not inverted" and that false picks the real chain. It is
+		// the other way round, and the proof is a measurement, not a reading of
+		// the engine source: MM_Death_Front_01 is 1.100s long, and the pose
+		// telemetry cycled with a period of 1.09-1.10s while bDiving sat at
+		// false the whole time. The "mystery oscillation" everyone chased was
+		// simply that clip looping. Booth idle also measured head 5cm ABOVE the
+		// pelvis and 59cm in FRONT of it — a face-plant, not a stance.
+		//
+		// So: bActiveValue TRUE selects BlendPose_0, FALSE selects BlendPose_1,
+		// and the pins are now wired to match (BlendPose_0 = the death clip,
+		// BlendPose_1 = the real locomotion/IK chain). With that wiring the
+		// honest value below is correct again.
+		Anim.bDiving       = IsDiving() || bRagdollActive;
 
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
