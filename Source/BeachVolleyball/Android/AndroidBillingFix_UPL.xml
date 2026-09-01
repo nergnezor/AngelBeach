@@ -25,12 +25,20 @@
   <buildGradleAdditions> inserts directly into the app module's build.gradle
   (where the Android application plugin is already applied), which is what
   this needs.
+
+  BUMPED 2026-09-01: Play's upload check moved the goalposts again — every
+  CI publish since versionCode 265 was rejected with "must update to at
+  least version 8.0.0" (6.0.1 was fine when this file was first written).
+  The build itself was never broken; only the Play publish step failed.
+  Same low-risk reasoning as above applies to the bump itself: this is a
+  version string in a declarative, unused dependency, no code calls into
+  billingclient, so there's no API surface to break.
 -->
 <root xmlns:android="http://schemas.android.com/apk/res/android">
   <buildGradleAdditions>
     <insert>
       dependencies {
-          implementation 'com.android.billingclient:billing:6.0.1'
+          implementation 'com.android.billingclient:billing:8.0.0'
       }
     </insert>
   </buildGradleAdditions>
