@@ -65,16 +65,20 @@ class AEnvironment : AActor
 	// share a phase.
 	//
 	// Centred on the court (the court is spawned at the world origin —
-	// GameMode.as). The sand skirt's furthest corner sits at
-	// sqrt(1300^2+900^2) ~= 1581 from centre, and the dune ridge reaches
-	// ~1749; verified numerically (see the constants below) that the blob's
-	// TIGHTEST point never comes closer than 1913 — clears both with margin
-	// at every angle, not just on average. M_Sand and M_Water compute the same
+	// GameMode.as). SHRUNK 2026-09-01 along with Court.as's sand skirt margin
+	// (500 -> 350) and BuildDunes' footprint below, to bring the whole island
+	// in to roughly court boundary + 3-4 m instead of a large sand apron.
+	// Recomputed from scratch, same method as before ("verified numerically"):
+	// the sand skirt's furthest corner now sits at sqrt(1150^2+750^2) ~= 1373
+	// from centre, the dune ridge reaches sqrt(800^2+1350^2) ~= 1569, and the
+	// blob's TIGHTEST point never comes closer than ~1714 — the same ~9.4%
+	// relative margin over the dune ridge the original 2300/1913-over-1749
+	// numbers had, just scaled down. M_Sand and M_Water compute the same
 	// BlobRadius(angle) in the shader (parameters "IslandRadius" for the base
 	// and "BlobAmplitude" for the wobble) so the wet band, the foam and the
 	// water's depth fade all follow the actual wandering coastline rather than
 	// a circle that no longer matches the geometry.
-	const float IslandRadius = 2300.0f;
+	const float IslandRadius = 2060.0f;
 	const float IslandBlobAmp = 0.17f;
 	const float WaterZ = -40.0f;
 	const float WaterHalf = 20000.0f;   // 400 m square ocean (desktop: SkyAtmosphere above it, no dome to clip through)
@@ -649,16 +653,23 @@ class AEnvironment : AActor
 
 	// Low dunes behind the court (+Y) so the sand does not end in a hard line
 	// against the sky when the camera looks along the shoreline.
+	//
+	// SHRUNK 2026-09-01 to follow Court.as's narrower sand skirt (margin
+	// 500 -> 350): X range scaled by the same ratio the sand skirt's own
+	// half-width shrank (1150/1300), and Y0 kept at the same +50 offset past
+	// the new sand skirt edge (750) it had past the old one (900), with the
+	// same 550-deep band. See IslandRadius's comment for the numbers this
+	// feeds into (the island blob must still clear this ridge with margin).
 	private void BuildDunes()
 	{
 		DuneMesh.SetCastShadow(false);
 
 		const int GX = 24;
 		const int GY = 10;
-		const float X0 = -900.0f;
-		const float X1 = 900.0f;
-		const float Y0 = 950.0f;
-		const float Y1 = 1500.0f;
+		const float X0 = -800.0f;
+		const float X1 = 800.0f;
+		const float Y0 = 800.0f;
+		const float Y1 = 1350.0f;
 
 		TArray<FVector> V; TArray<int32> T; TArray<FVector> Nrm;
 		TArray<FVector2D> UV; TArray<FLinearColor> C;
@@ -724,8 +735,10 @@ class AEnvironment : AActor
 
 	private float DuneHeight(float X, float Y) const
 	{
-		float u = (Y - 950.0f) / 550.0f;
-		float v = X / 900.0f;
+		// Y0/the 550 depth and X1 here MUST track BuildDunes' Y0/(Y1-Y0)/X1 —
+		// this just normalizes into the same grid, not an independent shape.
+		float u = (Y - 800.0f) / 550.0f;
+		float v = X / 800.0f;
 		float h = Math::Sin(u * 3.14159f) * 55.0f;
 		h += Math::Sin(v * 6.28318f + 0.4f) * 18.0f;
 		h += Math::Cos(u * 9.0f + v * 4.0f) * 10.0f;

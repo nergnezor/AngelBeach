@@ -119,12 +119,20 @@ class ACourt : AActor
 	// Subdivided sand grid so it can be dented into craters and footprints.
 	private void BuildSand()
 	{
-		// Wider sand skirt (was +200 on each side). At 2 m the beach ended barely
-		// outside the sidelines, so on device the court read as a slab dropped into
-		// the sea rather than a court marked out on a beach. 5 m gives it somewhere
-		// to sit; grid cells go from 25 to ~32 cm, still finer than a footprint.
-		SandW = CourtHalfLength + 500.0f; // extra sand border
-		SandD = CourtHalfWidth + 500.0f;
+		// NARROWED 2026-09-01, 500 -> 350 (was itself widened from 200 earlier —
+		// see the old margin's own history below). Erik asked to bring the whole
+		// sand island in to court boundary + 3-4 m; the island's outer coastline
+		// (Environment.as::IslandRadius) was resized to match this margin, keeping
+		// the same relative safety clearance over the sand skirt and dune ridge
+		// the original numbers were solved for — see IslandRadius's comment.
+		//
+		// At the old +200 the beach ended barely outside the sidelines, so on
+		// device the court read as a slab dropped into the sea rather than a
+		// court marked out on a beach; +500 fixed that but left a large empty
+		// sand apron nobody asked for. +350 keeps "somewhere to sit" without the
+		// apron. Grid cells go from ~21 to ~27 cm, still finer than a footprint.
+		SandW = CourtHalfLength + 350.0f; // extra sand border
+		SandD = CourtHalfWidth + 350.0f;
 		SandCellX = (2.0f * SandW) / SandGridX;
 		SandCellY = (2.0f * SandD) / SandGridY;
 
@@ -203,10 +211,11 @@ class ACourt : AActor
 			// Kept in step with Environment.as::IslandRadius/IslandBlobAmp by hand
 			// (module isolation — see ApplySolidColorMaterial's comment). The wet
 			// band never actually reaches the court itself at these numbers — the
-			// closest sand-skirt corner is ~1581 from centre, comfortably inside
-			// even the blob's tightest point at ~1913 — but the shader still needs
-			// a real value to evaluate the mask against.
-			SandMID.SetScalarParameterValue(n"IslandRadius", 2300.0f);
+			// closest sand-skirt corner is ~1373 from centre, comfortably inside
+			// even the blob's tightest point at ~1714 (both shrunk 2026-09-01 along
+			// with the island — see Environment.as::IslandRadius) — but the shader
+			// still needs a real value to evaluate the mask against.
+			SandMID.SetScalarParameterValue(n"IslandRadius", 2060.0f);
 			SandMID.SetScalarParameterValue(n"BlobAmplitude", 0.17f);
 			SandMID.SetScalarParameterValue(n"WetWidth", 160.0f);
 		}
