@@ -176,6 +176,36 @@ class ABeachVolleyballGameMode : AGameModeBase
 				LC.SetLightColor(FLinearColor(1.0f, 0.96f, 0.90f));   // midday sun, barely warm
 				LC.CastShadows = true;
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
+
+				// THIS IS WHY MOBILE HAD NO GROUND SHADOWS AT ALL.
+				//
+				// ADirectionalLight's component defaults to STATIONARY, not Movable
+				// (Engine/Private/Light.cpp: DirectionalLightComponent->Mobility =
+				// EComponentMobility::Stationary). For a Stationary light,
+				// ComputeWholeSceneDynamicShadowRadius() returns
+				// DynamicShadowDistanceStationaryLight whenever r.AllowStaticLighting
+				// is on — and that field defaults to 0.0
+				// (DirectionalLightComponent.cpp:1038), while r.AllowStaticLighting
+				// defaults to true and is not overridden anywhere in Config/.
+				//
+				// So the cascaded-shadow radius was literally ZERO. That is the real
+				// reason forcing sg.ShadowQuality 3, r.Shadow.CSM.MaxMobileCascades 4
+				// and r.Mobile.EnableStaticAndCSMShadowReceivers 1 over the adb console
+				// all changed nothing on device: no CVar can scale a radius of zero.
+				// It is also why the procedural shadow-ellipse experiment was written
+				// and then reverted — the bug was never in that mesh.
+				//
+				// Desktop never noticed because DefaultEngine.ini enables Virtual
+				// Shadow Maps (r.Shadow.Virtual.Enable=1), which bypass the CSM path
+				// entirely. Mobile has no VSM, so mobile had no shadows.
+				//
+				// Movable takes the DynamicShadowDistanceMovableLight branch instead.
+				// 6000 rather than the 40000 default: Android spreads the radius over
+				// very few cascades, so 40000 puts the texels at roughly 27cm and a
+				// body-width shadow dissolves. 6000 covers the court plus the near
+				// sand at ~6cm texels, which actually resolves a player.
+				LC.SetMobility(EComponentMobility::Movable);
+				LC.SetDynamicShadowDistanceMovableLight(6000.0f);
 			}
 		}
 
