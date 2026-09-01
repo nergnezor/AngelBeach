@@ -167,15 +167,23 @@ class AEnvironment : AActor
 		// M_Water materials SandMesh already runs on mobile, so both build on every
 		// platform now — mobile no longer shows the sand's rectangular skirt
 		// cutting straight into open space. BuildWater sizes itself down on mobile
-		// (WaterHalfMobile) to stay inside the sky dome. Dunes and props stay
-		// desktop-only: purely decorative background detail, not the coastline.
+		// (WaterHalfMobile) to stay inside the sky dome.
+		//
+		// DUNES AND PROPS BUILD EVERYWHERE TOO NOW. They were desktop-only as
+		// "purely decorative background detail", but decoration is exactly what
+		// was missing: an empty beach is most of why Android read as duller than
+		// desktop, and the props (parasol, towels, chair) are the only scale
+		// references in the scene — without them the sand has nothing to say how
+		// big it is. The cost is small and of the same kind already accepted for
+		// the coastline: DuneMesh is ~480 tris and BuildProps is six little
+		// sections, all texture-free on the BasicShapeMaterial path that already
+		// runs on mobile. Under the art rule as restated 2026-08-30 ("så likt
+		// desktop som möjligt, om det inte är för mycket extrajobb") this is
+		// clearly on the cheap side of the trade.
 		BuildBackshore();
 		BuildWater();
-		if (!IsMobile())
-		{
-			BuildDunes();
-			BuildProps();
-		}
+		BuildDunes();
+		BuildProps();
 	}
 
 	private UMaterialInstanceDynamic ApplyAuthoredMaterial(UProceduralMeshComponent Comp, int Section, FString Path)
@@ -293,6 +301,99 @@ class AEnvironment : AActor
 		// Desktop: a real water plane with Lumen reflections replaces the dome's
 		// painted sea bands. Mobile keeps the dome — Etapp 6 adds its stand-in.
 		int BandCount = bMobile ? SkyBands : 0;
+		if (BandCount <= 0) return;
+
+		// ONE MESH SECTION, PER-VERTEX COLOUR — not 40 flat-coloured sections.
+		//
+		// This used to emit each band as its own section with a single solid colour,
+		// which had two costs. The colour one: a solid colour per band means the
+		// gradient can only ever be a staircase, and it was measurable — flat
+		// plateaus with a sharp jump of about +21 RGB every ~36 screen pixels in the
+		// 720p reference shot. Raising the band count only ever traded step size for
+		// draw calls, which is why 40 was described as a "deliberate ceiling".
+		//
+		// The draw-call one: band count WAS the sky's draw-call count. 40 of them,
+		// on the platform least able to afford them.
+		//
+		// Both go away together. SkyBandColor(T) was always a smooth continuous
+		// function — it was just being point-sampled once per band and then flooded
+		// across that band's whole height. Evaluating it per RING instead, and
+		// letting the rasteriser interpolate between rings, gives the true gradient
+		// for free: no new colours, no re-tuning, the same function. The rings are
+		// shared between adjacent bands, so the mesh also gets smaller, and the
+		// whole sky becomes ONE draw call.
+		//
+		// This needs a material that actually READS vertex colour. BasicShapeMaterial
+		// does not (it has no VertexColor node at all), which is exactly why the
+		// per-vertex colours the old code already wrote were computed and thrown
+		// away. /Game/Materials/M_Sky wires VertexColor to BaseColor and is
+		// DEFAULT_LIT, same as BasicShapeMaterial before it — SkyBandColor's values
+		// (see SkySeaColor above) are albedos solved against a measured LIGHT gain,
+		// not final pixel values, so the material has to go through the same
+		// light-multiply the old ApplySolidColorMaterial path did or the sky comes
+		// out uncalibrated (too bright, wrong hue). Falls back to the old flat-
+		// per-band build if the material is missing, which is what a cook that
+		// forgets /Game/Materials looks like.
+		UMaterialInterface SkyBase = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Game/Materials/M_Sky.M_Sky"));
+
+		if (SkyBase != nullptr)
+		{
+			TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+			// Rings run bottom to top; ring r sits at the boundary between band r-1
+			// and band r, so BandCount bands need BandCount+1 rings.
+			for (int r = 0; r <= BandCount; r++)
+			{
+				float t = float(r) / float(SkyBands);
+				float E = (SkyBottomDeg + (90.0f - SkyBottomDeg) * t) * PI / 180.0f;
+				FLinearColor RingCol = SkyBandColor(t);
+
+				// <= SkySegments: duplicate the seam vertex so the ring closes with
+				// the same colour on both sides instead of wrapping the index.
+				for (int s = 0; s <= SkySegments; s++)
+				{
+					float A = 2.0f * PI * float(s) / float(SkySegments);
+					V.Add(SkyPoint(A, E));
+					// Unlit material, so the normal is never read for shading. Kept
+					// pointing up for consistency with every other mesh in this file.
+					N.Add(FVector(0, 0, 1));
+					UV.Add(FVector2D(float(s) / float(SkySegments), t));
+					C.Add(RingCol);
+				}
+			}
+
+			int Stride = SkySegments + 1;
+			for (int r = 0; r < BandCount; r++)
+			{
+				for (int s = 0; s < SkySegments; s++)
+				{
+					int A = r * Stride + s;
+					int B = A + 1;
+					int Cidx = A + Stride;
+					int D = Cidx + 1;
+
+					// Both windings, same reason as the old per-band build: the dome is
+					// viewed from the inside, and emitting back faces too makes it
+					// impossible to end up with an invisible sky.
+					T.Add(A); T.Add(B); T.Add(D);
+					T.Add(A); T.Add(D); T.Add(Cidx);
+					T.Add(A); T.Add(D); T.Add(B);
+					T.Add(A); T.Add(Cidx); T.Add(D);
+				}
+			}
+
+			SkyMesh.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+			// No CheckMeshWinding() here: this emits BOTH windings on purpose, so
+			// "half the triangles disagree" is the intended shape, not the bug that
+			// check exists to catch.
+			SkyMesh.CreateDynamicMaterialInstance(0, SkyBase);
+			return;
+		}
+
+		Log("MATERIAL missing: /Game/Materials/M_Sky.M_Sky — falling back to banded sky");
 
 		for (int b = 0; b < BandCount; b++)
 		{
@@ -317,10 +418,6 @@ class AEnvironment : AActor
 				V.Add(SkyPoint(A0, E0)); V.Add(SkyPoint(A1, E0));
 				V.Add(SkyPoint(A1, E1)); V.Add(SkyPoint(A0, E1));
 
-				// Both windings. The dome is viewed from the inside, and emitting
-				// the back faces too costs a few hundred triangles while making it
-				// impossible to get the winding order backwards and end up with an
-				// invisible sky.
 				T.Add(B+0); T.Add(B+1); T.Add(B+2);
 				T.Add(B+0); T.Add(B+2); T.Add(B+3);
 				T.Add(B+0); T.Add(B+2); T.Add(B+1);
@@ -328,11 +425,6 @@ class AEnvironment : AActor
 
 				for (int i = 0; i < 4; i++)
 				{
-					// Normal up, not outward: the material is lit, and a uniform
-					// normal means every band takes identical lighting. The gradient
-					// then comes purely from the albedos below, which is predictable
-					// — an outward normal would shade each band by its own angle to
-					// the sun and fight the gradient.
 					N.Add(FVector(0, 0, 1));
 					UV.Add(FVector2D(0, 0));
 					C.Add(Col);
@@ -340,9 +432,6 @@ class AEnvironment : AActor
 			}
 
 			SkyMesh.CreateMeshSection_LinearColor(b, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
-			// No CheckMeshWinding() here: this band emits BOTH windings on purpose
-			// (see the comment above), so "half the triangles disagree" is the
-			// intended shape, not the bug that check exists to catch.
 			ApplySolidColorMaterial(SkyMesh, b, Col);
 		}
 	}
