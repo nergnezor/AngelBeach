@@ -6,8 +6,33 @@ class AHumanPlayer : AAIPlayer
 	UPROPERTY(DefaultComponent)
 	UInputComponent ScriptInputComponent;
 
-	// True once the player has pressed anything on the gamepad
+	// True while a human is actually driving this pawn. NOT a latch: see
+	// ControlReleaseDelay below.
 	bool bPlayerControlled = false;
+
+	// TAKING CONTROL IS A MOVEMENT DECISION, AND IT IS REVOCABLE.
+	//
+	// Both halves of that sentence are repairs for a measured bug: this pawn ran
+	// the whole match without ever reaching its AI brain. TakeControl() used to
+	// be a permanent latch that ANY bound input could set, including the four
+	// action buttons -- and something fired the Set action two seconds into a
+	// headless match with no input device attached (TAKECONTROL src=DoSet).
+	// From that frame on, Tick took the player-controlled branch, fed
+	// MovePlayer() an all-zero axis pair and returned before RunAIBrain: the
+	// player stood still for the rest of the match. Measured over a full match,
+	// A/Back reached its decision loop 30 times against B/Back's 888, and moved
+	// 85cs per rally against the other three players' 365-404.
+	//
+	// So: only real movement asks for control (an action button press is not
+	// evidence that anyone is steering), and control lapses back to the AI after
+	// a stretch of complete silence. A human who is actually playing re-arms it
+	// on their next stick nudge or button press, so the only thing the lapse can
+	// take away is a takeover nobody asked for.
+	const float ControlReleaseDelay = 4.0f;
+	// Stick drift and a hair-trigger 0.1 both count as "someone is steering" at
+	// the old threshold. A real push clears this easily.
+	const float TakeControlDeadzone = 0.25f;
+	private float InputIdleTime = 0.0f;
 
 	// Input axes (used when bPlayerControlled == true)
 	float AxisForward = 0.0f;
@@ -69,6 +94,20 @@ class AHumanPlayer : AAIPlayer
 			return;
 		}
 
+		// Hand the pawn back to the AI once the human has gone quiet. Axis
+		// handlers fire every frame with the current value, so silence really
+		// does mean nobody is touching anything.
+		if (bPlayerControlled)
+		{
+			InputIdleTime += DeltaTime;
+			if (InputIdleTime >= ControlReleaseDelay)
+			{
+				bPlayerControlled = false;
+				AxisForward = 0.0f;
+				AxisRight = 0.0f;
+			}
+		}
+
 		if (bPlayerControlled && Ball != nullptr && Ball.bInPlay)
 		{
 			// Direct control: player drives movement, hits via buttons
@@ -86,16 +125,22 @@ class AHumanPlayer : AAIPlayer
 	UFUNCTION()
 	void OnMoveForward(float32 Value)
 	{
-		if (!bPlayerControlled && Math::Abs(Value) > 0.1f)
-			TakeControl();
+		if (Math::Abs(Value) > TakeControlDeadzone)
+		{
+			InputIdleTime = 0.0f;
+			if (!bPlayerControlled) TakeControl();
+		}
 		AxisForward = Value;
 	}
 
 	UFUNCTION()
 	void OnMoveRight(float32 Value)
 	{
-		if (!bPlayerControlled && Math::Abs(Value) > 0.1f)
-			TakeControl();
+		if (Math::Abs(Value) > TakeControlDeadzone)
+		{
+			InputIdleTime = 0.0f;
+			if (!bPlayerControlled) TakeControl();
+		}
 		AxisRight = Value;
 	}
 
@@ -141,27 +186,27 @@ class AHumanPlayer : AAIPlayer
 
 	private void DoJump()
 	{
-		if (!bPlayerControlled) TakeControl();
+		InputIdleTime = 0.0f;   // a press is activity, but not a steering claim
 		Jump();
 	}
 
 	private void DoPass()
 	{
-		if (!bPlayerControlled) TakeControl();
+		InputIdleTime = 0.0f;   // a press is activity, but not a steering claim
 		if (Ball == nullptr) FindBall();
 		TryPass(Ball);
 	}
 
 	private void DoSet()
 	{
-		if (!bPlayerControlled) TakeControl();
+		InputIdleTime = 0.0f;   // a press is activity, but not a steering claim
 		if (Ball == nullptr) FindBall();
 		TrySet(Ball);
 	}
 
 	private void DoSpike()
 	{
-		if (!bPlayerControlled) TakeControl();
+		InputIdleTime = 0.0f;   // a press is activity, but not a steering claim
 		if (Ball == nullptr) FindBall();
 		TrySpike(Ball);
 	}
