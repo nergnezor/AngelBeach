@@ -138,10 +138,10 @@ jobs:
           test -d "$ANDROID_HOME" || { echo "ERROR: ANDROID_HOME not found: $ANDROID_HOME"; exit 1; }
 
           NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
-          PLATFORM35_DIR="$ANDROID_HOME/platforms/android-35"
-          BUILDTOOLS35_DIR="$ANDROID_HOME/build-tools/35.0.0"
-          if [ ! -d "$NDK_DIR" ] || [ ! -d "$PLATFORM35_DIR" ] || [ ! -d "$BUILDTOOLS35_DIR" ]; then
-            echo ">> Missing NDK $NDK_VERSION and/or platform 35 / build-tools 35.0.0; installing via sdkmanager..."
+          PLATFORM36_DIR="$ANDROID_HOME/platforms/android-36"
+          BUILDTOOLS36_DIR="$ANDROID_HOME/build-tools/36.0.0"
+          if [ ! -d "$NDK_DIR" ] || [ ! -d "$PLATFORM36_DIR" ] || [ ! -d "$BUILDTOOLS36_DIR" ]; then
+            echo ">> Missing NDK $NDK_VERSION and/or platform 36 / build-tools 36.0.0; installing via sdkmanager..."
             SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
             [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
             test -n "$SDKMANAGER" || {
@@ -151,15 +151,16 @@ jobs:
             }
             yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
             # NDK plus the SDK bits gradle needs to assemble the APK.
-            # Play now requires targetSdkVersion 35; keep 34 installed too since
-            # some engine tooling still references it.
+            # Play now requires targetSdkVersion 36 (bumped 2026-09-01, was 35 —
+            # this floor moves roughly once a year); keep 35/34 installed too
+            # since some engine tooling still references them.
             "$SDKMANAGER" "ndk;$NDK_VERSION" \
-              "platform-tools" "platforms;android-35" "platforms;android-34" \
-              "build-tools;35.0.0" "build-tools;34.0.0"
+              "platform-tools" "platforms;android-36" "platforms;android-35" "platforms;android-34" \
+              "build-tools;36.0.0" "build-tools;35.0.0" "build-tools;34.0.0"
           fi
           test -d "$NDK_DIR" || { echo "ERROR: NDK still missing at $NDK_DIR"; exit 1; }
-          test -d "$PLATFORM35_DIR" || { echo "ERROR: platforms;android-35 still missing"; exit 1; }
-          test -d "$BUILDTOOLS35_DIR" || { echo "ERROR: build-tools;35.0.0 still missing"; exit 1; }
+          test -d "$PLATFORM36_DIR" || { echo "ERROR: platforms;android-36 still missing"; exit 1; }
+          test -d "$BUILDTOOLS36_DIR" || { echo "ERROR: build-tools;36.0.0 still missing"; exit 1; }
 
           # ABP_VolleyballPlayer hard-references these clips; they must exist in
           # every fresh checkout (see .gitignore exceptions under Mannequins/Anims).
