@@ -2101,8 +2101,34 @@ class AVolleyballPlayer : APawn
 		while (T < 2.5f)
 		{
 			V.Z += -980.0f * SimDt;
-			P += V * SimDt;
-			if (P.Z <= TargetZ && V.Z < 0.0f) { Out = P; return true; }
+			FVector Next = P + V * SimDt;
+			if (Next.Z <= TargetZ && V.Z < 0.0f)
+			{
+				// INTERPOLATE THE CROSSING — do not return the first sample past
+				// it. This is the meet point the dig platform parks on, and its
+				// whole documented purpose is to BE STILL so the speed-limited
+				// FBIK can converge on it. Returning the first sample overshot by
+				// up to one step of ball travel, and as the ball advances the
+				// sampling grid's phase slides against the true crossing, so the
+				// answer jumped back and forth by that whole step every time it
+				// was recomputed: 10cm of sawtooth at 400cm/s, 20cm at 800.
+				//
+				// MEASURED, planted with the dig intent set: PredictedMeetLow
+				// reversed 79 times a second in Z and 68 in X, the contact point
+				// followed it at 68, the hand target at 67, and FBIK's root
+				// pre-pull wrote that into the pelvis as 26cm of hip displacement
+				// bouncing 12.5x/s. That is the shake before every bump, and why
+				// it looks like it starts at the hip.
+				//
+				// Ball::PredictLanding already interpolates its floor crossing
+				// for the same reason; this path was the half that was missed.
+				float Drop = P.Z - Next.Z;
+				float Frac = (Drop > 0.0001f)
+					? Math::Clamp((P.Z - TargetZ) / Drop, 0.0f, 1.0f) : 0.0f;
+				Out = P + (Next - P) * Frac;
+				return true;
+			}
+			P = Next;
 			if (P.Z <= 0.0f) break;
 			T += SimDt;
 		}
