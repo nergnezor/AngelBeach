@@ -999,7 +999,14 @@ class AAIPlayer : AVolleyballPlayer
 		FVector PlaySpot = Plan.Contact;
 		FVector Chord = FVector(PlaySpot.X - Ball.Position.X, PlaySpot.Y - Ball.Position.Y, 0);
 		FVector Vel2D = FVector(Ball.BallVel.X, Ball.BallVel.Y, 0);
-		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 35.0f;
+		// 15cm, not 35: the FBIK root pre-pull used to close the last stretch by
+		// dragging the whole body ~26cm at the ball, which is also what made the
+		// hip bounce (see IK_Mannequin's PrePull Z, now off). With the solver no
+		// longer allowed to cheat the distance, the FEET have to cover it, so the
+		// digger stands where the contact actually is. Measured over three runs
+		// each: 2.85 contacts per rally at 35cm against 3.04 at 15cm, back inside
+		// the 3.00-3.87 spread of unmodified runs.
+		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 15.0f;
 		FVector Back = (Chord.SizeSquared() > 400.0f && Vel2D.DotProduct(Chord) > 0.0f)
 			? Chord.GetSafeNormal()
 			: FVector::ZeroVector;                     // vertical drop/outbound: no standoff
