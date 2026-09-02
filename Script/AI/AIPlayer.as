@@ -137,6 +137,7 @@ class AAIPlayer : AVolleyballPlayer
 			bIMadeLastTouch = false;
 			PlanSlackLog = -1.0f;   // an unconsumed promise must not leak into the next rally
 			bHitterPlanted = false; // ...nor a stale plant (PLANVA settle counts from it)
+			PlantedFacing = FVector::ZeroVector;
 			PlantedFor = 0.0f;
 			bOnTwoDecided = false;  // per-ball decisions die with the ball
 			bChoseOnTwo = false;
@@ -168,6 +169,8 @@ class AAIPlayer : AVolleyballPlayer
 		// PLAN vs ACTUAL bookkeeping: how long the hitter has stood planted
 		// (read by OnBallContact's PLANVA telemetry line).
 		PlantedFor = bHitterPlanted ? PlantedFor + DeltaTime : 0.0f;
+		if (!bHitterPlanted)
+			PlantedFacing = FVector::ZeroVector;
 
 		// PERCEPTION LATENCY (first principles): a ball EVENT — any touch, the
 		// serve going live — is not seen instantly. The previous action keeps
@@ -807,6 +810,9 @@ class AAIPlayer : AVolleyballPlayer
 
 	// Hysteresis state for the hitter's plant (see PlayHitter).
 	private bool bHitterPlanted = false;
+	// The facing snapshot taken on the frame the hitter plants, held until the
+	// plant releases. See RequestBallFacing.
+	private FVector PlantedFacing = FVector::ZeroVector;
 
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
@@ -1177,9 +1183,38 @@ class AAIPlayer : AVolleyballPlayer
 			return FVector::ZeroVector;
 
 		// Close in: face the ball's approach instead of its position.
+		//
+		// THE CHORD IS A LINE, NOT A RAY. -BallVel means "where it came from"
+		// only while the ball is still closing; on a ball that has already
+		// passed the plant spot, or one crossing tangentially, it points the
+		// opposite way to the bearing this same function returned one frame
+		// earlier on the far side of FaceNearRadius. And that crossing happens
+		// before EVERY dig by construction — the receiver plants on the
+		// contact point and the ball descends onto it, so |To| falls through
+		// 150cm every single time. MEASURED on a 165s match: 91 single-frame
+		// reversals of the facing request, 63 of them past 150°, 54 with the
+		// intent already set to Hit_Bump and 26 with the feet completely
+		// still. The body then spent ~0.45s grinding through the flip at the
+		// 300°/s target limiter and turned straight back when the run
+		// resumed: out, back, out — "de skakar innan varje bagger".
+		//
+		// Both signs describe the same flight line, so pick the one that
+		// agrees with where the body is already aimed. At the handover frame
+		// that is the well-conditioned bearing TO the ball, so the receiver
+		// still squares up to the incoming ball — it just never gets told to
+		// spin 180° to do it.
 		FVector From = FVector(-Ball.BallVel.X, -Ball.BallVel.Y, 0.0f);
 		if (From.SizeSquared() > 100.0f * 100.0f)   // 100 cm/s of usable horizontal flight
-			return From.GetSafeNormal();
+		{
+			FVector Chord = From.GetSafeNormal();
+			if (FacingDir.SizeSquared() > 0.01f)
+			{
+				FVector Aimed = FVector(FacingDir.X, FacingDir.Y, 0.0f).GetSafeNormal();
+				if (Chord.DotProduct(Aimed) < 0.0f)
+					Chord = -Chord;
+			}
+			return Chord;
+		}
 		return FVector::ZeroVector;
 	}
 
@@ -1200,9 +1235,36 @@ class AAIPlayer : AVolleyballPlayer
 	// their own bearing.
 	private void RequestBallFacing()
 	{
+		// A PLANTED RECEIVER SQUARES UP ONCE AND HOLDS IT.
+		//
+		// Everything above makes the BEARING well conditioned; none of it makes
+		// the bearing CONSTANT, and the body is asked to re-aim at it every
+		// frame through a 300°/s target limiter. Measured on a planted, deeply
+		// crouched digger with the feet stationary for a full second: the
+		// request stepped 174° in one frame and the body ground 120° across the
+		// floor chasing it, then turned back when the run resumed. Any bearing
+		// that steps while the feet are still buys a half-second in-place spin,
+		// and the steps come in pairs — that is the shake before every bump.
+		//
+		// So stop re-solving it. The instant the hitter plants, take the
+		// bearing once and hold that snapshot until the plant releases (the
+		// goal moved out of PlantRadius + 35, or the rally ended). One turn per
+		// approach, no re-evaluation, nothing left to oscillate between. It is
+		// also what a real receiver does: square up on arrival and stay there.
+		// The eyes keep following the ball — the look target is a separate
+		// channel and is untouched by this.
+		if (bHitterPlanted && PlantedFacing.SizeSquared() > 0.01f)
+		{
+			FacingDir = PlantedFacing;
+			bHasFacing = true;
+			return;
+		}
+
 		FVector Dir = StableBallBearing();
 		if (Dir.SizeSquared() > 0.01f)
 			FacingDir = Dir;
+		if (bHitterPlanted)
+			PlantedFacing = FacingDir;
 		// else: hold the last direction — still asserting bHasFacing so the
 		// request does not lapse into velocity-facing, which would hand the
 		// body a fresh target and restart the very oscillation this exists to
