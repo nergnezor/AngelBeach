@@ -127,7 +127,31 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector Platform = PlatformBall - Up * 12.0f;
 		FVector PlatDir = (Platform - ChestMid).GetSafeNormal();
 		if (PlatDir.SizeSquared() < 0.01f) PlatDir = Fwd - Up;
-		float Ext = Math::Max((Platform - ChestMid).Size(), 96.0f);  // lock the elbows out
+		// 72cm, not 96: NEVER ASK THE SOLVER FOR SOMETHING IT CANNOT REACH.
+		// The hands join on the centreline, so the span available from ChestMid
+		// (the midpoint between the shoulders) is about one arm, ~70cm. Asking
+		// for 96 put the goal permanently out of range, and a full-body IK
+		// solver answers an unreachable goal by moving the root — which is the
+		// pre-pull that made the hips travel with the hand target.
+		//
+		// This is the sideways half of the shake. Capping the pre-pull's Z alone
+		// (IK_Mannequin, previous commit) left the solver the other two axes to
+		// close the same impossible gap in, and it used them: reported as "nu ser
+		// det ut som spelaren skakar i sidled innan mottag", and measured as the
+		// hip's Y reversals rising 4.27 -> 6.86 per second while Z fell.
+		//
+		// Measured with the feet still and the dig intent set, hip reversals
+		// larger than 3cm per second, against contacts per rally:
+		//
+		//   Ext 96, pre-pull on     X 23.49  Y  4.27  Z 12.81   3.31
+		//   Ext 96, pre-pull Z off  X  5.21  Y  6.86  Z  1.73   2.86
+		//   Ext 72, pre-pull Z off  X  4.05  Y  4.02  Z  1.52   3.24
+		//   Ext 72, pre-pull on     X  9.91  Y 12.04  Z  4.49   2.60
+		//
+		// The last row is why both changes stay: a reachable goal is not enough
+		// on its own, because the pre-pull drags the root toward the goal whether
+		// or not the arm could have got there by itself.
+		float Ext = Math::Max((Platform - ChestMid).Size(), 72.0f);  // lock the elbows out
 		FVector PlatEnd = ChestMid + PlatDir * Ext;
 		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
 		// a bagger is a controlled swing from the shoulders, not a held tray.
