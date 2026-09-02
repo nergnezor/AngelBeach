@@ -121,8 +121,15 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		if (Self.bHasReachContact)
 		{
 			FVector ToMeet = Self.ReachContact - ChestMid;
-			PlatformBall = (ToMeet.Size() > 110.0f)
-				? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+			// CLAMP TO ARM'S REACH, not to 110cm. The arm spans ~72 from ChestMid
+			// (hands joined on the centreline), so a 110 goal is unreachable and
+			// the full-body IK answers that by dragging the ROOT the difference.
+			// Measured, feet still with the dig intent set: the pelvis sat 38.8cm
+			// from the capsule at the median and 121.6 at p90 — the body walking
+			// a metre away from the player it belongs to, pinned at exactly this
+			// clamp. Off the gesture it sits 0.9cm out.
+			PlatformBall = (ToMeet.Size() > 72.0f)
+				? ChestMid + ToMeet.GetSafeNormal() * 72.0f
 				: Self.ReachContact;
 		}
 		FVector Platform = PlatformBall - Up * 12.0f;
@@ -218,8 +225,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		if (Self.bHasReachContact)
 		{
 			FVector ToMeet = Self.ReachContact - ChestMid;
-			CupBall = (ToMeet.Size() > 110.0f)
-				? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+			CupBall = (ToMeet.Size() > 72.0f)
+				? ChestMid + ToMeet.GetSafeNormal() * 72.0f
 				: Self.ReachContact;
 		}
 		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
