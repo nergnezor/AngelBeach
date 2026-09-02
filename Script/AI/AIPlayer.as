@@ -310,7 +310,7 @@ class AAIPlayer : AVolleyballPlayer
 		// Face the opponent court; the IK choreography runs off ServePhase.
 		FacingDir = FVector(-MySign(), 0, 0);
 		bHasFacing = true;
-		Reach(EHitType::Hit_Serve);
+		Reach(EHitType::Hit_Serve, Ball.Position);   // serve builds its own motion from ServePhase
 		MovePlayer(FVector2D::ZeroVector);
 
 		// A REAL toss: the ball rides the left hand up, is RELEASED into a short
@@ -965,7 +965,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (IsDiving())
 		{
 			// The dive owns movement and facing; just keep the platform out.
-			Reach(EHitType::Hit_Bump);
+			Reach(EHitType::Hit_Bump, Plan.Contact);
 			return;
 		}
 
@@ -1049,7 +1049,7 @@ class AAIPlayer : AVolleyballPlayer
 		// the spine to meet it — the "böjer sig framåt" silhouette on every
 		// approach. Late balls still get AutoReach at arm's length.
 		if (Plan.bStartGesture && (bHitterPlanted || DistToGoal < 160.0f))
-			Reach(Intend);
+			Reach(Intend, Plan.Contact);
 	}
 
 	// Distance at which we START preparing the swing/arms. Generous so the wind-up
@@ -1343,7 +1343,7 @@ class AAIPlayer : AVolleyballPlayer
 			FaceBall();
 			DoSpike();   // still aim into the opponent court
 			if ((GetActorLocation() - Ball.Position).Size() < PrepareDistance)
-				Reach(EHitType::Hit_Bump);
+				Reach(EHitType::Hit_Bump, PlaySpot);
 			return;
 		}
 
@@ -1435,7 +1435,7 @@ class AAIPlayer : AVolleyballPlayer
 		if ((bGo || !bIsGrounded) && Ball.Position.Z > GetActorLocation().Z + 40.0f)
 		{
 			DoSpike();
-			Reach(EHitType::Hit_Spike);
+			Reach(EHitType::Hit_Spike, Ball.Position);
 		}
 	}
 
@@ -1563,7 +1563,7 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			// Airborne: hold still (no drift) and throw up the block NOW.
 			MovePlayer(FVector2D::ZeroVector);
-			Reach(EHitType::Hit_Block);
+			Reach(EHitType::Hit_Block, Ball.Position);
 			return;
 		}
 

@@ -84,7 +84,15 @@ struct FInterceptPlan
 // the ball itself substeps at; drag (2%/s) is absorbed by MB_Margin. Returns
 // false if the flight never descends through TargetZ before landing (OutPos
 // then holds the landing point, OutTime the landing time).
-bool MB_BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutTime)
+// NAMESPACED SO IT CAN BE THE ONLY ONE. Angelscript will not let a global
+// function be called from another script module, which is exactly how the
+// pawn ended up with a private copy of this computation (PredictBallCrossZ,
+// deleted): the AI could not share its own, so a second one got written, and
+// the interpolation fix that landed here never reached it. A namespace costs
+// three call sites and removes the reason to ever fork it again.
+namespace Predict
+{
+bool BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutTime)
 {
 	FVector P = Ball.Position;
 	FVector V = Ball.BallVel;
@@ -119,6 +127,8 @@ bool MB_BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutT
 	OutTime = T;
 	return false;
 }
+
+}   // namespace Predict
 
 // Braking deceleration is a MEASURED PROPERTY OF THE SIM, not a tuning knob
 // here — so it is passed in from the player rather than restated. It used to
@@ -185,7 +195,7 @@ mixin float BodyTravelTime(AAIPlayer Self, float Dist)
 mixin bool BallStillCrossesHeight(AAIPlayer Self, float TargetZ, float& OutTau)
 {
 	FVector Pos;
-	return MB_BallTimeToHeight(Self.Ball, TargetZ, Pos, OutTau);
+	return Predict::BallTimeToHeight(Self.Ball, TargetZ, Pos, OutTau);
 }
 
 // The planner. Evaluates the preferred contact height first (stroke-specific:
@@ -210,7 +220,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 
 		FVector Pos;
 		float Tau = 0.0f;
-		if (!MB_BallTimeToHeight(Ball, Z, Pos, Tau)) continue;
+		if (!Predict::BallTimeToHeight(Ball, Z, Pos, Tau)) continue;
 
 		// ANISOTROPIC TOP SPEED: the body is fastest driving along its facing;
 		// backpedaling is slower. First-order model: the facing at decision
@@ -261,7 +271,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 	// the ball gave us — its landing/low crossing.)
 	FVector DivePos;
 	float DiveTau = 0.0f;
-	MB_BallTimeToHeight(Ball, FallbackZ, DivePos, DiveTau);
+	Predict::BallTimeToHeight(Ball, FallbackZ, DivePos, DiveTau);
 	FVector ToDive = FVector(DivePos.X - MyPos.X, DivePos.Y - MyPos.Y, 0);
 	float DiveDist = ToDive.Size2D();
 	float BodyT = MB_BodyTravelTimeRaw(DiveDist,

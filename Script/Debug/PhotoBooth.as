@@ -207,7 +207,9 @@ class APhotoBoothGameMode : AGameModeBase
 		Dummy.bHasFacing = true;
 		Dummy.ServePhase = Math::Max(Pose.ServePhase, 0.0f);
 		if (Pose.bReach)
-			Dummy.Reach(Pose.Type);
+			// No committed contact in the booth: the IK falls back to the
+			// chest-forward default, which is what a static pose shot wants.
+			Dummy.Reach(Pose.Type, FVector::ZeroVector);
 		Dummy.UpdatePlayer(DeltaSeconds);
 
 		// Shot sequencing: settle pose -> settle camera -> shoot -> HOLD -> advance.

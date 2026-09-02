@@ -112,17 +112,18 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// speed-limited FBIK reliably converges on. "Set your platform early and
 		// let the ball come to you" — literally. Once the ball is at/below meet
 		// height the live position takes over (they coincide by then).
+		// ONE contact point, handed over with the reach request (see Reach) —
+		// the same one the feet are walking to. There is no second prediction
+		// here any more, and no switch between "parked meet point" and "live
+		// ball": the point IS where the ball will be, so the two coincide by
+		// the time it arrives.
 		FVector PlatformBall = BallContact;
+		if (Self.bHasReachContact)
 		{
-			ABall PB = Self.GetWorldBall();
-			if (PB != nullptr && PB.bInPlay && Self.bHasPredictedMeetLow
-				&& PB.Position.Z > Self.PredictedMeetLow.Z + 30.0f)
-			{
-				FVector ToMeet = Self.PredictedMeetLow - ChestMid;
-				PlatformBall = (ToMeet.Size() > 110.0f)
-					? ChestMid + ToMeet.GetSafeNormal() * 110.0f
-					: Self.PredictedMeetLow;
-			}
+			FVector ToMeet = Self.ReachContact - ChestMid;
+			PlatformBall = (ToMeet.Size() > 110.0f)
+				? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+				: Self.ReachContact;
 		}
 		FVector Platform = PlatformBall - Up * 12.0f;
 		FVector PlatDir = (Platform - ChestMid).GetSafeNormal();
@@ -184,15 +185,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// crouch lowers chest, lowers PlatformBall.Z, deepens BallLow, deepens
 		// crouch. That was the residual mid-run crouchFlips source (stats22-24).
 		float KneeKeyZ = PlatformBall.Z;
+		if (Self.bHasReachContact)
+		{
+			KneeKeyZ = Self.ReachContact.Z;
+		}
+		else
 		{
 			ABall KB = Self.GetWorldBall();
-			if (KB != nullptr && KB.bInPlay)
-			{
-				KneeKeyZ = (Self.bHasPredictedMeetLow
-							&& KB.Position.Z > Self.PredictedMeetLow.Z + 30.0f)
-					? Self.PredictedMeetLow.Z
-					: KB.Position.Z;
-			}
+			if (KB != nullptr && KB.bInPlay) KneeKeyZ = KB.Position.Z;
 		}
 		float FeetZ = Self.GetActorLocation().Z - Self.PlayerHeight;
 		float ContactAboveFeet = KneeKeyZ - FeetZ;
@@ -210,17 +210,17 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		//    no leg drive reads as a stiff tap.
 		// Same park-at-the-meet-point trick as the bump: the window waits where
 		// the ball will cross brow height instead of chasing it down.
+		// Same one contact point as the bump above. The set's own height came
+		// from a separate copy of the prediction (PredictedMeetHigh); it now
+		// comes from ContactHeightFor(Hit_Set), which is where the planner
+		// already put the feet.
 		FVector CupBall = BallContact;
+		if (Self.bHasReachContact)
 		{
-			ABall SB2 = Self.GetWorldBall();
-			if (SB2 != nullptr && SB2.bInPlay && Self.bHasPredictedMeetHigh
-				&& SB2.Position.Z > Self.PredictedMeetHigh.Z + 30.0f)
-			{
-				FVector ToMeet = Self.PredictedMeetHigh - ChestMid;
-				CupBall = (ToMeet.Size() > 110.0f)
-					? ChestMid + ToMeet.GetSafeNormal() * 110.0f
-					: Self.PredictedMeetHigh;
-			}
+			FVector ToMeet = Self.ReachContact - ChestMid;
+			CupBall = (ToMeet.Size() > 110.0f)
+				? ChestMid + ToMeet.GetSafeNormal() * 110.0f
+				: Self.ReachContact;
 		}
 		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
 		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();

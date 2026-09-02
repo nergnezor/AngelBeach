@@ -648,7 +648,6 @@ class AVolleyballPlayer : APawn
 		DbgWantYaw = (Want.SizeSquared() > 0.01f) ? Want.Rotation().Yaw : DbgWantYaw;
 		bHasFacing = false;   // requests lapse via FacingHoldTimer above
 
-		UpdatePredictedMeet();
 		UpdateAnimation(DeltaTime, HSpeed2);
 		UpdateMotionMonitor(DeltaTime);
 	}
@@ -917,7 +916,10 @@ class AVolleyballPlayer : APawn
 		// the AI stops asking.
 		ReachHoldTimer -= DeltaTime;
 		if (ReachHoldTimer <= 0.0f)
+		{
 			bReaching = false;
+			bHasReachContact = false;
+		}
 		// (Crouch decay moved to the TOP of UpdatePlayer — it must run before
 		// the per-frame writers, not after them.)
 	}
@@ -2013,13 +2015,35 @@ class AVolleyballPlayer : APawn
 	// held for a beat (not cleared per-frame) because the AI only re-asserts
 	// every ReactionDelay — clearing each frame made poses sawtooth between ticks.
 	bool bReaching = false;
+	// Where this reach is aimed (world). Set by Reach(), lapses with it.
+	FVector ReachContact = FVector::ZeroVector;
+	bool bHasReachContact = false;
 	private float ReachHoldTimer = 0.0f;
 	private float CrouchHoldTimer = 0.0f;
 
-	void Reach(EHitType Type)
+	// THE ONE CONTACT POINT. Whoever asks for the reach also says WHERE the
+	// contact is, because they already know: the AI hands over Plan.Contact,
+	// the point its feet are walking to, solved by the interpolated
+	// Predict::BallTimeToHeight at the height ContactHeightFor() picked for this
+	// stroke.
+	//
+	// This replaces a second, independent prediction that lived on the pawn
+	// (PredictBallCrossZ -> PredictedMeetLow/High, deleted with this change).
+	// The engine had THREE answers to "where does the ball cross height Z" —
+	// Ball::PredictLanding, Predict::BallTimeToHeight and that one — three step
+	// sizes, and the same first-sample-past-the-crossing defect was found and
+	// fixed in two of them months apart while the third sat unnoticed, feeding
+	// the hands a sawtooth that the full-body IK's root pre-pull wrote into the
+	// pelvis. That was "de skakar innan varje bagger".
+	//
+	// So the hands no longer estimate the meet point at all. They aim exactly
+	// where the feet are already going, at decision rate rather than frame rate.
+	void Reach(EHitType Type, FVector Contact)
 	{
 		bReaching = true;
 		ReachHoldTimer = 0.25f;
+		bHasReachContact = Contact.SizeSquared() > 1.0f;
+		if (bHasReachContact) ReachContact = Contact;
 		if (HitAnimTimer > 0.0f) return;   // don't override an active swing
 		if (Type != CurrentHit)
 		{
@@ -2080,71 +2104,6 @@ class AVolleyballPlayer : APawn
 	// which of its parts breaks it this time.
 	FVector ServeTossTarget;
 
-	// --- Predicted meet points, cached once per frame -----------------------
-	// Where the incoming ball will next descend through bump-platform height
-	// (waist, FloorZ+112) and through set height (above the brow). The IK PARKS
-	// the platform/cup at these STATIC points instead of chasing the live ball:
-	// the ABP's FBIK effectors converge on static targets (booth-verified) but
-	// lag behind moving ones — chasing is why fast serves went through the arms.
-	FVector PredictedMeetLow;
-	bool bHasPredictedMeetLow = false;
-	FVector PredictedMeetHigh;
-	bool bHasPredictedMeetHigh = false;
-
-	private bool PredictBallCrossZ(ABall B, float TargetZ, FVector& Out) const
-	{
-		FVector P = B.Position;
-		FVector V = B.BallVel;
-		if (P.Z <= TargetZ && V.Z <= 0.0f) { Out = P; return true; }   // already at/below, dropping
-		const float SimDt = 0.025f;
-		float T = 0.0f;
-		while (T < 2.5f)
-		{
-			V.Z += -980.0f * SimDt;
-			FVector Next = P + V * SimDt;
-			if (Next.Z <= TargetZ && V.Z < 0.0f)
-			{
-				// INTERPOLATE THE CROSSING — do not return the first sample past
-				// it. This is the meet point the dig platform parks on, and its
-				// whole documented purpose is to BE STILL so the speed-limited
-				// FBIK can converge on it. Returning the first sample overshot by
-				// up to one step of ball travel, and as the ball advances the
-				// sampling grid's phase slides against the true crossing, so the
-				// answer jumped back and forth by that whole step every time it
-				// was recomputed: 10cm of sawtooth at 400cm/s, 20cm at 800.
-				//
-				// MEASURED, planted with the dig intent set: PredictedMeetLow
-				// reversed 79 times a second in Z and 68 in X, the contact point
-				// followed it at 68, the hand target at 67, and FBIK's root
-				// pre-pull wrote that into the pelvis as 26cm of hip displacement
-				// bouncing 12.5x/s. That is the shake before every bump, and why
-				// it looks like it starts at the hip.
-				//
-				// Ball::PredictLanding already interpolates its floor crossing
-				// for the same reason; this path was the half that was missed.
-				float Drop = P.Z - Next.Z;
-				float Frac = (Drop > 0.0001f)
-					? Math::Clamp((P.Z - TargetZ) / Drop, 0.0f, 1.0f) : 0.0f;
-				Out = P + (Next - P) * Frac;
-				return true;
-			}
-			P = Next;
-			if (P.Z <= 0.0f) break;
-			T += SimDt;
-		}
-		return false;
-	}
-
-	private void UpdatePredictedMeet()
-	{
-		bHasPredictedMeetLow = false;
-		bHasPredictedMeetHigh = false;
-		ABall B = GetWorldBall();
-		if (B == nullptr || !B.bInPlay) return;
-		bHasPredictedMeetLow  = PredictBallCrossZ(B, FloorZ + 112.0f, PredictedMeetLow);
-		bHasPredictedMeetHigh = PredictBallCrossZ(B, GetActorLocation().Z + PlayerHeight * 0.9f, PredictedMeetHigh);
-	}
-
 	// Distance (cm) at which any player auto-reaches toward the ball. Kept tight so
 	// players don't flail at a ball that's still metres away — the AI drives the
 	// deliberate reach as it closes in; this is just a safety net at true arm range.
@@ -2192,7 +2151,13 @@ class AVolleyballPlayer : APawn
 		else
 			Type = EHitType::Hit_Bump;           // late/low -> bagger
 
-		Reach(Type);
+		// The safety net has no plan, so it asks the SHARED predictor once, here,
+		// for the height its own hit-type choice implies — not a private copy.
+		FVector Contact = B.Position;
+		float Tau = 0.0f;
+		float WantZ = (Type == EHitType::Hit_Set) ? ForeheadZ : (FloorZ + 112.0f);
+		Predict::BallTimeToHeight(B, WantZ, Contact, Tau);
+		Reach(Type, Contact);
 	}
 
 
