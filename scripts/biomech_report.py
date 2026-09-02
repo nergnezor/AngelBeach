@@ -39,7 +39,7 @@ TARGETS = {
 # window, not an accumulation.
 RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
             "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha",
-            "yawRevisit", "crouchRevisit"}
+            "yawRevisit", "yawWasteDeg", "yawWasteRate", "crouchRevisit"}
 
 
 def parse(path):
@@ -131,6 +131,7 @@ def main():
         for key, limit, unit, src in (
                 ("wasteWorst", 250.0, "path/extent x100 in one 0.7s window", raw),
                 ("yawRevisit", 250.0, "deg turned / deg net, x100 (rocking in place)", raw),
+                ("yawWasteRate", 100.0, "deg of yaw taken back per standing-second, x10", raw),
                 ("crouchRevisit", 250.0, "crouch travel / net, x100 (knee flapping)", raw),
                 ("wasteTotal", 60.0, "cm of reground per second of motion", motion)):
             if key not in src:

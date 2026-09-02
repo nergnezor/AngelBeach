@@ -1106,6 +1106,21 @@ class AVolleyballPlayer : APawn
 	private float MonYawSpan = 0.0f;         // furthest from the window's start yaw
 	private float MonYawWinStart = 0.0f;
 	private float MonYawRevisit = 0.0f;      // worst yaw path/extent x100 this rally
+	// AMPLITUDE, not just shape. yawRevisit is a RATIO, so a body rocking half a
+	// degree scores exactly what a body rocking a hundred degrees does — it read
+	// FAIL at ~55% of windows in a build with the visible shake and in the build
+	// that fixed it, which makes it a constant, not a gauge. This is the same
+	// path-minus-extent primitive in degrees: what a viewer actually sees.
+	private float MonYawWaste = 0.0f;        // worst degrees turned-and-returned in one window
+	// ...and the same amplitude, aggregated over the windows where the FEET DO
+	// NOT MOVE, which is the only condition under which turning is unambiguously
+	// pointless. A max-over-windows cannot separate builds here (one bad window
+	// in ten minutes of play is not the complaint); a rate can. Measured on the
+	// build that shipped the shake: 16.7 deg wasted per standing-second while
+	// preparing a dig against 6.1 anywhere else.
+	private float MonYawWasteStill = 0.0f;
+	private float MonYawStillSecs = 0.0f;
+	private float MonWinStillTime = 0.0f;
 	private float MonYawRevisitWin = 100.0f; // this window's, for the JITTER gate
 	private float MonCrPath = 0.0f;
 	private float MonCrSpan = 0.0f;
@@ -1148,6 +1163,8 @@ class AVolleyballPlayer : APawn
 		if (CSpan > MonCrSpan) MonCrSpan = CSpan;
 
 		MonRotWindow += DeltaTime;
+		if (FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size() < 30.0f)
+			MonWinStillTime += DeltaTime;
 		if (MonRotWindow < WasteWindowSecs) return;
 
 		MonYawRevisitWin = 100.0f;
@@ -1156,6 +1173,14 @@ class AVolleyballPlayer : APawn
 			MonYawRevisitWin = (MonYawPath / MonYawSpan) * 100.0f;
 			if (MonYawRevisitWin > MonYawRevisit) MonYawRevisit = MonYawRevisitWin;
 		}
+		float YawWasteWin = MonYawPath - MonYawSpan;
+		if (YawWasteWin > MonYawWaste) MonYawWaste = YawWasteWin;
+		if (MonWinStillTime > 0.8f * MonRotWindow)
+		{
+			MonYawWasteStill += YawWasteWin;
+			MonYawStillSecs += MonRotWindow;
+		}
+		MonWinStillTime = 0.0f;
 		MonCrRevisitWin = 100.0f;
 		if (MonCrPath >= RevisitMinCrouch && MonCrSpan > 0.01f)
 		{
@@ -1505,6 +1530,8 @@ class AVolleyballPlayer : APawn
 			+ " wasteWorst=" + int(MonWasteWorst)
 			+ " wasteTotal=" + int(MonWasteTotal)
 			+ " yawRevisit=" + int(MonYawRevisit)
+			+ " yawWasteDeg=" + int(MonYawWaste)
+			+ " yawWasteRate=" + int(MonYawWasteStill / Math::Max(MonYawStillSecs, 0.001f) * 10.0f)
 			+ " crouchRevisit=" + int(MonCrRevisit)
 			+ " footSlide=" + int(MonFootSlide)
 			+ " pelvisFlips=" + MonPelvisFlips
