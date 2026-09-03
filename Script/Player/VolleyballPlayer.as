@@ -1227,9 +1227,17 @@ class AVolleyballPlayer : APawn
 	// solver carrying a receiver who never arrived. Per axis on purpose: a
 	// single-axis version of this read "0.1mm, solved" for an afternoon while
 	// the sideways component was getting worse.
-	private float MonSlideX = 0.0f;
-	private float MonSlideY = 0.0f;
-	private float MonSlideZ = 0.0f;
+	// P90, NOT max. The first version of this was a maximum, and a maximum over
+	// a rally is dominated by one frame: it flagged a comment-only change as a
+	// regression, and in the pre-pull test it read "unchanged at p90" while the
+	// median had moved a quarter — useless in both directions. Histogram in 5cm
+	// buckets, percentile at emit. (planInfeasible had the same disease and was
+	// fixed the same day; see that commit.)
+	private TArray<int> MonSlideHistX;
+	private TArray<int> MonSlideHistY;
+	private TArray<int> MonSlideHistZ;
+	const int SlideBuckets = 41;      // 0..200cm in 5cm steps, last bucket is "200+"
+	const float SlideBucketCm = 5.0f;
 	// ...and the planner's own honesty: bookings whose travel budget does not
 	// fit the ball's flight time. Set by the AI at commitment. 70% infeasible
 	// was the state of the game while nothing reported it.
@@ -1538,6 +1546,38 @@ class AVolleyballPlayer : APawn
 
 	// Emitted per rally from GameMode.LogRallyEnd — one greppable regression
 	// number per player instead of "eyeball the flipbook".
+	// DIAG: touches my team has made in this rally. Serve reception is 0 — the
+	// one situation identical in the builds being compared.
+	private int TeamTouchCount() const
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr) return 0;
+		return (GS.LastTouchTeam == TeamSide) ? GS.TouchesThisRally : 0;
+	}
+
+	private void SlideAdd(TArray<int>& Hist, float V)
+	{
+		if (Hist.Num() != SlideBuckets) { Hist.Empty(); Hist.SetNum(SlideBuckets); }
+		int B = int(Math::Abs(V) / SlideBucketCm);
+		if (B >= SlideBuckets) B = SlideBuckets - 1;
+		Hist[B] += 1;
+	}
+
+	private int SlideP90(const TArray<int>& Hist) const
+	{
+		int Total = 0;
+		for (int i = 0; i < Hist.Num(); i++) Total += Hist[i];
+		if (Total == 0) return 0;
+		int Want = int(Total * 0.9f);
+		int Seen = 0;
+		for (int i = 0; i < Hist.Num(); i++)
+		{
+			Seen += Hist[i];
+			if (Seen >= Want) return int((i + 1) * SlideBucketCm);
+		}
+		return int(SlideBuckets * SlideBucketCm);
+	}
+
 	void EmitMotionStats()
 	{
 		if (!bMonitorMotion) return;
@@ -1572,9 +1612,9 @@ class AVolleyballPlayer : APawn
 			+ " turnRun=" + int(MonTurnRunTime * 100.0f)
 			+ " footZMin=" + int(MonFootZMin)
 			+ " kneeZMin=" + int(MonKneeZMin)
-			+ " pelvSlideX=" + int(MonSlideX)
-			+ " pelvSlideY=" + int(MonSlideY)
-			+ " pelvSlideZ=" + int(MonSlideZ)
+			+ " pelvSlideX=" + SlideP90(MonSlideHistX)
+			+ " pelvSlideY=" + SlideP90(MonSlideHistY)
+			+ " pelvSlideZ=" + SlideP90(MonSlideHistZ)
 			// RAW COUNTS, not a per-rally ratio. Emitted as a percentage first,
 			// this read 100% on every run and said nothing: the denominator is
 			// one or two bookings per rally, so a single unmakeable one pins the
@@ -1620,9 +1660,9 @@ class AVolleyballPlayer : APawn
 		MonYawRateSamples = 0.0f;
 		MonYawRateMax = 0.0f;
 		MonFootSlide = 0.0f;
-		MonSlideX = 0.0f;
-		MonSlideY = 0.0f;
-		MonSlideZ = 0.0f;
+		MonSlideHistX.Empty(); MonSlideHistX.SetNum(SlideBuckets);
+		MonSlideHistY.Empty(); MonSlideHistY.SetNum(SlideBuckets);
+		MonSlideHistZ.Empty(); MonSlideHistZ.SetNum(SlideBuckets);
 		MonPlanBookings = 0;
 		MonPlanInfeasible = 0;
 		MonPelvisFlips = 0;
@@ -1654,9 +1694,9 @@ class AVolleyballPlayer : APawn
 		if (Mesh != nullptr && Anim != nullptr && Anim.LegIKAlpha > 0.95f)
 		{
 			FVector Slip = Mesh.GetBoneTransform(n"pelvis").Location - Anim.PelvisTarget;
-			if (Math::Abs(Slip.X) > MonSlideX) MonSlideX = Math::Abs(Slip.X);
-			if (Math::Abs(Slip.Y) > MonSlideY) MonSlideY = Math::Abs(Slip.Y);
-			if (Math::Abs(Slip.Z) > MonSlideZ) MonSlideZ = Math::Abs(Slip.Z);
+			SlideAdd(MonSlideHistX, Slip.X);
+			SlideAdd(MonSlideHistY, Slip.Y);
+			SlideAdd(MonSlideHistZ, Slip.Z);
 		}
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
 		UpdateBiomech(DeltaTime);
@@ -1721,6 +1761,7 @@ class AVolleyballPlayer : APawn
 				+ " cr=" + int(CrouchNow * 1000.0f)
 				+ " spd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
 				+ " hit=" + int(CurrentHit)
+				+ " tt=" + TeamTouchCount()
 				+ " x=" + int(GetActorLocation().X)
 				+ " y=" + int(GetActorLocation().Y)
 				+ " actorZ=" + int(GetActorLocation().Z)

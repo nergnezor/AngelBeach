@@ -209,6 +209,10 @@ def main():
         # absorption like this, and each one only became visible when someone
         # went looking. Measured, they cannot grow unnoticed.
         #
+        # pelvSlide* are the 90th percentile per rally, not the maximum. As a
+        # max this flagged a comment-only change as a regression and read
+        # "unchanged" through a real one — a maximum over a rally is one frame.
+        #
         # These are RATCHETS, not targets. The limits are today's measured
         # values rounded up: the debt is known and disclosed, and the gate
         # exists so it cannot get worse without saying so. Lower the limit when
@@ -216,9 +220,9 @@ def main():
         print("COMPENSATION — one layer covering another (ratchets on known debt)")
         comp_fail = 0
         for key, limit, unit, why in (
-                ("pelvSlideX", 145.0, "cm", "solver drags the pelvis off the script's target"),
-                ("pelvSlideY", 100.0, "cm", "same, sideways — the axis a one-axis gauge missed"),
-                ("pelvSlideZ", 25.0, "cm", "same, vertical (pre-pull Z is off since a2cb71b)"),
+                ("pelvSlideX", 95.0, "cm", "solver drags the pelvis off the script's target, p90"),
+                ("pelvSlideY", 60.0, "cm", "same, sideways — the axis a one-axis gauge missed"),
+                ("pelvSlideZ", 20.0, "cm", "same, vertical (pre-pull Z is off since a2cb71b)"),
                 ("planInfeas", 60.0, "%", "bookings whose travel budget < ball flight time")):
             if key not in raw:
                 continue
