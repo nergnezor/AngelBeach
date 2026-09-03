@@ -46,7 +46,10 @@ for i in $(seq 1 "$N"); do
 		-game -RenderOffscreen -resx=1280 -resy=720 -nosplash -unattended \
 		"-ini:Engine:[/Script/Engine.RendererSettings]:r.RayTracing=False" \
 		-abslog="$LOG" > /dev/null 2>&1
-	ERRS=$(grep -c "Angelscript: Error" "$LOG" 2>/dev/null || echo 0)
+	# grep -c prints 0 AND exits 1 when there are no matches, so `|| echo 0`
+	# would append a second line and break the test below.
+	ERRS=$(grep -c "Angelscript: Error" "$LOG" 2>/dev/null || true)
+	ERRS=${ERRS:-0}
 	if [ "$ERRS" -gt 0 ]; then
 		echo "   SCRIPT ERRORS ($ERRS) — the build did not compile:" >&2
 		grep -m4 -A1 "Angelscript: Error" "$LOG" >&2

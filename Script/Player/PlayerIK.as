@@ -10,20 +10,64 @@
 // 'Blend' (0..1) is the gesture weight: 0 = relaxed ready pose, 1 = full contact
 // pose. Reads Self.CurrentHit / Self.Anim / Self.DesiredAim / the ball (all public
 // on AVolleyballPlayer for this mixin). 'Dt' feeds the anti-flicker sink at the end.
-mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
+// ONE BODY FRAME. Every IK target in this file measures from here, so the
+// question "which of my anchors are the solver's own output?" has one answer in
+// one place instead of needing a hunt through four hundred lines of waypoint
+// maths.
+//
+// THAT QUESTION IS NOT ACADEMIC. An effector target built from a bone the
+// full-body IK writes closes a feedback loop through the solver: it reaches for
+// the target, that moves the bone, next frame the target has moved with it.
+// No filter can fix that — a rate limit only picks the frequency the loop rings
+// at, which is why every smoother added over this file's history measured the
+// same or worse. Three separate instances have been found here one at a time
+// (ChestMid, the foot echo, the Blend<0.05 hand read), and the comments on
+// ReadyShR/L below record an earlier one.
+//
+// The tainted fields are marked. They are still read from the skeleton because
+// replacing them is not free: anchoring ChestMid to the actor was measured on
+// 2026-09-03 and cost 24% of ball contacts, since a fixed offset cannot follow
+// the torso's lean. Fixing one means modelling what it currently gets for free,
+// and paying for the measurement. Do them one at a time, from here.
+struct FBodyFrame
 {
-	if (Self.Mesh == nullptr) return;
+	// Clean — physics-authoritative or script state. Safe to build targets from.
+	FVector Actor;
+	FVector Fwd;
+	FVector Right;
+	FVector Up;
+	float Crouch;
 
-	// Body anchors from the actual skeleton (track jumps, lean, run).
-	FVector Head  = Self.Mesh.GetBoneTransform(n"head").Location;
-	FVector ShR   = Self.Mesh.GetBoneTransform(n"upperarm_r").Location;
-	FVector ShL   = Self.Mesh.GetBoneTransform(n"upperarm_l").Location;
+	// SOLVER-TAINTED — read from bones the FBIK moves. Each is a live feedback
+	// path. Do not add to this list; work it down.
+	FVector Head;
+	FVector ShR;
+	FVector ShL;
+	FVector ChestMid;
+	FVector FootL;
+	FVector FootR;
+	FVector HandR;
+	FVector HandL;
+};
+
+FBodyFrame MakeBodyFrame(AVolleyballPlayer Self)
+{
+	FBodyFrame B;
+	B.Actor = Self.GetActorLocation();
+	B.Fwd   = Self.GetActorForwardVector();
+	B.Right = Self.GetActorRightVector();
+	B.Up    = FVector(0, 0, 1);
+	B.Crouch = Self.SmCrouch;
+
+	B.Head = Self.Mesh.GetBoneTransform(n"head").Location;
+	B.ShR  = Self.Mesh.GetBoneTransform(n"upperarm_r").Location;
+	B.ShL  = Self.Mesh.GetBoneTransform(n"upperarm_l").Location;
+	B.ChestMid = (B.ShR + B.ShL) * 0.5f;
+
 	// Last frame's solved foot position — this frame's Two Bone IK target, so a
 	// moving pelvis (crouch) doesn't drag the feet through the ground with it.
-	FVector FootL = Self.Mesh.GetBoneTransform(n"foot_l").Location;
-	FVector FootR = Self.Mesh.GetBoneTransform(n"foot_r").Location;
-	FVector Fwd   = Self.GetActorForwardVector();
-	FVector Right = Self.GetActorRightVector();
+	B.FootL = Self.Mesh.GetBoneTransform(n"foot_l").Location;
+	B.FootR = Self.Mesh.GetBoneTransform(n"foot_r").Location;
 	// Guard against a not-yet-posed mesh: before the very first Anim Blueprint
 	// evaluation, GetBoneTransform returns the zero vector, which (being far
 	// from the actor, wherever it's spawned) is a wildly degenerate Two Bone IK
@@ -31,12 +75,30 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// is "read last frame's result", that bad pose is then self-reinforcing
 	// instead of self-correcting. Fall back to an approximate ground position
 	// under the actor whenever the read foot is implausibly far away.
-	FVector FootFallback = Self.GetActorLocation() - FVector(0, 0, 90.0f);
-	if ((FootL - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
-		FootL = FootFallback;
-	if ((FootR - Self.GetActorLocation()).SizeSquared() > 200.0f * 200.0f)
-		FootR = FootFallback;
-	FVector Up    = FVector(0, 0, 1);
+	B.HandR = Self.Mesh.GetBoneTransform(n"hand_r").Location;
+	B.HandL = Self.Mesh.GetBoneTransform(n"hand_l").Location;
+
+	FVector FootFallback = B.Actor - FVector(0, 0, 90.0f);
+	if ((B.FootL - B.Actor).SizeSquared() > 200.0f * 200.0f) B.FootL = FootFallback;
+	if ((B.FootR - B.Actor).SizeSquared() > 200.0f * 200.0f) B.FootR = FootFallback;
+	return B;
+}
+
+mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
+{
+	if (Self.Mesh == nullptr) return;
+
+	// Every anchor comes from the one frame — see FBodyFrame above for which of
+	// them are the solver's own output and why that matters.
+	FBodyFrame Body = MakeBodyFrame(Self);
+	FVector Head  = Body.Head;
+	FVector ShR   = Body.ShR;
+	FVector ShL   = Body.ShL;
+	FVector FootL = Body.FootL;
+	FVector FootR = Body.FootR;
+	FVector Fwd   = Body.Fwd;
+	FVector Right = Body.Right;
+	FVector Up    = Body.Up;
 
 	// Where the player is sending the ball. Falls back to "up and forward".
 	FVector Aim = Self.bHasAim
@@ -48,7 +110,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// Where the BALL is — the hands reach straight toward it, clamped to arm's
 	// length from the chest so the IK stays solvable. The player turns to face the
 	// ball (FaceBall in the AI), so this naturally ends up in front.
-	FVector ChestMid = (ShR + ShL) * 0.5f;
+	FVector ChestMid = Body.ChestMid;
 	FVector BallContact = ChestMid + Fwd * 35.0f + Up * 5.0f;  // default if no ball
 	{
 		ABall B = Self.GetWorldBall();
@@ -516,8 +578,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// every player in one reach silhouette.
 	if (Blend < 0.05f)
 	{
-		FVector LiveR = Self.Mesh.GetBoneTransform(n"hand_r").Location;
-		FVector LiveL = Self.Mesh.GetBoneTransform(n"hand_l").Location;
+		FVector LiveR = Body.HandR;
+		FVector LiveL = Body.HandL;
 		FVector Actor = Self.GetActorLocation();
 		if ((LiveR - Actor).SizeSquared() < 200.0f * 200.0f)
 			WantHandR = LiveR;
