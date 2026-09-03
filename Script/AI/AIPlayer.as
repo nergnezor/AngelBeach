@@ -1133,6 +1133,14 @@ class AAIPlayer : AVolleyballPlayer
 	// height before landing (OutPos then holds the ground landing prediction).
 	protected float PredictBallTimeToHeight(float TargetZ, FVector& OutPos) const
 	{
+		// NOT routed through Predict::BallTimeToHeight, and that is a measured
+		// decision rather than an oversight. This returns the first sample PAST
+		// the crossing; the shared helper interpolates, which is strictly more
+		// accurate — and swapping it in cost contacts per rally 2.88-3.17 ->
+		// 2.42-2.73 with builds 100% -> 85-95%, ranges not overlapping over
+		// three runs each. The jump and dive timing downstream is calibrated
+		// against this being one step late. Fixing it means retuning them; do
+		// the pair or neither.
 		FVector P = Ball.Position;
 		FVector V = Ball.BallVel;
 		const float G = -980.0f;
@@ -1142,7 +1150,6 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			V.Z += G * Dt;
 			FVector Next = P + V * Dt;
-			// Detect a downward crossing of TargetZ between P and Next.
 			if (P.Z >= TargetZ && Next.Z <= TargetZ && V.Z < 0.0f)
 			{
 				OutPos = Next;

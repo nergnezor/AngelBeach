@@ -20,6 +20,8 @@ regression, not an improvement, so a change has to hold these too.
 """
 
 import re
+import glob
+import os
 import sys
 from collections import defaultdict
 
@@ -73,6 +75,47 @@ def parse(path):
     return bio, motion, raw, rallies, seqs
 
 
+# Ballistic integrators are allowlisted. There were four — Ball's, the
+# planner's, the pawn's and the AI's — all answering "where does the ball next
+# descend through height Z", and two of them returned the first sample past the
+# crossing instead of interpolating. The defect was fixed in two copies months
+# apart while the other two kept it, and the pawn's fed the dig platform whose
+# jitter the full-body IK wrote into the pelvis. Days went into finding that.
+#
+# The copies existed because Angelscript will not share a global across script
+# modules, so anyone needing this from another file wrote their own. This makes
+# a fifth one a failed run instead of a discovery in six months.
+# Ball::PredictLanding solves the FLOOR crossing and stays separate on purpose.
+# Merging it into the shared helper was tried on 2026-09-03 and measured a real
+# regression — contacts/rally 2.88-3.17 -> 2.23-2.36, ranges not overlapping —
+# because the shared version early-outs with the CURRENT position for a ball
+# already below the target and descending, while PredictLanding integrates on.
+# That changes the landing estimate for low balls and with it AmIHitter. It
+# already interpolates its own crossing correctly. Two, not one, and the second
+# is here by measurement rather than by neglect.
+# AIPlayer::PredictBallTimeToHeight is the third, and also stays by measurement:
+# it returns the sample PAST the crossing, and routing it through the accurate
+# shared version cost contacts 2.88-3.17 -> 2.42-2.73 with builds 100% -> 85-95%.
+# The jump and dive timing is calibrated against that lateness. Fix the pair or
+# neither. Three exemptions, each with a number behind it — and the point of the
+# check is that a FOURTH cannot appear without someone arguing for it.
+CANON_INTEGRATORS = ("Script/World/Prediction.as", "Script/World/Ball.as",
+                     "Script/AI/AIPlayer.as")
+
+
+def check_one_integrator(root):
+    pat = re.compile(r"while\s*\(\s*[Tt]\s*<")
+    offenders = []
+    for path in glob.glob(os.path.join(root, "Script", "**", "*.as"), recursive=True):
+        rel = os.path.relpath(path, root)
+        if rel.replace(os.sep, "/") in CANON_INTEGRATORS:
+            continue
+        for n, line in enumerate(open(path, errors="replace"), 1):
+            if pat.search(line):
+                offenders.append(f"{rel}:{n}")
+    return offenders
+
+
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/run.log"
     bio, motion, raw, rallies, seqs = parse(path)
@@ -82,6 +125,14 @@ def main():
         return 1
 
     print(f"\n=== {path}   rallies={rallies} ===\n")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dupes = check_one_integrator(root)
+    if dupes:
+        print("FAIL  a ballistic integrator exists outside the allowlist. Do not fork one:")
+        print(f"      in {CANON_INTEGRATORS[0]}. Add a parameter there instead of forking it.")
+        for d in dupes:
+            print(f"        {d}")
+        print()
 
     if bio:
         print("ABSOLUTE — human plausibility (worst player per metric)")

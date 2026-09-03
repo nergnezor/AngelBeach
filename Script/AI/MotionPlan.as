@@ -84,51 +84,6 @@ struct FInterceptPlan
 // the ball itself substeps at; drag (2%/s) is absorbed by MB_Margin. Returns
 // false if the flight never descends through TargetZ before landing (OutPos
 // then holds the landing point, OutTime the landing time).
-// NAMESPACED SO IT CAN BE THE ONLY ONE. Angelscript will not let a global
-// function be called from another script module, which is exactly how the
-// pawn ended up with a private copy of this computation (PredictBallCrossZ,
-// deleted): the AI could not share its own, so a second one got written, and
-// the interpolation fix that landed here never reached it. A namespace costs
-// three call sites and removes the reason to ever fork it again.
-namespace Predict
-{
-bool BallTimeToHeight(ABall Ball, float TargetZ, FVector& OutPos, float& OutTime)
-{
-	FVector P = Ball.Position;
-	FVector V = Ball.BallVel;
-	const float G = -980.0f;
-	const float Dt = 0.02f;
-	float T = 0.0f;
-	if (P.Z <= TargetZ && V.Z < 0.0f) { OutPos = P; OutTime = 0.0f; return true; }
-	while (T < 3.0f)
-	{
-		V.Z += G * Dt;
-		FVector Next = P + V * Dt;
-		if (P.Z >= TargetZ && Next.Z <= TargetZ && V.Z < 0.0f)
-		{
-			// INTERPOLATE the crossing rather than snapping to the sample past
-			// it — same reasoning as ABall::PredictLanding. Returning `Next`
-			// makes the answer step by one substep of travel every time the
-			// remaining step count drops, i.e. a sawtooth at 1/Dt = 50Hz, and
-			// this result IS the hitter's move goal (Plan.Contact). A goal that
-			// twitches every frame is a goal the body chases every frame.
-			float Span = P.Z - Next.Z;
-			float Frac = (Span > 0.0001f)
-				? Math::Clamp((P.Z - TargetZ) / Span, 0.0f, 1.0f) : 1.0f;
-			OutPos = P + (Next - P) * Frac;
-			OutTime = T + Dt * Frac;
-			return true;
-		}
-		P = Next;
-		T += Dt;
-		if (P.Z <= 0.0f) break;
-	}
-	OutPos = P;
-	OutTime = T;
-	return false;
-}
-
-}   // namespace Predict
 
 // Braking deceleration is a MEASURED PROPERTY OF THE SIM, not a tuning knob
 // here — so it is passed in from the player rather than restated. It used to
