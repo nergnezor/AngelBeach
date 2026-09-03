@@ -631,9 +631,36 @@ class AAIPlayer : AVolleyballPlayer
 
 	// BASE: walk to my own receive spot and wait, low and watching. One target,
 	// constant per player, so this state cannot contribute jitter at all.
+	// WHERE MY PARTNER'S DIG WILL ARRIVE. The mirror of PassTarget(): they aim
+	// at my half of the centre line, so this is that same point, for me.
+	private FVector PassReceiveSpot() const
+	{
+		float AimY = (Role == EPlayerRole::Role_Front) ? -120.0f : 120.0f;
+		return FVector(MySign() * 180.0f, AimY, FloorZ + PlayerHeight);
+	}
+
 	private void PlayBase(float DeltaTime)
 	{
 		if (bDebugAI) Log(DebugTag() + " BASE");
+
+		// A SETTER DOES NOT WAIT FOR THE DIG. While my partner is playing the
+		// first ball, the pass is already coming to a known spot — release
+		// toward it now instead of standing at base until it is in the air.
+		//
+		// MEASURED without filtering, at the instant the rally died: 23 of 33
+		// rallies ended after ONE touch, with the nearest player 180cm from the
+		// ball and not even reaching (21%). The budget is why: 3.4m in the 1.4s
+		// a pass hangs needs 1.08s of travel plus 0.28s of reaction — no margin
+		// at all, and that is before the prediction has settled.
+		bool bMateHasIt = Teammate != nullptr && !Teammate.bRagdollActive
+			&& Teammate.bWasHitter && TeamTouches() == 0;
+		if (bMateHasIt)
+		{
+			MoveToHold(ClampToCourt(PassReceiveSpot()), DeltaTime, 0.75f);
+			if (bHolding) { RequestCrouch(0.22f); FaceBall(); }
+			return;
+		}
+
 		MoveToHold(ClampToCourt(BasePosition()), DeltaTime, 0.75f);
 		// Crouch + ball-face only when ARRIVED. Asking for both while jogging
 		// back to base is exactly "böjer sig framåt och backar": chest toward
@@ -1486,9 +1513,16 @@ class AAIPlayer : AVolleyballPlayer
 			MySign() * (50.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
 	}
 
+	private FVector PassTarget() const
+	{
+		float PartnerHalfMax = (Role == EPlayerRole::Role_Front) ? CourtMaxY : CourtMinY;
+		float AimY = (PartnerHalfMax < 0.0f) ? -120.0f : 120.0f;
+		return FVector(MySign() * 180.0f, AimY, 20.0f);
+	}
+
 	private void DoDig()
 	{
-		AimAt(PartnerPinTarget());
+		AimAt(PassTarget());
 	}
 
 	private void DoSet()
