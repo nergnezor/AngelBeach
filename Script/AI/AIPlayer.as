@@ -604,7 +604,21 @@ class AAIPlayer : AVolleyballPlayer
 		bool bWantJob = bMine && AmIHitter(Landing);
 		bool bWantBlock = !bMine && Role == EPlayerRole::Role_Front && IsPassAttackable();
 
-		if (bWantJob)         SetPlayState(EPlayState::Play_Job);
+		if (bWantJob && Teammate != nullptr && Teammate.bIMadeLastTouch
+			&& PlayState != EPlayState::Play_Job)
+		{
+			// My teammate just made THEIR touch: the digger!=setter!=attacker
+			// invariant (CanContactBall/bIMadeLastTouch) guarantees it is
+			// unambiguously my turn now, not a noisy predicate. MEASURED: an
+			// attacker's own Play_Base dwell often starts only 50-100ms before
+			// the set (the whole dig-to-set gap), so it hasn't matured past
+			// StateMinDwell yet when the set lands — going through the normal
+			// debounced SetPlayState() here delayed entry into ApproachForSpike
+			// by up to 300ms, well past a set's ~750-800ms jump-spike peak.
+			PlayState = EPlayState::Play_Job;
+			StateDwell = 0.0f;
+		}
+		else if (bWantJob)    SetPlayState(EPlayState::Play_Job);
 		else if (bWantBlock)  SetPlayState(EPlayState::Play_Block);
 		else if (bIMadeLastTouch && PlayState == EPlayState::Play_Job)
 		{
