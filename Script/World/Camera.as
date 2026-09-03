@@ -32,7 +32,27 @@ class ABeachVolleyballCamera : AActor
 	//
 	// The distance/height here only sets the CAMERA'S POSITION now — how tight the
 	// shot reads is FitFieldOfView's job, not this number (see 2026-09-02 note there).
-	FVector EndCamPos = FVector(-1050, 0, 850);
+	//
+	// DOLLIED BACK 2026-09-03, 1050/850 -> 2100/1560 (Erik: portrait's sidelines
+	// converged too hard toward a vanishing point — wanted them flatter/more
+	// parallel, plus tighter margins). The note above ("the failure was the
+	// added distance, not the height") is from BEFORE FitFieldOfView existed:
+	// under a fixed/hand-tuned FOV, moving back really did just shrink the
+	// court into a small rectangle with empty foreground. Now FOV is
+	// recomputed every frame from the LIVE camera position (FitFieldOfView),
+	// so moving back is compensated by an automatically narrower FOV —
+	// framing tightness is preserved, only perspective convergence drops.
+	// This is a straight 2x dolly-back along the same look-at ray (same
+	// downward viewing angle, so the tuned legibility/steepness is
+	// unchanged) — MEASURED (computed, not yet seen — this machine cannot
+	// render, see nullrhi-different-simulation): raw content half-angles
+	// roughly halve (42°/44° -> 17°/20°), and the excess margin that
+	// FitFieldOfView's max(horiz,vert) leaves on the non-binding axis at a
+	// tall phone aspect drops from ~20° to ~13°. Fully eliminating that
+	// excess needs a near-overhead angle, which trades away the steep
+	// broadcast look tuned above — this is the flattening trade Erik chose
+	// over that.
+	FVector EndCamPos = FVector(-2100, 0, 1560);
 
 	// LANDSCAPE rig: off one sideline, centred on the net, looking across the
 	// court's width, so the 16 m length spans the screen's wide axis directly
