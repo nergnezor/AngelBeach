@@ -45,6 +45,7 @@ RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
 
 def parse(path):
     bio, motion, raw, rallies = defaultdict(list), defaultdict(list), defaultdict(list), 0
+    seqs = []
     line_re = re.compile(r"\b(\w+)=(-?\d+)")
     with open(path, errors="replace") as fh:
         for line in fh:
@@ -66,12 +67,15 @@ def parse(path):
                             motion[k].append(v / moving)
             elif "RALLY " in line:
                 rallies += 1
-    return bio, motion, raw, rallies
+                m = re.search(r"seq=\[([^\]]*)\]", line)
+                if m:
+                    seqs.append(m.group(1).split())
+    return bio, motion, raw, rallies, seqs
 
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/run.log"
-    bio, motion, raw, rallies = parse(path)
+    bio, motion, raw, rallies, seqs = parse(path)
 
     if not bio and not motion:
         print(f"no BIOMECH or MOTIONSTATS lines in {path}")
@@ -172,6 +176,31 @@ def main():
             comp_fail += 0 if ok else 1
             print(f"  {'ok  ' if ok else 'FAIL'} {key:<14} {v:>7.1f}  limit {limit:<6} ({unit}: {why})")
         print(f"\n  {comp_fail} compensation metric(s) over the ratchet\n")
+
+        # RALLY QUALITY — is it still volleyball? The motion rows above cannot
+        # see this at all: on 2026-09-03 a change took the median rally from
+        # three touches to ONE, and every metric in this report stayed happy.
+        # A team that only returns single balls is not playing the game, however
+        # smoothly it moves.
+        if seqs:
+            lens = sorted(len(q) for q in seqs)
+            med_len = lens[len(lens) // 2]
+            builds = sum(1 for q in seqs
+                         if any(q[i][0] == q[i - 1][0] for i in range(1, len(q))))
+            spikes = sum(1 for q in seqs if any("Spike" in tok for tok in q))
+            one = sum(1 for L in lens if L <= 1)
+            build_pct = 100.0 * builds / len(seqs)
+            one_pct = 100.0 * one / len(seqs)
+            print("RALLY QUALITY — is a team still building an attack?")
+            rq_fail = 0
+            for label, val, ok, unit in (
+                    ("seqLenMed", med_len, med_len >= 2, "touches in the median rally, want >= 2"),
+                    ("buildPct", build_pct, build_pct >= 60.0, "% of rallies with two touches by one team, want >= 60"),
+                    ("oneTouchPct", one_pct, one_pct <= 25.0, "% of rallies dead after one touch, want <= 25"),
+                    ("spikes", spikes, True, "attacks in this run (no gate, watch the trend)")):
+                rq_fail += 0 if ok else 1
+                print(f"  {'ok  ' if ok else 'FAIL'} {label:<14} {val:>7.1f}  ({unit})")
+            print(f"\n  {rq_fail} rally-quality metric(s) failing\n")
 
         print("RELATIVE — per second of motion (compare against the last run)")
         for key in ("footSlide", "kneeWalkTravel", "kneeOpp", "pelvisFlips", "ikTeleports",
