@@ -652,8 +652,14 @@ class AAIPlayer : AVolleyballPlayer
 		// ball and not even reaching (21%). The budget is why: 3.4m in the 1.4s
 		// a pass hangs needs 1.08s of travel plus 0.28s of reaction — no margin
 		// at all, and that is before the prediction has settled.
+		// BOTH BRANCHES BELOW REQUIRE THE BALL TO BE ON OUR SIDE. TeamTouches()
+		// answers "how many touches has my team made", not "is the ball here":
+		// if our first touch went over the net it still reads 1 while the ball
+		// is on the opponent's court, and the attacker would jog to the pin
+		// while the ball comes back at them. Reported from play as "spelarna
+		// springer fortfarande bort från bollen inför 3:e-slaget".
 		bool bMateHasIt = Teammate != nullptr && !Teammate.bRagdollActive
-			&& Teammate.bWasHitter;
+			&& Teammate.bWasHitter && IsBallComingToMySide();
 		if (bMateHasIt && TeamTouches() == 0)
 		{
 			MoveToHold(ClampToCourt(PassReceiveSpot()), DeltaTime, 0.75f);
