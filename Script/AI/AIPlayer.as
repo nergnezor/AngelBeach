@@ -653,11 +653,28 @@ class AAIPlayer : AVolleyballPlayer
 		// a pass hangs needs 1.08s of travel plus 0.28s of reaction — no margin
 		// at all, and that is before the prediction has settled.
 		bool bMateHasIt = Teammate != nullptr && !Teammate.bRagdollActive
-			&& Teammate.bWasHitter && TeamTouches() == 0;
-		if (bMateHasIt)
+			&& Teammate.bWasHitter;
+		if (bMateHasIt && TeamTouches() == 0)
 		{
 			MoveToHold(ClampToCourt(PassReceiveSpot()), DeltaTime, 0.75f);
 			if (bHolding) { RequestCrouch(0.22f); FaceBall(); }
+			return;
+		}
+		// ...AND AN ATTACKER DOES NOT WAIT FOR THE SET, for exactly the reason
+		// the setter no longer waits for the dig. While my partner plays the
+		// SECOND ball, the set is going to a known place — my own pin, since
+		// that is what PartnerPinTarget() aims at from their side — and the
+		// run-up starts 200cm behind it. Standing at base until the set is in
+		// the air leaves 4.5m to cover in the time a set hangs.
+		//
+		// Reported from play as "det är aldrig någon som är förberedd på att
+		// slå tredje touchen", which is the same shape as the second-ball bug
+		// fixed in 1729e83: the coverage was written for a ball that never
+		// arrived, so nobody was where it went.
+		if (bMateHasIt && TeamTouches() == 1)
+		{
+			MoveToHold(MyPinApproachStart(), DeltaTime, 0.75f);
+			if (bHolding) FaceBall();
 			return;
 		}
 
