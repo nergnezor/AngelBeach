@@ -1564,7 +1564,9 @@ class AAIPlayer : AVolleyballPlayer
 		// their contact height on its way down.
 		float PartnerHalfMax = (Role == EPlayerRole::Role_Front) ? CourtMaxY : CourtMinY;
 		float AimY = (PartnerHalfMax < 0.0f) ? PartnerHalfMax + 100.0f : PartnerHalfMax - 100.0f;
-		return FVector(MySign() * 50.0f, AimY, 20.0f);
+		// 1m off the net (Erik): 50cm landed sets too close, some overshooting
+		// the net line entirely under aim error (AimErrCm in OnBallContact).
+		return FVector(MySign() * 100.0f, AimY, 20.0f);
 	}
 
 	// Where I WAIT for the pass I'm expecting: the approach start behind my
@@ -1572,7 +1574,7 @@ class AAIPlayer : AVolleyballPlayer
 	protected FVector MyPinApproachStart() const
 	{
 		return ClampToCourt(FVector(
-			MySign() * (50.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
+			MySign() * (100.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
 	}
 
 	private FVector PassTarget() const
