@@ -1235,6 +1235,8 @@ class AVolleyballPlayer : APawn
 	// was the state of the game while nothing reported it.
 	int MonPlanBookings = 0;
 	int MonPlanInfeasible = 0;
+	// DIAG: was this player's live booking judged unmakeable when it was made?
+	bool bBookedInfeasible = false;
 	private int MonPelvisFlips = 0;       // pelvis direction reversals (the sink can't see these)
 
 	// KNEE FLEXION — "do the legs actually bend?", measured instead of eyeballed.
@@ -1573,9 +1575,15 @@ class AVolleyballPlayer : APawn
 			+ " pelvSlideX=" + int(MonSlideX)
 			+ " pelvSlideY=" + int(MonSlideY)
 			+ " pelvSlideZ=" + int(MonSlideZ)
+			// RAW COUNTS, not a per-rally ratio. Emitted as a percentage first,
+			// this read 100% on every run and said nothing: the denominator is
+			// one or two bookings per rally, so a single unmakeable one pins the
+			// ratio at 100, and the report's max() then finds such a rally every
+			// time. Summed across the run it is a real rate — and the number it
+			// gives is 12% of the bookings that actually become contacts, not
+			// the 70% the broken version implied.
 			+ " planBookings=" + MonPlanBookings
-			+ " planInfeasible=" + int(MonPlanBookings > 0
-				? (100.0f * MonPlanInfeasible) / MonPlanBookings : 0.0f));
+			+ " planInfeas=" + MonPlanInfeasible);
 
 		// Absolute plausibility, separate from the relative numbers above so a
 		// regression comparison never gets mixed up with a physics verdict.
@@ -2507,7 +2515,8 @@ class AVolleyballPlayer : APawn
 			+ " bodySpd=" + int(BodySpd)
 			+ " handErr=" + int(HandErr)
 			+ " aimErr=" + int(AimErrCm)
-			+ " grounded=" + bIsGrounded);
+			+ " grounded=" + bIsGrounded
+			+ " bookedInfeasible=" + (bBookedInfeasible ? 1 : 0));
 		PlanSlackLog = -1.0f;
 		PlanSpeedFracLog = -1.0f;
 

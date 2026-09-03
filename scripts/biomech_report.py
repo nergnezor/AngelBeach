@@ -42,7 +42,7 @@ TARGETS = {
 RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
             "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha",
             "yawRevisit", "yawWasteDeg", "yawWasteRate", "crouchRevisit",
-            "pelvSlideX", "pelvSlideY", "pelvSlideZ", "planInfeasible"}
+            "pelvSlideX", "pelvSlideY", "pelvSlideZ", "planBookings", "planInfeas"}
 
 
 def parse(path):
@@ -219,10 +219,17 @@ def main():
                 ("pelvSlideX", 145.0, "cm", "solver drags the pelvis off the script's target"),
                 ("pelvSlideY", 100.0, "cm", "same, sideways — the axis a one-axis gauge missed"),
                 ("pelvSlideZ", 25.0, "cm", "same, vertical (pre-pull Z is off since a2cb71b)"),
-                ("planInfeasible", 100.0, "%", "bookings whose travel budget < ball flight time")):
+                ("planInfeas", 60.0, "%", "bookings whose travel budget < ball flight time")):
             if key not in raw:
                 continue
-            v = max(raw[key])
+            if key == "planInfeas":
+                # Summed over the whole run. As a per-rally percentage this read
+                # 100 every time — one or two bookings per rally means a single
+                # unmakeable one pins the ratio, and max() then always finds one.
+                total = sum(raw.get("planBookings", [0]))
+                v = 100.0 * sum(raw[key]) / total if total else 0.0
+            else:
+                v = max(raw[key])
             ok = v <= limit
             comp_fail += 0 if ok else 1
             print(f"  {'ok  ' if ok else 'FAIL'} {key:<14} {v:>7.1f}  limit {limit:<6} ({unit}: {why})")

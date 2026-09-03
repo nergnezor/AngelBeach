@@ -1008,6 +1008,7 @@ class AAIPlayer : AVolleyballPlayer
 			// and something downstream will have to cover it.
 			MonPlanBookings += 1;
 			if (Plan.BodyTime > Plan.BallTime) MonPlanInfeasible += 1;
+			bBookedInfeasible = Plan.BodyTime > Plan.BallTime;   // DIAG
 		}
 
 		// STAGING IS GONE, and the comment it replaced was the tell: it claimed
