@@ -606,6 +606,18 @@ class AAIPlayer : AVolleyballPlayer
 
 		if (bWantJob)         SetPlayState(EPlayState::Play_Job);
 		else if (bWantBlock)  SetPlayState(EPlayState::Play_Block);
+		else if (bIMadeLastTouch && PlayState == EPlayState::Play_Job)
+		{
+			// I just made my own touch: CanContactBall() (!bIMadeLastTouch)
+			// guarantees I cannot be reselected as hitter this rally, so this
+			// is a hard fact, not a noisy predicate StateMinDwell needs to
+			// debounce. MEASURED: the AI ticks at ~9Hz and a dig-to-set gap
+			// can be faster than StateMinDwell's 3-tick hold, which stranded
+			// the digger in Job for the ENTIRE touch=1 window — PlayBase()'s
+			// attacker-anticipation branch never got a single tick to run.
+			PlayState = EPlayState::Play_Base;
+			StateDwell = 0.0f;
+		}
 		else                  SetPlayState(EPlayState::Play_Base);
 
 		// Watch the ball only when planted or in a job that needs it. Unconditional
@@ -1748,6 +1760,19 @@ class AAIPlayer : AVolleyballPlayer
 
 		// If the ball is physically on our side, it's ours to play.
 		if (bBallOnMySide) return true;
+
+		// We already own this touch (GS.LastTouchTeam == TeamSide via
+		// TeamTouches() > 0): a normal dig aimed at PassTarget() (X=-180, well
+		// inside our own court) MEASURED at X=+34, velX=-43 for over a second
+		// right after contact — past X=0 from contact geometry near the net,
+		// but short of BOTH bBallOnMySide's X<=0 and bMovingToMe's velX<-50
+		// below, so this read as "not mine" for the whole crossing window and
+		// silently killed the touch=1 (attacker/3rd-touch) anticipation branch
+		// in PlayBase every time it was captured. A genuine one-touch-over hits
+		// deep into the opponent's court (hundreds of cm), not a few dozen past
+		// the net line, so this is safe to gate on distance rather than losing
+		// the foul case this function's caller comment warns about.
+		if (TeamTouches() > 0 && Math::Abs(Ball.Position.X) < 100.0f) return true;
 
 		// Ball is on the opponent's side. Only commit early if it has clearly
 		// crossed toward us (moving to our side AND already low enough that the
