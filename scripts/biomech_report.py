@@ -39,7 +39,8 @@ TARGETS = {
 # window, not an accumulation.
 RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
             "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha",
-            "yawRevisit", "yawWasteDeg", "yawWasteRate", "crouchRevisit"}
+            "yawRevisit", "yawWasteDeg", "yawWasteRate", "crouchRevisit",
+            "pelvSlideX", "pelvSlideY", "pelvSlideZ", "planInfeasible"}
 
 
 def parse(path):
@@ -147,6 +148,30 @@ def main():
             print(f"  {'ok  ' if ok else 'FAIL'} {'goalChurn':<12} {v:>7.1f}  limit {250.0:<6} "
                   f"(goal path/extent x100; a goal tracking a ball scores ~100)")
         print(f"\n  {jit_fail} jitter metric(s) over limit\n")
+
+        # COMPENSATION — how much work one layer is doing to cover another's
+        # error. Every motion bug found on 2026-09-02/03 was a silent
+        # absorption like this, and each one only became visible when someone
+        # went looking. Measured, they cannot grow unnoticed.
+        #
+        # These are RATCHETS, not targets. The limits are today's measured
+        # values rounded up: the debt is known and disclosed, and the gate
+        # exists so it cannot get worse without saying so. Lower the limit when
+        # the underlying cause is fixed; never raise it to make a run pass.
+        print("COMPENSATION — one layer covering another (ratchets on known debt)")
+        comp_fail = 0
+        for key, limit, unit, why in (
+                ("pelvSlideX", 145.0, "cm", "solver drags the pelvis off the script's target"),
+                ("pelvSlideY", 100.0, "cm", "same, sideways — the axis a one-axis gauge missed"),
+                ("pelvSlideZ", 25.0, "cm", "same, vertical (pre-pull Z is off since a2cb71b)"),
+                ("planInfeasible", 100.0, "%", "bookings whose travel budget < ball flight time")):
+            if key not in raw:
+                continue
+            v = max(raw[key])
+            ok = v <= limit
+            comp_fail += 0 if ok else 1
+            print(f"  {'ok  ' if ok else 'FAIL'} {key:<14} {v:>7.1f}  limit {limit:<6} ({unit}: {why})")
+        print(f"\n  {comp_fail} compensation metric(s) over the ratchet\n")
 
         print("RELATIVE — per second of motion (compare against the last run)")
         for key in ("footSlide", "kneeWalkTravel", "kneeOpp", "pelvisFlips", "ikTeleports",

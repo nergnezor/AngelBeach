@@ -1003,6 +1003,11 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			PlanSlackLog = Plan.Slack;
 			PlanSpeedFracLog = Plan.SpeedFraction;
+			// Compensation, the planner's half: a booking whose travel budget
+			// does not fit the ball's flight is a promise the legs cannot keep,
+			// and something downstream will have to cover it.
+			MonPlanBookings += 1;
+			if (Plan.BodyTime > Plan.BallTime) MonPlanInfeasible += 1;
 		}
 
 		// STAGING IS GONE, and the comment it replaced was the tell: it claimed

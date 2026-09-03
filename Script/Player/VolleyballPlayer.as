@@ -1215,6 +1215,26 @@ class AVolleyballPlayer : APawn
 	private FVector MonPrevPelvisVel;
 	private bool bMonBoneInit = false;
 	private float MonFootSlide = 0.0f;    // cm accumulated while planted
+	// COMPENSATION TELEMETRY — how much work a downstream system is silently
+	// doing to cover an upstream error. Every bug chased on 2026-09-02/03 was
+	// one layer quietly absorbing another's mistake, which is why removing any
+	// one of them first made the game WORSE: the compensation went, the error
+	// it hid stayed. An absorption that is measured cannot grow unnoticed.
+	//
+	// This one: how far the full-body IK solver drags the pelvis away from the
+	// point the script placed it at (Anim.PelvisTarget). Off a gesture it sits
+	// under 1cm; during a dig it measured 38.8cm median and 121.6 at p90 — the
+	// solver carrying a receiver who never arrived. Per axis on purpose: a
+	// single-axis version of this read "0.1mm, solved" for an afternoon while
+	// the sideways component was getting worse.
+	private float MonSlideX = 0.0f;
+	private float MonSlideY = 0.0f;
+	private float MonSlideZ = 0.0f;
+	// ...and the planner's own honesty: bookings whose travel budget does not
+	// fit the ball's flight time. Set by the AI at commitment. 70% infeasible
+	// was the state of the game while nothing reported it.
+	int MonPlanBookings = 0;
+	int MonPlanInfeasible = 0;
 	private int MonPelvisFlips = 0;       // pelvis direction reversals (the sink can't see these)
 
 	// KNEE FLEXION — "do the legs actually bend?", measured instead of eyeballed.
@@ -1549,7 +1569,13 @@ class AVolleyballPlayer : APawn
 			+ " backpedal=" + int(MonBackpedalTime * 100.0f)
 			+ " turnRun=" + int(MonTurnRunTime * 100.0f)
 			+ " footZMin=" + int(MonFootZMin)
-			+ " kneeZMin=" + int(MonKneeZMin));
+			+ " kneeZMin=" + int(MonKneeZMin)
+			+ " pelvSlideX=" + int(MonSlideX)
+			+ " pelvSlideY=" + int(MonSlideY)
+			+ " pelvSlideZ=" + int(MonSlideZ)
+			+ " planBookings=" + MonPlanBookings
+			+ " planInfeasible=" + int(MonPlanBookings > 0
+				? (100.0f * MonPlanInfeasible) / MonPlanBookings : 0.0f));
 
 		// Absolute plausibility, separate from the relative numbers above so a
 		// regression comparison never gets mixed up with a physics verdict.
@@ -1586,6 +1612,11 @@ class AVolleyballPlayer : APawn
 		MonYawRateSamples = 0.0f;
 		MonYawRateMax = 0.0f;
 		MonFootSlide = 0.0f;
+		MonSlideX = 0.0f;
+		MonSlideY = 0.0f;
+		MonSlideZ = 0.0f;
+		MonPlanBookings = 0;
+		MonPlanInfeasible = 0;
 		MonPelvisFlips = 0;
 		MonWasteWorst = 0.0f;
 		MonWasteTotal = 0.0f;
@@ -1609,6 +1640,16 @@ class AVolleyballPlayer : APawn
 
 	private void UpdateMotionMonitor(float DeltaTime)
 	{
+		// Compensation: how far the solver moved the pelvis off the script's
+		// target. Outside the monitor's own trace gate on purpose — this is a
+		// shipped metric, not a diagnostic.
+		if (Mesh != nullptr && Anim != nullptr && Anim.LegIKAlpha > 0.95f)
+		{
+			FVector Slip = Mesh.GetBoneTransform(n"pelvis").Location - Anim.PelvisTarget;
+			if (Math::Abs(Slip.X) > MonSlideX) MonSlideX = Math::Abs(Slip.X);
+			if (Math::Abs(Slip.Y) > MonSlideY) MonSlideY = Math::Abs(Slip.Y);
+			if (Math::Abs(Slip.Z) > MonSlideZ) MonSlideZ = Math::Abs(Slip.Z);
+		}
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
 		UpdateBiomech(DeltaTime);
 		UpdateWastedTravel(DeltaTime);
