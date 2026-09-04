@@ -2607,7 +2607,19 @@ class AVolleyballPlayer : APawn
 		// slack/speedFrac are what the plan booked (×100), settle is how long
 		// the body was planted before this contact, bodySpd/handErr/aimErr are
 		// what the contact actually paid.
+		// RULE 1 (Erik): the ball must be IN FRONT of the chest at contact. Measured
+		// in the body's own frame — fwd is along the facing, side is +right — so a
+		// negative fwd is literally "armen bakom sig" and is a failed contact even
+		// when the distance looks fine.
+		FVector ToBall = FVector(BallPos.X - GetActorLocation().X,
+			BallPos.Y - GetActorLocation().Y, 0);
+		float BallFwd = ToBall.DotProduct(GetActorForwardVector().GetSafeNormal());
+		float BallSide = ToBall.DotProduct(GetActorRightVector().GetSafeNormal());
+		float BallUp = BallPos.Z - GetActorLocation().Z;
+
 		Log("PLANVA touch=" + MyTouches + " type=" + int(Type)
+			+ " ballFwd=" + int(BallFwd) + " ballSide=" + int(BallSide)
+			+ " ballUp=" + int(BallUp)
 			+ " slack=" + int(PlanSlackLog * 100.0f)
 			+ " speedFrac=" + int(PlanSpeedFracLog * 100.0f)
 			+ " settle=" + int(PlantedFor * 100.0f)
