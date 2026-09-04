@@ -2616,10 +2616,17 @@ class AVolleyballPlayer : APawn
 		float BallFwd = ToBall.DotProduct(GetActorForwardVector().GetSafeNormal());
 		float BallSide = ToBall.DotProduct(GetActorRightVector().GetSafeNormal());
 		float BallUp = BallPos.Z - GetActorLocation().Z;
+		// ...and where the gesture was AIMED, same frame, so a low contact can be
+		// told apart from a low intention: reachUp far above ballUp means the
+		// hands were asked high and the ball fell past them, reachUp near ballUp
+		// means the plan itself was low (the budget fell back to the waist
+		// contact) and the arms did what they were told.
+		float ReachUp = bHasReachContact ? (ReachContact.Z - GetActorLocation().Z) : -999.0f;
 
 		Log("PLANVA touch=" + MyTouches + " type=" + int(Type)
 			+ " ballFwd=" + int(BallFwd) + " ballSide=" + int(BallSide)
 			+ " ballUp=" + int(BallUp)
+			+ " reachUp=" + int(ReachUp)
 			+ " slack=" + int(PlanSlackLog * 100.0f)
 			+ " speedFrac=" + int(PlanSpeedFracLog * 100.0f)
 			+ " settle=" + int(PlantedFor * 100.0f)

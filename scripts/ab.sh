@@ -89,7 +89,7 @@ for i in $(seq 1 "$N"); do
 	echo ">> run $i/$N -> $LOG"
 	# The timeout is a SAFETY NET only: -seconds= is what ends a healthy run.
 	# If a run hits the timeout, something hung — the log will say so.
-	timeout -k 20 600 "$UE" "$PROJ" "/Game/CourtLevel" \
+	timeout -k 20 300 "$UE" "$PROJ" "/Game/CourtLevel" \
 		-game -nullrhi -nosplash -unattended \
 		-UseFixedTimeStep "-FPS=$FPS" "-seconds=$SECS" \
 		-abslog="$LOG" > /dev/null 2>&1 &
