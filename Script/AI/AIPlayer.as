@@ -1008,6 +1008,49 @@ class AAIPlayer : AVolleyballPlayer
 		// whether the ball is only reachable by diving.
 		FInterceptPlan Plan = this.PlanIntercept(ContactHeightFor(Intend), FloorZ + 112.0f);
 
+		// RETENTION, THE PLANNER'S HALF — and the reason no second ball was ever
+		// a fingerpass. bIntendSet already stopped re-litigating the STROKE every
+		// tick (see BallStillCrossesHeight and the bug it documents); the PLAN
+		// that aims the hands never got the same treatment, and it is the half
+		// that decides where the cup goes.
+		//
+		// PlanIntercept re-runs its margin test every tick, and that test fails
+		// by construction as contact nears: tau shrinks toward a near-fixed
+		// body+hand+margin floor. So the forehead contact is dropped in the last
+		// ~0.3s and the plan silently falls back to the waist. MEASURED: reachUp
+		// was 22cm above the actor centre — the waist fallback — on 101 of 101
+		// second touches, while the AI's own Intend said Set on 78% of them. The
+		// hands were being aimed at the hip for a stroke taken above the brow,
+		// the ball was met 60cm up against the 74cm the set classifier needs,
+		// and so every second ball came out a bagger.
+		//
+		// The locomotion budget stays as planned (it is feasible, and it is what
+		// gets the feet there). Only the CONTACT POINT is restored to the stroke
+		// we committed to, for as long as the ball physically still crosses that
+		// height — the same "does it still cross, full stop" test the stroke
+		// decision itself uses.
+		// NOT gated on Plan.bReachable, and that is the whole point: bReachable is
+		// exactly the flag that goes false as contact nears (tau falls toward a
+		// near-fixed body+hand+margin floor), and when it does the planner hands
+		// back its unreachable-fallback contact — the waist. Gating retention on
+		// it therefore switches the cup to the hip precisely in the last half
+		// second, which is when the value of ReachContact is the one that counts.
+		// Measured with the guard in place: reachUp stayed 22cm on 90 of 91
+		// second touches, i.e. the override never once fired. Diving is the one
+		// exception — a dive owns the contact point and plays the low ball.
+		if (Intend == EHitType::Hit_Set && !Plan.bDive)
+		{
+			FVector SetPos;
+			float SetTau = 0.0f;
+			if (Predict::BallTimeToHeight(Ball, ContactHeightFor(Intend), SetPos, SetTau)
+				&& SetTau > 0.0f)
+			{
+				Plan.Contact = SetPos;
+				Plan.BallTime = SetTau;
+				Plan.bStartGesture = this.GestureShouldStart(SetTau);
+			}
+		}
+
 		// WHY DID THE RECEIVE FAIL? Roughly half of all rallies end with the
 		// serve landing untouched (measured: seq=[ ] with crossings=1), and the
 		// receiver is typically standing 66-77cm from where it lands — so it is

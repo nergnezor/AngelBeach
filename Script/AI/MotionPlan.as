@@ -137,6 +137,16 @@ mixin float BodyTravelTime(AAIPlayer Self, float Dist)
 	return MB_BodyTravelTimeRaw(Dist, Self.MoveSpeed, Self.GroundAccel, Self.GroundDecel);
 }
 
+// The gesture-lead test, as a mixin, because MB_GestureLead lives here and
+// Angelscript will not resolve another module's globals (same reason the
+// travel-time helper above is a mixin). A caller that restores its own contact
+// point after planning still has to answer "should the reach have started by
+// now" against the one constant, not a copy of the number.
+mixin bool GestureShouldStart(AAIPlayer Self, float Tau)
+{
+	return Tau <= MB_GestureLead;
+}
+
 // RETENTION check for a decision already committed to: does the ball still
 // cross TargetZ at all, full stop — no body-time re-litigation. PlanIntercept
 // answers "should I COMMIT to this" (a locomotion decision, rightly gated by
