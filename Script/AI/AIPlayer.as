@@ -1088,10 +1088,39 @@ class AAIPlayer : AVolleyballPlayer
 		// digger stands where the contact actually is. Measured over three runs
 		// each: 2.85 contacts per rally at 35cm against 3.04 at 15cm, back inside
 		// the 3.00-3.87 spread of unmodified runs.
-		float Standoff = (Intend == EHitType::Hit_Set) ? 10.0f : 15.0f;
+		// 30, not 45: a bigger standoff is MORE rule-1 compliant on its own
+		// (ballFwd median +24 vs +10, 15% behind vs 18%) but measurably starves
+		// the attack — 11/11/11 attacks per run against 14-19 at 30, no overlap.
+		// Standing that far back changes where the second ball is struck from
+		// and the pass stops arriving attackable. 30 buys almost all of the
+		// rule-1 gain and none of that cost.
+		float Standoff = (Intend == EHitType::Hit_Set) ? 30.0f : 15.0f;
 		FVector Back = (Chord.SizeSquared() > 400.0f && Vel2D.DotProduct(Chord) > 0.0f)
 			? Chord.GetSafeNormal()
-			: FVector::ZeroVector;                     // vertical drop/outbound: no standoff
+			: FVector::ZeroVector;
+		if (Back.SizeSquared() < 0.01f)
+		{
+			// A BALL DROPPING STRAIGHT DOWN STILL HAS TO BE IN FRONT OF US
+			// (rule 1). There is no flight chord to stand back along here — the
+			// dig pops up almost vertically and comes down the same line — and
+			// the old code answered that by applying NO standoff at all, which
+			// parks the setter exactly underneath the ball. Measured: the second
+			// touch met the ball 5cm BEHIND the chest (median) and 61cm above
+			// the actor centre, i.e. below the 74cm forehead threshold, so not
+			// one second ball in three runs classified as a set — they were all
+			// baggers taken off the top of the head.
+			//
+			// What a setter actually does under a vertical ball is square up to
+			// the target and let it drop in front of the brow, so the standoff
+			// direction is the AIM: stand back from the contact along the line
+			// to where we are sending it, and the ball is between us and the
+			// target. That also agrees with the facing, since FaceBall then
+			// looks the same way — which is why this reads as +standoff in the
+			// PLANVA ballFwd column rather than needing its own facing rule.
+			FVector ToAim = FVector(DesiredAim.X - PlaySpot.X, DesiredAim.Y - PlaySpot.Y, 0);
+			if (bHasAim && ToAim.SizeSquared() > 400.0f)
+				Back = -ToAim.GetSafeNormal();
+		}
 		FVector Goal = ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0) + Back * Standoff);
 		float DistToGoal = (GetActorLocation() - Goal).Size2D();
 
