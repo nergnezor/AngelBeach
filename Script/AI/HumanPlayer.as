@@ -64,6 +64,8 @@ class AHumanPlayer : AAIPlayer
 		ScriptInputComponent.BindAction(n"Pass",  EInputEvent::IE_Pressed, FInputActionHandlerDynamicSignature(this, n"OnPass"));
 		ScriptInputComponent.BindAction(n"Set",   EInputEvent::IE_Pressed, FInputActionHandlerDynamicSignature(this, n"OnSet"));
 		ScriptInputComponent.BindAction(n"Spike", EInputEvent::IE_Pressed, FInputActionHandlerDynamicSignature(this, n"OnSpike"));
+		ScriptInputComponent.BindAction(n"LightGraphics", EInputEvent::IE_Pressed,
+			FInputActionHandlerDynamicSignature(this, n"OnLightGraphics"));
 
 		// No touch bindings here on purpose. Script in this fork cannot read the
 		// raw touch stream at all: APlayerController.OnInputTouchBegin/End are
@@ -166,6 +168,18 @@ class AHumanPlayer : AAIPlayer
 	void OnSpike(FKey Key)
 	{
 		DoSpike();
+	}
+
+	// B: the light graphics switch. Handled here because a possessed pawn is the
+	// only place script gets keyboard input in this fork (the HUD sees touches,
+	// not keys) — but it is a display setting, not a hit, so it goes straight to
+	// the game mode and never touches InputIdleTime: pressing it is no more a
+	// claim to steer this pawn than the action buttons are (see TakeControl).
+	// No gamepad twin on purpose: the pad's B face button is already Spike.
+	UFUNCTION()
+	void OnLightGraphics(FKey Key)
+	{
+		if (GM != nullptr) GM.ToggleLightGraphics();
 	}
 
 	// ---- Touch input (Android on-screen controls; see ABeachVolleyballHUD) ----

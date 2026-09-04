@@ -190,6 +190,20 @@ class AEnvironment : AActor
 		BuildProps();
 	}
 
+	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
+	// Everything that is scenery rather than court comes off: sea, coastline,
+	// dunes and the props. The sky dome stays — it costs a couple of hundred
+	// triangles on mobile and nothing at all on desktop (where it is not even
+	// built), and without it the court floats in a black void, which reads as a
+	// broken build rather than as a graphics setting.
+	void SetLightGraphics(bool bOn)
+	{
+		WaterMesh.SetVisibility(!bOn);
+		BackshoreMesh.SetVisibility(!bOn);
+		DuneMesh.SetVisibility(!bOn);
+		PropsMesh.SetVisibility(!bOn);
+	}
+
 	private UMaterialInstanceDynamic ApplyAuthoredMaterial(UProceduralMeshComponent Comp, int Section, FString Path)
 	{
 		if (Comp == nullptr) return nullptr;

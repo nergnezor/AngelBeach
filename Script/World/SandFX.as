@@ -43,10 +43,31 @@ class ASandFX : AActor
 		}
 	}
 
+	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
+	// No sand means no sand spray. Bursts and footsteps become no-ops and the
+	// grains already in flight are cut short, so the pool empties within a frame
+	// instead of leaving a cloud hanging over a court that has no beach.
+	private bool bLightGraphics = false;
+
+	void SetLightGraphics(bool bOn)
+	{
+		if (bOn == bLightGraphics) return;
+		bLightGraphics = bOn;
+
+		if (bOn)
+		{
+			for (int i = 0; i < MaxParticles; i++)
+				PLife[i] = 0.0f;
+			bDustDirty = true;   // one last rebuild clears the quads
+		}
+	}
+
 	// Strong upward sand spray from a ball impact.
 	UFUNCTION(BlueprintCallable)
 	void Burst(FVector Pos, FVector ImpactVel, float Strength)
 	{
+		if (bLightGraphics) return;
+
 		float S = Math::Clamp(Strength, 0.1f, 3.0f);
 
 		// NOTE: When ImpactSystem is assigned, spawn it here once the Niagara
@@ -62,6 +83,8 @@ class ASandFX : AActor
 	UFUNCTION(BlueprintCallable)
 	void Footstep(FVector Pos, float Strength)
 	{
+		if (bLightGraphics) return;
+
 		float S = Math::Clamp(Strength, 0.1f, 2.0f);
 
 		if (FootstepSystem != nullptr)

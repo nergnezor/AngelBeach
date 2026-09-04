@@ -68,6 +68,29 @@ class ACourt : AActor
 	private float SandUpdateAccum = 0.0f;
 	const float SandUpdateInterval = 0.06f;
 
+	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
+	// The sand goes away completely: the mesh is hidden AND the per-frame heal +
+	// rebuild is skipped, which is the part that actually costs anything (an
+	// 80x48 vertex grid re-uploaded every SandUpdateInterval). Net, lines and
+	// posts stay — they are a few hundred triangles between them and they are
+	// what still makes the thing read as a court once the beach is gone.
+	private bool bLightGraphics = false;
+
+	void SetLightGraphics(bool bOn)
+	{
+		if (bOn == bLightGraphics) return;
+		bLightGraphics = bOn;
+
+		// bPropagateToChildren stays false on purpose: NetMesh/LinesMesh/PostsMesh
+		// are attached to SandMesh (it is the root), and they must not follow it.
+		SandMesh.SetVisibility(!bOn);
+
+		// Footprints and craters keep accumulating in the heightfield while the
+		// mesh is hidden, so coming back needs one rebuild to show the current
+		// state instead of the shape the sand had when the mode was switched on.
+		if (!bOn) bSandDirty = true;
+	}
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
@@ -80,6 +103,10 @@ class ACourt : AActor
 	UFUNCTION(BlueprintOverride)
 	void Tick(float DeltaTime)
 	{
+		// Hidden sand is not worth healing or re-uploading; SetLightGraphics
+		// marks it dirty again on the way out.
+		if (bLightGraphics) return;
+
 		// Slowly heal deformations back toward flat.
 		bool bAnyHeal = false;
 		float HealFactor = 1.0f - Math::Clamp(SandHealRate * DeltaTime, 0.0f, 1.0f);

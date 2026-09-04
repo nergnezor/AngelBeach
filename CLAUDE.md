@@ -11,6 +11,24 @@ their arm bones; AI plays structured volleyball (receive → set → attack).
   (Ctrl+Alt+F11 or restart editor) — soft reload will NOT pick it up.
 - Logs: `Saved/Logs/BeachVolleyball.log`. Angelscript `Log()` lines are prefixed `Angelscript:`.
 
+## Light graphics mode (B)
+
+`B` toggles a stripped-down render of the same match — `ABeachVolleyballGameMode::
+ToggleLightGraphics()`, bound in `AHumanPlayer` because a possessed pawn is the only
+place script sees a keyboard in this fork. It hides the beach (sand, sea, coastline,
+dunes, props, sand spray — court lines, net and posts stay), swaps every player's
+skin for its reflection layer only (BasicShapeMaterial at roughness 0.05, dark
+team-tinted base — see `AVolleyballPlayer::SetLightGraphics`), and drops shadows,
+volumetric fog and Lumen GI. Lumen *reflections* stay on deliberately: they are what
+the shells are made of.
+
+- **It is a rendering switch and nothing else** — no gameplay, physics or AI state
+  reads it, so toggling mid-rally cannot change the result. Keep it that way.
+- The sand heightfield stops healing/rebuilding while hidden and is rebuilt once on
+  the way back, so footprints taken in light mode appear when it is switched off.
+- No gamepad twin: the pad's B face button is already Spike. No touch button either
+  (the HUD cluster is Jump/Pass/Set/Spike), so Android has no way in yet.
+
 ## Autonomous verification (headless — no human at the editor)
 
 Two debug GameModes in `Script/Debug/` give a closed see-it-yourself loop:

@@ -80,6 +80,13 @@ class ABeachVolleyballGameMode : AGameModeBase
 		SetupWorld();
 		SpawnActors();
 		StartMatch();
+
+		// -lightgraphics boots straight into the reduced render. The toggle is a
+		// KEY, and a key needs a keyboard: headless verification runs (and any
+		// launch that wants the mode on from frame one) have no way to press B.
+		// Read after SpawnActors on purpose — SetLightGraphics walks the actors.
+		if (FCommandLine::Get().Contains("-lightgraphics"))
+			SetLightGraphics(true);
 	}
 
 	// Angelscript has no platform macro, so this is the single place that decides
@@ -91,6 +98,84 @@ class ABeachVolleyballGameMode : AGameModeBase
 	{
 		FString P = Gameplay::GetPlatformName();
 		return P == "Android" || P == "IOS";
+	}
+
+	// --- Light graphics mode -------------------------------------------------
+	//
+	// One key (B, see AHumanPlayer::OnLightGraphics) strips the scene down to what
+	// the rally needs: the beach goes away (sand, sea, coastline, dunes, props,
+	// sand spray) leaving lines, net and posts, and the players stop being textured
+	// bodies and become their reflection layer only — smooth shells lit by the sky
+	// (see AVolleyballPlayer::SetLightGraphics). Shadows, volumetric fog and Lumen
+	// GI go with it, which is where most of the frame time actually is.
+	//
+	// It is a rendering switch and NOTHING ELSE: no gameplay state, no physics, no
+	// AI input reads it, so a match can be toggled in and out mid-rally without the
+	// result changing. That is the point — it exists to get frames on a weak machine
+	// and to make motion easy to read, not to be a second art direction.
+	bool bLightGraphics = false;
+
+	UFUNCTION(BlueprintCallable)
+	void ToggleLightGraphics()
+	{
+		SetLightGraphics(!bLightGraphics);
+	}
+
+	UFUNCTION(BlueprintCallable)
+	void SetLightGraphics(bool bOn)
+	{
+		if (bOn == bLightGraphics) return;
+		bLightGraphics = bOn;
+
+		if (Court != nullptr) Court.SetLightGraphics(bOn);
+		if (SandFX != nullptr) SandFX.SetLightGraphics(bOn);
+
+		// Environment is spawned in SetupWorld and no reference is kept (nothing
+		// needed one until now); it is a single actor, so look it up rather than
+		// grow another wire through the spawn code.
+		TArray<AEnvironment> Envs;
+		GetAllActorsOfClass(AEnvironment, Envs);
+		for (AEnvironment Env : Envs)
+			Env.SetLightGraphics(bOn);
+
+		// Every player, not the four members: HumanPawn/PlayerA2/... would miss
+		// anything a debug game mode spawned on top of the match.
+		TArray<AVolleyballPlayer> Players;
+		GetAllActorsOfClass(AVolleyballPlayer, Players);
+		for (AVolleyballPlayer P : Players)
+			P.SetLightGraphics(bOn);
+
+		ApplyLightGraphicsCVars(bOn);
+
+		if (bOn)
+			Print("Light graphics ON — no sand, players in reflection shells (B to restore)");
+		else
+			Print("Light graphics OFF");
+	}
+
+	// The restore values are the engine defaults these cvars have on this project,
+	// not a remembered snapshot: nothing else in the game writes them, so there is
+	// no other setting to trample. r.VolumetricFog only matters on desktop anyway
+	// (SetupWorld turns the fog component's volumetric mode off on mobile), and
+	// Lumen is desktop-only to begin with — on mobile the two are simply no-ops and
+	// shadow quality carries the whole win.
+	private void ApplyLightGraphicsCVars(bool bOn)
+	{
+		if (bOn)
+		{
+			System::ExecuteConsoleCommand("r.ShadowQuality 0");
+			System::ExecuteConsoleCommand("r.VolumetricFog 0");
+			// Reflections are deliberately left ON: they are what the players'
+			// shells are made of. The SphereReflectionCapture SetupWorld spawns
+			// keeps them specular even with Lumen's GI switched off underneath.
+			System::ExecuteConsoleCommand("r.Lumen.DiffuseIndirect.Allow 0");
+		}
+		else
+		{
+			System::ExecuteConsoleCommand("r.ShadowQuality 5");
+			System::ExecuteConsoleCommand("r.VolumetricFog 1");
+			System::ExecuteConsoleCommand("r.Lumen.DiffuseIndirect.Allow 1");
+		}
 	}
 
 	private void SetupWorld()

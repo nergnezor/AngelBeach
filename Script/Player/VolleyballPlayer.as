@@ -371,6 +371,64 @@ class AVolleyballPlayer : APawn
 		}
 	}
 
+	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
+	//
+	// The body drops its textured skin and keeps only its reflection layer: one
+	// BasicShapeMaterial per slot, near-black team-tinted base colour at roughness
+	// 0.05, so what you see of a player is the sky and the sun bouncing off a
+	// smooth shell. Cheap as well as distinctive — no texture sampling and no
+	// shadow casting — which is the whole point of the mode.
+	//
+	// Restoring does NOT keep the old MIDs around. Mesh.SetMaterial(i, nullptr)
+	// clears the component override so the slot falls back to the skeletal mesh's
+	// own material, and ApplyTeamMaterial() then re-creates the tinted MIDs from
+	// scratch — the same path startup takes. Holding the previous MIDs in a member
+	// array would work too, but this way there is nothing to keep alive.
+	private bool bLightGraphics = false;
+
+	void SetLightGraphics(bool bOn)
+	{
+		if (Mesh == nullptr || bOn == bLightGraphics) return;
+
+		int NumSlots = Mesh.GetNumMaterials();
+
+		if (bOn)
+		{
+			UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
+				"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+			if (Base == nullptr) return;   // stay in normal mode rather than go invisible
+
+			for (int i = 0; i < NumSlots; i++)
+			{
+				UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, Base);
+				if (MID == nullptr) continue;
+				MID.SetVectorParameterValue(n"Color", ShellColor());
+				MID.SetScalarParameterValue(n"Roughness", 0.05f);
+			}
+			Mesh.SetCastShadow(false);
+		}
+		else
+		{
+			for (int i = 0; i < NumSlots; i++)
+				Mesh.SetMaterial(i, nullptr);
+			ApplyTeamMaterial();
+			Mesh.SetCastShadow(true);
+		}
+
+		bLightGraphics = bOn;
+	}
+
+	// Dark and hued rather than a flat grey: at this roughness the shell is mostly
+	// specular, so the base colour only has to carry enough team identity to tell
+	// two shells apart in a scrum at the net. TeamRing on the sand — which the mode
+	// deliberately keeps — is still the primary team read.
+	private FLinearColor ShellColor() const
+	{
+		return (TeamSide == ETeam::Team_A)
+			? FLinearColor(0.09f, 0.17f, 0.36f, 1)
+			: FLinearColor(0.36f, 0.11f, 0.08f, 1);
+	}
+
 	// Kept close to the material's own default (0.92 grey) on purpose. "Paint Tint"
 	// MULTIPLIES the body texture, so the HDR values TeamColor() uses would crush or
 	// blow out the texture and hand back the flat silhouette this whole exercise was
