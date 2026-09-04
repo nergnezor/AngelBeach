@@ -106,6 +106,24 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
 
 ## Gameplay
 
+### Rules of play (Erik's) — design constraints, not tuning knobs
+
+1. **You always want the ball in front of you.** Every contact — dig, set, spike —
+   happens in front of the chest / hitting shoulder. A ball that gets over and
+   behind a player is a lost contact no matter how close they are standing: the
+   arm swings from behind the body, the platform faces backwards, the placement
+   is noise. Two consequences the code has to honour:
+   - Positioning aims a body-depth *behind* the contact point along the ball's
+     flight chord and plants there. Standing *on* the contact point puts the ball
+     on top of the head and then behind it.
+   - A player who is still travelling when the ball arrives will drift past it.
+     Arrive early, plant, let the ball come — a moving player is the main way the
+     ball ends up behind them.
+2. **Every pass goes one metre inside the antenna on the partner's half**, and
+   every player expects passes at the pin on their own half — see
+   `PartnerPinTarget()` / `MyHalfPinY()` in `AIPlayer.as`. Nobody ball-chases;
+   everyone anticipates.
+
 - `Ball.as`: custom Euler physics, procedural sphere mesh. `CheckPlayerCollision()` iterates
   `AVolleyballPlayer`s, gates on `CanContactBall()`, tests arm bones via `GetArmContact()`, and
   lets the player compute the bounce in `OnBallContact()`. Contact model: dig/set with an aim
