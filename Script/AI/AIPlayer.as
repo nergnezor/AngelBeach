@@ -1444,6 +1444,9 @@ class AAIPlayer : AVolleyballPlayer
 		return FloorZ + PlayerHeight + Rise + StrikeReachAboveCenter;
 	}
 	const float ApproachBack = 200.0f;  // run-up starts this far behind the plant
+	// How far our side of the strike point the hitter stands, so the ball is in
+	// FRONT of the hitting shoulder at contact rather than on top of the head.
+	const float SpikeBallAhead = 60.0f;
 
 	private void ApproachForSpike(float DeltaTime)
 	{
@@ -1467,7 +1470,12 @@ class AAIPlayer : AVolleyballPlayer
 
 		// Plant just our-side of the strike point so contact happens in front of
 		// the hitting shoulder, not on top of the head.
-		FVector Plant = ClampToCourt(FVector(Strike.X + MySign() * 35.0f, Strike.Y, 0));
+		// RULE 1 FOR THE ATTACK. The body's place is a stride OUR SIDE of the
+		// strike point so the ball arrives in front of the hitting shoulder,
+		// which is where the swing's strike pose puts the hand (PlayerIK builds
+		// it at ShR + Fwd*24 above the shoulder). 35cm was less than that reach,
+		// i.e. the stance itself already asked for a contact behind the hand.
+		FVector Plant = ClampToCourt(FVector(Strike.X + MySign() * SpikeBallAhead, Strike.Y, 0));
 		float DistToPlant = (GetActorLocation() - Plant).Size2D();
 		// Same body-time model as the intercept budget (accel-limited + lag).
 		float SprintTime = this.BodyTravelTime(DistToPlant);
@@ -1527,7 +1535,28 @@ class AAIPlayer : AVolleyballPlayer
 				// tops out above the ball and whiffs, a late one still meets
 				// it inside the envelope (stats2 autopsy).
 				float JumpEps = Math::Clamp(ReactionDelay * 0.4f, 0.02f, 0.05f);
-				if (DistToPlant < 90.0f && Tau <= TimeToApex + JumpLoadDuration + JumpEps)
+				// THE JUMP CARRIES THE BODY, so "am I at the plant" is the wrong
+				// question — the right one is "will I be at the plant when the
+				// ball gets to strike height". The gather bleeds the run to
+				// JumpLoadSpeedKeep across JumpLoadDuration and the ascent then
+				// flies that residue for a whole TimeToApex, which at approach
+				// speed is most of a stride of travel AFTER the decision. A
+				// hitter who waits until they REACH the plant therefore contacts
+				// the ball past it, with the ball behind the shoulder — rule 1,
+				// and the reported "armen bakom sig". Predicting the carry also
+				// fires the jump slightly EARLIER on a fast approach, which is
+				// the side the strike height wants: a late jump tops out after
+				// the ball has fallen out of the envelope.
+				float CarryTime = JumpLoadDuration * 0.5f * (1.0f + JumpLoadSpeedKeep)
+					+ TimeToApex * JumpLoadSpeedKeep;
+				FVector AtStrike = GetActorLocation()
+					+ FVector(PlayerVelocity.X, PlayerVelocity.Y, 0.0f) * CarryTime;
+				float PlantMiss = (AtStrike - Plant).Size2D();
+				// The distance term stays as a floor for the standing case: a
+				// hitter already parked on the plant has no carry to predict and
+				// must still be allowed to jump.
+				if ((PlantMiss < 70.0f || DistToPlant < 45.0f)
+					&& Tau <= TimeToApex + JumpLoadDuration + JumpEps)
 				{
 					MovePlayer(FVector2D::ZeroVector);
 					StartLoadedJump();
