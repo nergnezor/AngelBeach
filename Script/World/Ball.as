@@ -5,6 +5,12 @@ class ABall : AActor
 	UPROPERTY(DefaultComponent, RootComponent)
 	UProceduralMeshComponent MeshComp;
 
+	// Grounded contact shadow — see the BALLSHADOW investigation in BeginPlay/Tick
+	// below for why the ball needs this instead of relying on the directional
+	// light's own dynamic shadow.
+	UPROPERTY(DefaultComponent)
+	UProceduralMeshComponent ShadowBlob;
+
 	// Physics state (BallVel avoids clash with APawn::GetVelocity if ever reparented)
 	FVector BallVel = FVector(0, 0, 0);
 	FVector Position = FVector(0, 0, 300);
@@ -53,7 +59,6 @@ class ABall : AActor
 	void BeginPlay()
 	{
 		BuildSphereMesh();
-		Log("BALLSHADOW CastShadow=" + MeshComp.CastShadow + " Mobility=" + int(MeshComp.Mobility));
 
 		// THE BALL IS A BALL NOW, NOT A LIGHT BULB.
 		//
@@ -86,6 +91,102 @@ class ABall : AActor
 					MID.SetVectorParameterValue(n"Color", FLinearColor(0.72f, 0.64f, 0.16f, 1.0f));
 			}
 		}
+
+		// BALLSHADOW (Erik, 2026-09-05): "bollen har ingen skugga." MEASURED, not
+		// guessed, across three headless MatchFilmer captures with real screenshots:
+		//   1. CastShadow=true, Mobility=Movable, confirmed by logging MeshComp's
+		//      actual values in-engine — never a disabled flag.
+		//   2. r.Shadow.RadiusThreshold (culls shadow casters by projected screen
+		//      size) lowered 20x, then its VSM non-Nanite counterpart
+		//      (r.Shadow.Virtual.NonNanite.UseRadiusThreshold) disabled outright —
+		//      confirmed both cvars actually took (echoed in log) — ball still cast
+		//      no visible shadow in the capture.
+		//   3. Decisive test: scaled the ball 6x for one capture only. That ball
+		//      cast an obvious, correctly-shaped dark blob. So the whole pipeline
+		//      (light, VSM, material, mobility) works fine — a real 21cm ball's
+		//      shadow is just too thin a sliver at broadcast-camera distance to
+		//      read, or to survive VSM's penumbra softening, at ANY cull threshold.
+		// That is exactly the failure this file's own comment above already
+		// anticipated ("the fix is ... a grounded contact shadow — not a light
+		// bulb") — a directional shadow was never going to carry a ball this
+		// small at this distance. ShadowBlob below is that fix: an always-visible
+		// dark disc pinned to the ball's ground projection, independent of the
+		// real shadow pass entirely.
+		UMaterialInterface ShadowMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (ShadowMat != nullptr)
+		{
+			UMaterialInstanceDynamic ShadowMID = ShadowBlob.CreateDynamicMaterialInstance(0, ShadowMat);
+			// Dark, not pure black — a flat black disc on lit sand reads as a hole
+			// cut in the ground rather than a shadow.
+			if (ShadowMID != nullptr)
+				ShadowMID.SetVectorParameterValue(n"Color", FLinearColor(0.10f, 0.09f, 0.07f, 1.0f));
+		}
+		ShadowBlob.SetCastShadow(false);          // a shadow does not cast its own shadow
+		ShadowBlob.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// World-space from here on: the ball's own actor rotation spins for visible
+		// roll (UpdateSpin) and its Z tracks flight height — neither should reach
+		// this disc, which stays flat on the sand under the ball's XY regardless.
+		ShadowBlob.SetAbsolute(true, true, false);
+		BuildShadowDisc();
+	}
+
+	// Flat filled circle, built the same way BuildSphereMesh builds the ball:
+	// a fan of triangles around a centre vertex, facing +Z. Radius is baked in
+	// at 1.3x the ball's so it reads as a contact shadow, not a coin glued
+	// under it; height-based shrink happens via SetWorldScale3D in Tick instead
+	// of rebuilding this geometry every frame.
+	private void BuildShadowDisc()
+	{
+		TArray<FVector> Verts;
+		TArray<int32> Tris;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UVs;
+		TArray<FLinearColor> Colors;
+		TArray<FVector2D> NoUV;
+		TArray<FProcMeshTangent> Tangents;
+
+		const float Radius = BallRadius * 1.3f;
+		const int Segments = 20;
+
+		FProcMeshTangent FlatTangent;
+		FlatTangent.TangentX = FVector(1, 0, 0);
+		FlatTangent.bFlipTangentY = false;
+
+		Verts.Add(FVector(0, 0, 0));
+		Normals.Add(FVector(0, 0, 1));
+		UVs.Add(FVector2D(0.5f, 0.5f));
+		Colors.Add(FLinearColor(1, 1, 1, 1));
+		Tangents.Add(FlatTangent);
+
+		for (int i = 0; i <= Segments; i++)
+		{
+			float Theta = 2.0f * PI * i / Segments;
+			Verts.Add(FVector(Math::Cos(Theta) * Radius, Math::Sin(Theta) * Radius, 0));
+			Normals.Add(FVector(0, 0, 1));
+			UVs.Add(FVector2D(0.5f + 0.5f * Math::Cos(Theta), 0.5f + 0.5f * Math::Sin(Theta)));
+			Colors.Add(FLinearColor(1, 1, 1, 1));
+			Tangents.Add(FlatTangent);
+		}
+
+		// Both winding orders: BuildSphereMesh's own history (see its comment) is a
+		// reminder that getting this backwards makes the whole mesh invisible from
+		// the only side that matters, and there's no clean way to eyeball a flat
+		// disc's winding from above without a render — cheap on a 20-segment disc,
+		// so just emit both instead of gambling on a convention.
+		for (int i = 1; i <= Segments; i++)
+		{
+			Tris.Add(0);
+			Tris.Add(i);
+			Tris.Add(i + 1);
+
+			Tris.Add(0);
+			Tris.Add(i + 1);
+			Tris.Add(i);
+		}
+
+		ShadowBlob.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
+			NoUV, NoUV, NoUV, Colors, Tangents, false);
 	}
 
 	UFUNCTION(BlueprintOverride)
@@ -105,6 +206,21 @@ class ABall : AActor
 		}
 		SetActorLocation(Position);
 		UpdateSpin(DeltaTime);
+		UpdateShadowBlob();
+	}
+
+	// Ground projection of the ball, shrinking with height so a high ball reads
+	// as further from its shadow (the classic platformer/sports cue) instead of
+	// a shadow that just floats at a fixed size regardless of altitude. Never
+	// shrinks past 35% — a serve toss near the top of its arc should still show
+	// SOMETHING, not vanish to a pixel.
+	private void UpdateShadowBlob()
+	{
+		float HeightAboveFloor = Math::Max(0.0f, Position.Z - FloorZ);
+		float Shrink = Math::Clamp(1.0f - HeightAboveFloor / 400.0f, 0.35f, 1.0f);
+		ShadowBlob.SetWorldLocation(FVector(Position.X, Position.Y, FloorZ + 0.5f));
+		ShadowBlob.SetWorldRotation(FRotator(0, 0, 0));
+		ShadowBlob.SetWorldScale3D(FVector(Shrink, Shrink, 1.0f));
 	}
 
 	// Roll the ball in its travel direction so the spin is visible. A ball moving
