@@ -436,6 +436,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		float ContactAboveFeet = KneeKeyZ - FeetZ;
 		float BallLow = Math::Clamp((110.0f - ContactAboveFeet) / 80.0f, 0.0f, 1.0f);
 		Crouch = 0.5f + 0.2f * BallLow;
+		// ...AND THE LEGS DRIVE THROUGH THE BALL. The knees held their depth
+		// through the whole stroke, so the platform lifted along the aim off a
+		// body that was doing nothing — arms moving alone is what reads as
+		// flapping. They extend on the same seam the platform drives from
+		// (Swing 0.22, after the cushion), so legs, hips and platform all leave
+		// together in one direction. The set has done this since it was written;
+		// the dig never did.
+		Crouch *= 1.0f - MinJerk(Math::Clamp((Swing - 0.22f) / 0.6f, 0.0f, 1.0f));
 	}
 	else if (Self.CurrentHit == EHitType::Hit_Set)
 	{

@@ -193,7 +193,14 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
    - A player who is still travelling when the ball arrives will drift past it.
      Arrive early, plant, let the ball come — a moving player is the main way the
      ball ends up behind them.
-2. **Every pass goes one metre inside the antenna on the partner's half**, and
+2. **The whole body goes where the ball goes.** A contact is a weight transfer
+   the arms ride on top of, not an arm gesture performed by a statue. Legs,
+   hips and platform leave together, in one direction, on the same beat: the
+   dig's knees extend on the same seam the platform drives from (`Swing` 0.22,
+   after the cushion) and `TriggerHit` gives the body a step's worth of travel
+   along the aim (`HitDriveDir`, measured 29-35cm). Arms moving alone is what
+   reads as flapping — the eye has nothing to attribute the motion to.
+3. **Every pass goes one metre inside the antenna on the partner's half**, and
    every player expects passes at the pin on their own half — see
    `PartnerPinTarget()` / `MyHalfPinY()` in `AIPlayer.as`. Nobody ball-chases;
    everyone anticipates.

@@ -483,6 +483,34 @@ class AVolleyballPlayer : APawn
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
 		UpdateJumpLoad(DeltaTime);
+		// Weight transfer through a contact (see TriggerHit): a step's worth of
+		// body along the aim, fading out over the follow-through. Fed as INPUT,
+		// not as a velocity write, so it obeys the same acceleration limits as
+		// every other movement — and only when nobody is steering, so it can
+		// never fight the AI's next assignment. At contact the hitter is planted
+		// (MovePlayer(zero)), which is exactly when it applies.
+		if (bHitDriveMeasuring && HitDriveTimer <= 0.0f)
+		{
+			// DID THE BODY ACTUALLY GO WITH IT? The drive yields to the AI the
+			// moment it steers, so "we asked for a weight transfer" and "the
+			// body made one" are different claims. This measures the second:
+			// travel along the aim over the follow-through, in cm.
+			bHitDriveMeasuring = false;
+			FVector Went = GetActorLocation() - HitDrivePos;
+			Log("HITDRIVE type=" + HitDriveLogType
+				+ " along=" + int(FVector(Went.X, Went.Y, 0).DotProduct(HitDriveDir))
+				+ " total=" + int(FVector(Went.X, Went.Y, 0).Size()));
+		}
+		if (HitDriveTimer > 0.0f)
+		{
+			HitDriveTimer -= DeltaTime;
+			if (MoveInput.SizeSquared() < 0.01f && !IsDiving())
+			{
+				float DriveW = Math::Clamp(HitDriveTimer / HitDriveTime, 0.0f, 1.0f);
+				MoveInput = FVector2D(HitDriveDir.X, HitDriveDir.Y)
+					* (HitDriveStrength * DriveW);
+			}
+		}
 		if (!IsDiving() && !bRagdollActive)
 			ApplyMoveInput(DeltaTime);
 
@@ -3057,6 +3085,20 @@ class AVolleyballPlayer : APawn
 	protected void TriggerHit(EHitType Type, FVector WorldDir)
 	{
 		ReachDir = WorldDir.GetSafeNormal();
+		// THE WHOLE BODY GOES WHERE THE BALL GOES. A contact used to be arms
+		// only: the platform swung along the aim while the body stood still,
+		// which is what reads as flapping — the limbs are the only thing moving,
+		// so the eye has nothing to attribute the motion to. A real contact is a
+		// weight transfer that the arms ride on top of. See HitDriveDir.
+		FVector DriveFlat = FVector(WorldDir.X, WorldDir.Y, 0.0f);
+		if (DriveFlat.SizeSquared() > 0.01f)
+		{
+			HitDriveDir = DriveFlat.GetSafeNormal();
+			HitDriveTimer = HitDriveTime;
+			HitDrivePos = GetActorLocation();
+			HitDriveLogType = int(Type);
+			bHitDriveMeasuring = true;
+		}
 		CurrentHit = Type;      // a real contact is an event — no dwell gate
 		GestureAge = 0.0f;
 		HitAnimTimer = HitAnimDuration;
@@ -3072,6 +3114,17 @@ class AVolleyballPlayer : APawn
 	}
 
 	bool bDebugHit = false;
+
+	// Weight transfer through a contact. Direction is the outgoing ball's, flat;
+	// strength is a fraction of top speed, so ~145cm/s at the contact frame
+	// bleeding to nothing over the follow-through — a step, not a lunge.
+	private FVector HitDriveDir = FVector::ZeroVector;
+	private float HitDriveTimer = 0.0f;
+	const float HitDriveTime = 0.35f;
+	private FVector HitDrivePos = FVector::ZeroVector;
+	private int HitDriveLogType = 0;
+	private bool bHitDriveMeasuring = false;
+	const float HitDriveStrength = 0.25f;
 
 	// Back-compat: a generic reach with no specific hit type.
 	protected void TriggerReach(FVector WorldDir)
