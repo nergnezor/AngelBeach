@@ -200,7 +200,26 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
    after the cushion) and `TriggerHit` gives the body a step's worth of travel
    along the aim (`HitDriveDir`, measured 29-35cm). Arms moving alone is what
    reads as flapping — the eye has nothing to attribute the motion to.
-3. **Every pass goes one metre inside the antenna on the partner's half**, and
+3. **Go, turn, play — in that order, and never overlapped.** A stroke has three
+   phases, and each one finishes before the next begins:
+   1. **Go.** Travel to the contact spot first, and travel there already facing
+      where this ball will be sent — the pin, rule 4. A body that arrives and
+      only then discovers it has to turn has arrived late.
+   2. **Turn.** Square up to the incoming ball once the feet are planted, not
+      while still travelling. This is the only phase that changes facing.
+   3. **Play.** Begin the stroke's own movement only once the ball is in the air
+      on a flight whose destination is knowable — after the contact that sends
+      it here, not before. Starting earlier is committing to a guess, and a
+      guess that has to be taken back is exactly the motion that reads as
+      flapping.
+
+   The gesture lead (`MB_GestureLead`) buys time for phase 3, not for phases 1
+   and 2, and it is measured against the CURRENT flight. If the reach starts
+   while the ball is still travelling toward the opponent's contact, the τ it
+   was choreographed against belongs to a flight that no longer exists — the
+   arms then spend the wind-up committed to the wrong place. "I bagger kopplar
+   de alldeles för tidigt."
+4. **Every pass goes one metre inside the antenna on the partner's half**, and
    every player expects passes at the pin on their own half — see
    `PartnerPinTarget()` / `MyHalfPinY()` in `AIPlayer.as`. Nobody ball-chases;
    everyone anticipates.

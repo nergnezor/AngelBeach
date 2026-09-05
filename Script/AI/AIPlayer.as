@@ -1201,13 +1201,34 @@ class AAIPlayer : AVolleyballPlayer
 		if (bHitterPlanted || DistToGoal < 150.0f)
 			FaceBall();
 
-		// Wind up on the last stretch only. Reach-while-sprinting handed FBIK
-		// a platform target in front of a running torso and the solver folded
-		// the spine to meet it — the "böjer sig framåt" silhouette on every
-		// approach. Late balls still get AutoReach at arm's length.
-		if (Plan.bStartGesture && (bHitterPlanted || DistToGoal < 160.0f))
+		// RULE 3 — GO, TURN, THEN PLAY, and never overlapped. The gate used to be
+		// "planted OR within 160cm", which let the stroke begin while the feet
+		// were still travelling and before the body had squared up. Measured at
+		// the first frame of the reach, over three runs: on a dig the player was
+		// still moving 57% of the time (median 129cm/s) and had not yet turned to
+		// the ball 52% of the time; on a set, 62% and 66%. That is all three
+		// phases running at once, and it is what "i bagger kopplar de alldeles
+		// för tidigt" describes.
+		//
+		// So phase 3 waits for phases 1 and 2 to be finished — arrived AND
+		// facing — with one escape: when there is no time left, a late gesture
+		// beats no gesture, because a whiff is worse than a hurried stroke.
+		FVector ToBallFlat = FVector(Ball.Position.X - GetActorLocation().X,
+			Ball.Position.Y - GetActorLocation().Y, 0);
+		bool bTurnedToBall = ToBallFlat.SizeSquared() < 100.0f
+			|| GetActorForwardVector().DotProduct(ToBallFlat.GetSafeNormal()) > 0.85f;
+		bool bArrived = bHitterPlanted || DistToGoal < 45.0f;
+		bool bNoTimeLeft = Plan.BallTime <= GestureLastCall;
+		if (Plan.bStartGesture && (bNoTimeLeft || (bArrived && bTurnedToBall)))
 			Reach(Intend, Plan.Contact, Plan.BallTime);
 	}
+
+	// The point past which form gives way to getting a hand on the ball: below
+	// this much time to contact the stroke starts whether or not the body has
+	// finished arriving and turning. Sized to the parked poses' own settle
+	// window (see PrepSettle in PlayerIK) — a stroke started later than this
+	// cannot converge anyway.
+	const float GestureLastCall = 0.45f;
 
 	// Distance at which we START preparing the swing/arms. Generous so the wind-up
 	// has time to develop before the ball gets here.

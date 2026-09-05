@@ -53,6 +53,7 @@ class ABall : AActor
 	void BeginPlay()
 	{
 		BuildSphereMesh();
+		Log("BALLSHADOW CastShadow=" + MeshComp.CastShadow + " Mobility=" + int(MeshComp.Mobility));
 
 		// THE BALL IS A BALL NOW, NOT A LIGHT BULB.
 		//

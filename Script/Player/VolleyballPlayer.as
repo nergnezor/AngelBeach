@@ -2584,6 +2584,32 @@ class AVolleyballPlayer : APawn
 	// where the feet are already going, at decision rate rather than frame rate.
 	void Reach(EHitType Type, FVector Contact, float Tau = 99.0f)
 	{
+		// RULE 3, PHASE 3: was the ball even on its way here when this gesture
+		// started? The touch stamp at the first frame of the reach against the
+		// stamp at contact. Different means the reach began on a flight that no
+		// longer existed by the time the ball arrived — the wind-up was
+		// choreographed against a tau belonging to somebody else's ball.
+		if (!bReaching)
+		{
+			ABeachVolleyballGameState RGS =
+				Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+			GestureStartStamp = (RGS != nullptr)
+				? RGS.TouchesThisRally * 10 + int(RGS.LastTouchTeam) : -1;
+			GestureStartTau = Tau;
+			// ...and had the body finished phases 1 and 2 when it started? Speed
+			// says whether the feet were still going; the facing dot says
+			// whether the turn had happened (1 = squared to the ball).
+			GestureStartSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+			GestureStartFace = -2.0f;
+			ABall RB = GetWorldBall();
+			if (RB != nullptr && RB.bInPlay)
+			{
+				FVector ToB = FVector(RB.Position.X - GetActorLocation().X,
+					RB.Position.Y - GetActorLocation().Y, 0);
+				if (ToB.SizeSquared() > 100.0f)
+					GestureStartFace = GetActorForwardVector().DotProduct(ToB.GetSafeNormal());
+			}
+		}
 		bReaching = true;
 		ReachHoldTimer = 0.25f;
 		bHasReachContact = Contact.SizeSquared() > 1.0f;
@@ -2603,6 +2629,11 @@ class AVolleyballPlayer : APawn
 			GestureClock = 0.0f;
 		}
 	}
+
+	private int GestureStartStamp = -1;
+	private float GestureStartTau = -1.0f;
+	private float GestureStartSpd = -1.0f;
+	private float GestureStartFace = -2.0f;
 
 	// Age of the current gesture type; guards against per-frame branch flips.
 	private float GestureAge = 10.0f;
@@ -3108,6 +3139,18 @@ class AVolleyballPlayer : APawn
 		// contact) and the arms did what they were told.
 		float ReachUp = bHasReachContact ? (ReachContact.Z - GetActorLocation().Z) : -999.0f;
 
+		{
+			int StampNow = (GS != nullptr)
+				? GS.TouchesThisRally * 10 + int(GS.LastTouchTeam) : -1;
+			Log("GESTUREWAIT type=" + int(Type)
+				+ " touch=" + MyTouches
+				+ " stampStart=" + GestureStartStamp
+				+ " stampNow=" + StampNow
+				+ " stale=" + ((GestureStartStamp != StampNow) ? 1 : 0)
+				+ " tauAtStart=" + int(GestureStartTau * 100)
+				+ " spdAtStart=" + int(GestureStartSpd)
+				+ " faceAtStart=" + int(GestureStartFace * 100));
+		}
 		Log("PLANVA touch=" + MyTouches + " type=" + int(Type)
 			+ " ballFwd=" + int(BallFwd) + " ballSide=" + int(BallSide)
 			+ " ballUp=" + int(BallUp)
