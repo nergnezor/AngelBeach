@@ -18,22 +18,29 @@ graded against the tiltRun telemetry without touching the script.
 IT DOES NOT WORK YET, and the two reasons found while proving that are worth
 more than the node is:
 
-1. The pelvis Transform (Modify) Bone and BOTH foot Two Bone IK nodes sit on a
-   branch that never reaches Output Pose. Traced backwards from Root the live
-   chain is TwoWayBlend_2 -> IKRig_0 -> LocalToComponentSpace_6 -> LookAt_3 ->
-   ComponentToLocalSpace_3 -> BlendListByBool_0.BlendPose_1 -> Root, while the
-   pelvis plant and the leg IK hang off LocalToComponentSpace_0 /
-   ComponentToLocalSpace_0, which nothing downstream reads. Everything the code
-   says about pinning the pelvis and re-targeting the feet is, as wired,
-   describing a branch the runtime discards.
+NO BONE-NAME SKELETAL CONTROL IN THIS GRAPH DOES ANYTHING. Every node is
+reachable from Output Pose — checked with scripts/etapp5_reachability.py, which
+walks the pose graph using real pin DIRECTIONS — so this is not a wiring
+problem. It is that the controls have no effect:
 
-2. This node IS on the live chain, and still changes nothing: 13 degrees, 60
-   degrees, and alpha forced to 1 with the pin broken all measure trunk lean 28
-   to the degree. The likely cause is the mismatch VolleyballPlayer.as already
-   warns about — the ABP targets /MoverExamples/.../SK_Mannequin while the mesh
-   references /Game/Characters/Mannequins/Meshes/SK_Mannequin. Bone-name
-   skeletal controls resolve against the ABP's skeleton; the IK Rig node works
-   because it resolves through its own rig asset instead.
+  spine_02, additive, component space, 13 deg   trunk lean 28
+  the same at 60 deg                            trunk lean 28
+  the same with alpha forced to 1, pin broken   trunk lean 28
+  pointed at PELVIS, the bone the existing
+  Modify Bone already drives, at 60 deg         trunk lean 28
+
+The likely cause is the mismatch VolleyballPlayer.as already warns about: the
+ABP targets /MoverExamples/.../SK_Mannequin while the mesh references
+/Game/Characters/Mannequins/Meshes/SK_Mannequin. Bone-name controls resolve
+against the ABP's skeleton; the IK Rig node keeps working because it resolves
+through its own rig asset, which is why the hands reach the ball and nothing
+else moves.
+
+What that costs, beyond this node: the pelvis plant, both foot Two Bone IKs and
+the head LookAt are all bone-name controls. And CrouchAmount has no consumer in
+the graph at all — it reaches the skeleton only through PelvisTarget, which the
+inert pelvis node reads. So every knee bend, hip sink, split-step dip and
+leg-drive-through-the-ball the script computes is measured and thrown away.
 
 So: fix the skeleton before trusting any Modify Bone in this graph.
 
