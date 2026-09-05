@@ -2184,6 +2184,11 @@ class AVolleyballPlayer : APawn
 
 	// ANTI-FLICKER SINK STATE: everything the ABP sees is speed-limited at the
 	// single write point (end of UpdateIKTargets). Public: the mixin owns them.
+	// Effector VELOCITIES, so the sink can limit acceleration and not just speed
+	// (see MoveTowardAccel in PlayerIK). New members — a full reload, not a soft
+	// one, is needed to pick these up in the editor.
+	FVector SmHandVelR;
+	FVector SmHandVelL;
 	FVector SmHandR;
 	FVector SmHandL;
 	FVector SmPoleR;

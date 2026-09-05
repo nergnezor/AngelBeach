@@ -154,6 +154,11 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// How far past the anti-flicker sink's base speed limit this frame's pose
 	// may legitimately move (deliberate swings are FAST — see the sink).
 	float SinkBoost = 1.0f;
+	// Hand acceleration ceiling (cm/s^2), before SinkBoost opens it. Sized from
+	// the reversal it has to civilise: at 120Hz this bleeds a full-speed hand to
+	// a stop in ~0.1s rather than in one frame, and a swing's boost roughly
+	// halves that again.
+	const float HandSinkAccel = 18000.0f;
 
 	// 0 -> 1 over the contact swing (TriggerHit envelope): lets poses swing
 	// THROUGH the ball along the aim at contact instead of freezing on it.
@@ -627,6 +632,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	if (!Self.bSmInit)
 	{
 		Self.bSmInit = true;
+		Self.SmHandVelR = FVector::ZeroVector;
+		Self.SmHandVelL = FVector::ZeroVector;
 		Self.SmHandR = WantHandR; Self.SmHandL = WantHandL;
 		Self.SmPoleR = PoleR;     Self.SmPoleL = PoleL;
 		Self.SmRotR  = PalmR;     Self.SmRotL  = PalmL;
@@ -639,14 +646,24 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// same ceiling.
 	float MaxStep = 900.0f * SinkBoost * Dt;
 	Self.SinkBoostLog = SinkBoost;
-	Self.SmHandR = MoveTowardClamped(Self.SmHandR, WantHandR, MaxStep);
-	Self.SmHandL = MoveTowardClamped(Self.SmHandL, WantHandL, MaxStep);
+	// Hands go through the acceleration-limited sink; the poles and the palm
+	// keep the plain speed clamp, since an elbow hint reversing is not something
+	// the eye reads as a jolt the way the hand is.
+	float MaxSpeed = 900.0f * SinkBoost;
+	float MaxAccel = HandSinkAccel * SinkBoost;
+	Self.SmHandR = MoveTowardAccel(Self.SmHandR, Self.SmHandVelR, WantHandR,
+		MaxSpeed, MaxAccel, Dt);
+	Self.SmHandL = MoveTowardAccel(Self.SmHandL, Self.SmHandVelL, WantHandL,
+		MaxSpeed, MaxAccel, Dt);
 	// Passthrough must be exact: a leftover Ready target lerping in still
-	// folds the spine for a beat after every gesture.
+	// folds the spine for a beat after every gesture. The stored velocity has to
+	// die with it, or the next gesture starts by carrying the old one.
 	if (Blend < 0.05f)
 	{
 		Self.SmHandR = WantHandR;
 		Self.SmHandL = WantHandL;
+		Self.SmHandVelR = FVector::ZeroVector;
+		Self.SmHandVelL = FVector::ZeroVector;
 	}
 	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
 	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);
@@ -923,6 +940,50 @@ FVector ArcAround(FVector Pivot, FVector A, FVector B, float T)
 	if (RA < 1.0f || RB < 1.0f) return A + (B - A) * T;
 	FVector Dir = (DA / RA + (DB / RB - DA / RA) * T).GetSafeNormal();
 	return Pivot + Dir * (RA + (RB - RA) * T);
+}
+
+// THE SINK'S SECOND LIMIT: acceleration.
+//
+// MoveTowardClamped below caps how far an effector may travel in a frame and
+// nothing else, so it has no memory of which way the hand was already going. A
+// target that flips hand the hand reverses at the FULL speed cap in a single
+// frame — 900cm/s one way, 900cm/s the other, no deceleration in between. That
+// is what "stötiga slaganimationer" is, and it is invisible to the teleport
+// monitor because the speed limit was never broken. Measured over three runs:
+// 8878 direction reversals past 90 degrees inside hit gestures, worst 178, and
+// the samples show both sides of the reversal pinned at the cap.
+//
+// A limb cannot do that. It has to bleed off the speed it has before it can
+// build speed the other way, so the hand carries a velocity and the velocity
+// itself is rate-limited. Speed cap unchanged; SinkBoost opens both, so a whip
+// still snaps.
+FVector MoveTowardAccel(FVector From, FVector& Vel, FVector To,
+	float MaxSpeed, float MaxAccel, float Dt)
+{
+	if (Dt <= 0.0f) return From;
+	// The velocity that would land exactly on the target this frame, capped.
+	FVector Want = (To - From) / Dt;
+	float WantSpeed = Want.Size();
+	if (WantSpeed > MaxSpeed) Want *= (MaxSpeed / WantSpeed);
+	// ...approached under an acceleration limit rather than adopted outright.
+	FVector DV = Want - Vel;
+	float DVLen = DV.Size();
+	float MaxDV = MaxAccel * Dt;
+	if (DVLen > MaxDV && DVLen > 0.0001f) DV *= (MaxDV / DVLen);
+	Vel += DV;
+	FVector Next = From + Vel * Dt;
+	// Never overshoot the target: if the step would carry past it, land on it
+	// and drop the velocity to what the remaining distance justifies.
+	FVector ToTarget = To - From;
+	if (ToTarget.SizeSquared() > 0.0001f
+		&& (Next - From).SizeSquared() > ToTarget.SizeSquared())
+	{
+		Vel = ToTarget / Dt;
+		float VS = Vel.Size();
+		if (VS > MaxSpeed) Vel *= (MaxSpeed / VS);
+		return To;
+	}
+	return Next;
 }
 
 // Move From toward To by at most MaxStep (cm) — the sink's speed limiter.
