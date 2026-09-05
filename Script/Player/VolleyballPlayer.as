@@ -356,6 +356,15 @@ class AVolleyballPlayer : APawn
 		// "Paint Tint" on a material that only has "Tint" and the bodies shipped
 		// untinted — the same silent-miss the two earlier wrong names caused.
 		// Setting both is harmless: each mesh ignores the name it does not have.
+		ApplyBodyTint(TeamBodyTint());
+	}
+
+	// The tinting loop itself, so light graphics mode can reuse it with a colour
+	// of its own instead of re-implementing the two-parameter-names dance above.
+	private void ApplyBodyTint(FLinearColor Tint)
+	{
+		if (Mesh == nullptr) return;
+
 		int NumSlots = Mesh.GetNumMaterials();
 		for (int i = 0; i < NumSlots; i++)
 		{
@@ -365,68 +374,66 @@ class AVolleyballPlayer : APawn
 			UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, SlotMat);
 			if (MID != nullptr)
 			{
-				MID.SetVectorParameterValue(n"Paint Tint", TeamBodyTint());
-				MID.SetVectorParameterValue(n"Tint", TeamBodyTint());
+				MID.SetVectorParameterValue(n"Paint Tint", Tint);
+				MID.SetVectorParameterValue(n"Tint", Tint);
 			}
 		}
 	}
 
 	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
 	//
-	// The body drops its textured skin and keeps only its reflection layer: one
-	// BasicShapeMaterial per slot, near-black team-tinted base colour at roughness
-	// 0.05, so what you see of a player is the sky and the sun bouncing off a
-	// smooth shell. Cheap as well as distinctive — no texture sampling and no
-	// shadow casting — which is the whole point of the mode.
+	// The body keeps its own material and gets a strong flat team tint, and it
+	// stops casting shadows. That is all the mode does to a player.
 	//
-	// Restoring does NOT keep the old MIDs around. Mesh.SetMaterial(i, nullptr)
-	// clears the component override so the slot falls back to the skeletal mesh's
-	// own material, and ApplyTeamMaterial() then re-creates the tinted MIDs from
-	// scratch — the same path startup takes. Holding the previous MIDs in a member
-	// array would work too, but this way there is nothing to keep alive.
+	// IT USED TO TRY FOR MORE, AND THE MORE NEVER RENDERED. The first version
+	// swapped every slot for /Engine/BasicShapes/BasicShapeMaterial at roughness
+	// 0.05 — a mirror shell, "the player's reflection layer" — and in the editor
+	// that looked right, because the editor quietly sets a material's usage flags
+	// for you when you assign it. In a real -game run the log says:
+	//
+	//   Material /Engine/BasicShapes/BasicShapeMaterial missing usage flag
+	//   SkeletalMesh! Default Material will be used in game.
+	//
+	// So the shells were the engine's default material all along: four black
+	// cutouts, unmoved by any base colour, roughness or light we threw at them —
+	// which is exactly how it filmed. BasicShapeMaterial is fine on TeamRing and
+	// the court because those are procedural/static meshes; a SKELETAL mesh needs
+	// bUsedWithSkeletalMesh, and nothing in script can set that flag.
+	//
+	// Getting the mirror look back means authoring a material asset with that flag
+	// ticked — and Content/*.uasset is deliberately outside git (see CLAUDE.md), so
+	// such an asset would be missing on a fresh clone and in CI, i.e. the mode would
+	// silently fall back to black again on exactly the machines nobody is watching.
+	// A tint on the material the mesh already ships with cannot fail that way.
+	//
+	// Restoring does NOT keep the old MIDs around: ApplyTeamMaterial() re-creates
+	// them from the slots' own materials, the same path startup takes.
 	private bool bLightGraphics = false;
 
 	void SetLightGraphics(bool bOn)
 	{
 		if (Mesh == nullptr || bOn == bLightGraphics) return;
 
-		int NumSlots = Mesh.GetNumMaterials();
-
 		if (bOn)
-		{
-			UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
-				"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-			if (Base == nullptr) return;   // stay in normal mode rather than go invisible
-
-			for (int i = 0; i < NumSlots; i++)
-			{
-				UMaterialInstanceDynamic MID = Mesh.CreateDynamicMaterialInstance(i, Base);
-				if (MID == nullptr) continue;
-				MID.SetVectorParameterValue(n"Color", ShellColor());
-				MID.SetScalarParameterValue(n"Roughness", 0.05f);
-			}
-			Mesh.SetCastShadow(false);
-		}
+			ApplyBodyTint(LightModeTint());
 		else
-		{
-			for (int i = 0; i < NumSlots; i++)
-				Mesh.SetMaterial(i, nullptr);
 			ApplyTeamMaterial();
-			Mesh.SetCastShadow(true);
-		}
 
+		Mesh.SetCastShadow(!bOn);
 		bLightGraphics = bOn;
 	}
 
-	// Dark and hued rather than a flat grey: at this roughness the shell is mostly
-	// specular, so the base colour only has to carry enough team identity to tell
-	// two shells apart in a scrum at the net. TeamRing on the sand — which the mode
-	// deliberately keeps — is still the primary team read.
-	private FLinearColor ShellColor() const
+	// Far stronger than TeamBodyTint(): this is a multiply over the body texture,
+	// and in light graphics the point is to tell two bodies apart instantly with a
+	// beach that is no longer there to give them context. Blue and orange rather
+	// than blue and red — red goes muddy against the sand-free grey-blue ground.
+	// Values above ~2 blow the texture out to a flat silhouette, which is the
+	// failure this whole mode keeps circling back to; do not raise them further.
+	private FLinearColor LightModeTint() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.09f, 0.17f, 0.36f, 1)
-			: FLinearColor(0.36f, 0.11f, 0.08f, 1);
+			? FLinearColor(0.30f, 0.75f, 1.90f, 1)
+			: FLinearColor(1.90f, 0.70f, 0.18f, 1);
 	}
 
 	// Kept close to the material's own default (0.92 grey) on purpose. "Paint Tint"
@@ -2320,31 +2327,74 @@ class AVolleyballPlayer : APawn
 	// a fatter volume than a single bone point, so this is generous on purpose:
 	// effective catch radius = ArmContactRadius + BallRadius (~42cm), which fairly
 	// represents an outstretched arm meeting the ball.
+	// STILL 32, and now that is a measured floor rather than an untested habit.
+	// With the limb modelled as a real segment the obvious next move was to
+	// shrink this toward an actual forearm, which is also what would force the
+	// arm poses to be right instead of letting a bubble cover for them. 20 was
+	// measured: jump attacks fell 51 -> 15 of ~70 third touches and the attack
+	// contact height dropped 84 -> 46cm above the actor centre. The IK cannot
+	// yet put the hand on the ball accurately enough to live inside a 31cm
+	// volume at swing speed. Tighten this only together with that.
 	float ArmContactRadius = 32.0f;
 
-	// Test the ball against the hand/forearm bones. If any is within reach,
-	// fills OutCenter with that bone's position and returns true.
+	// Closest point on the segment AB to P. The one piece of maths a limb needs:
+	// an arm is a segment between two joints, not a point at one of them.
+	private FVector ClosestOnSegment(FVector A, FVector B, FVector P) const
+	{
+		FVector AB = B - A;
+		float L2 = AB.SizeSquared();
+		if (L2 < 1.0f) return A;
+		float T = Math::Clamp((P - A).DotProduct(AB) / L2, 0.0f, 1.0f);
+		return A + AB * T;
+	}
+
+	// Test the ball against the arms as CAPSULES — a segment from elbow to wrist
+	// per forearm, plus the hand — and fill OutCenter with the closest point on
+	// the limb rather than with a joint's position.
+	//
+	// WHY NOT UE'S OWN. USkeletalMeshComponent::GetClosestPointOnPhysicsAsset is
+	// bound in this fork (the K2_ prefix is stripped) and is exactly the right
+	// shape of answer: it walks the physics asset's bodies against the ANIMATED
+	// pose — GetComponentSpaceTransforms, not simulated bodies — and hands back a
+	// closest point, a normal and the bone that owns it. It was tried and it
+	// answers `false` every single time: 240 of 240 probes, bone=None. The reason
+	// is one line of its implementation, `GetPhysicsAsset()` — the component has
+	// no override (deliberately: see SetupRagdollPhysics, applying one destroyed
+	// jumps and contacts) and SKM_Manny_Simple carries no default asset of its
+	// own, so there is nothing for it to walk. The engine has the feature; this
+	// mesh has no geometry to give it.
+	//
+	// What was actually wrong here was never the lack of an engine call. It was
+	// the SHAPE: a forearm modelled as a single sphere at the elbow joint, with a
+	// radius (32 + ball) of 42cm to cover for it. That bubble is bigger than the
+	// arm is long, so the ball could be played from a pose nowhere near it, and
+	// the contact point handed to OnBallContact — which uses it for the bounce
+	// normal — was a joint rather than the surface the ball actually met.
 	bool GetArmContact(FVector BallPos, float BallRadius, FVector& OutCenter) const
 	{
 		if (Mesh == nullptr) return false;
 
-		// Bones that can legally play the ball (hands + forearms, both sides).
-		FName Bones0 = n"hand_r";
-		FName Bones1 = n"hand_l";
-		FName Bones2 = n"lowerarm_r";
-		FName Bones3 = n"lowerarm_l";
-
 		float Reach = ArmContactRadius + BallRadius;
 		float ReachSq = Reach * Reach;
 
-		FVector P;
-		P = Mesh.GetBoneTransform(Bones0).Location;
+		// Forearms: elbow -> wrist. This is the bagger platform, and it is the
+		// segment the ball is supposed to come off.
+		FVector P = ClosestOnSegment(Mesh.GetBoneTransform(n"lowerarm_r").Location,
+			Mesh.GetBoneTransform(n"hand_r").Location, BallPos);
 		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
-		P = Mesh.GetBoneTransform(Bones1).Location;
+
+		P = ClosestOnSegment(Mesh.GetBoneTransform(n"lowerarm_l").Location,
+			Mesh.GetBoneTransform(n"hand_l").Location, BallPos);
 		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
-		P = Mesh.GetBoneTransform(Bones2).Location;
+
+		// Hands: wrist -> middle knuckle, the cup that takes a set and the
+		// surface that tops a spike.
+		P = ClosestOnSegment(Mesh.GetBoneTransform(n"hand_r").Location,
+			Mesh.GetBoneTransform(n"middle_01_r").Location, BallPos);
 		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
-		P = Mesh.GetBoneTransform(Bones3).Location;
+
+		P = ClosestOnSegment(Mesh.GetBoneTransform(n"hand_l").Location,
+			Mesh.GetBoneTransform(n"middle_01_l").Location, BallPos);
 		if ((BallPos - P).SizeSquared() <= ReachSq) { OutCenter = P; return true; }
 
 		return false;
