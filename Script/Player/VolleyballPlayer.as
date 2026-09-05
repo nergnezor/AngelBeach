@@ -2473,7 +2473,16 @@ class AVolleyballPlayer : APawn
 	// contact height dropped 84 -> 46cm above the actor centre. The IK cannot
 	// yet put the hand on the ball accurately enough to live inside a 31cm
 	// volume at swing speed. Tighten this only together with that.
-	float ArmContactRadius = 24.0f;
+	//
+	// RETESTED at 24 after the strike height was fixed to the reach the rig
+	// actually has — the change that took third touches hit as an attack from
+	// 47% to 69%, i.e. the hand is now meeting the ball far better than when 20
+	// was tried. It still does not survive: attacks 15-19 -> 11-14 over three
+	// runs each (ranges do not overlap), the attack share back down to 52%, and
+	// total contacts 342 -> 311. The hand's residual error at contact is 33cm on
+	// a landed spike, so a 35cm effective volume is not a margin, it is the
+	// whole budget. Next attempt should wait for that number to come down.
+	float ArmContactRadius = 32.0f;
 
 	// Closest point on the segment AB to P. The one piece of maths a limb needs:
 	// an arm is a segment between two joints, not a point at one of them.
