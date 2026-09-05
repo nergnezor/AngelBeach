@@ -1,104 +1,78 @@
-// Fixed broadcast camera. Reorients between two rigs so the court's long
-// (16 m) side always runs along the screen's long side, whichever way the
-// device is held — see EndCamPos / SideCamPos below. Field of view is fit
-// dynamically every frame (FitFieldOfView) rather than relying on a hand-tuned
-// distance per rig, so the whole court stays in frame on any real device
-// aspect ratio — see that function for why a fixed distance can't do this.
+// Broadcast camera. Reorients between two rigs so the court's long (16 m)
+// side always runs along the screen's long side, whichever way the device is
+// held — see EndCamPos / SideCamPos below. Field of view is fit dynamically
+// every frame (FitFieldOfView) around a small zone centred on the ball
+// (FocusHalfExtent) rather than the whole court — see that function and
+// 2026-09-06's comment on EndCamPos for why "the whole court always in
+// frame" and "zoomed in" cannot both be true from a fixed rig, and why this
+// class no longer tries for the former.
 class ABeachVolleyballCamera : AActor
 {
 	UPROPERTY(DefaultComponent, RootComponent)
 	UCameraComponent CameraComp;
 
-	// PORTRAIT rig: behind Team A's baseline, looking down the length of the court,
-	// so the 16 m length reads as vertical depth (near/far baseline separation) —
-	// the tall screen axis. This is the original (and only, pre-2026-09-02) camera.
+	// PORTRAIT rig: behind Team A's baseline, looking down the court's length.
+	// LANDSCAPE rig (below): off one sideline, looking across its width.
+	// Full tuning history is in git log for these two lines; kept out of here
+	// so this stays editable at a glance — the short version, current as of
+	// 2026-09-06:
 	//
-	// HEIGHT IS THE DEPTH CUE. At the old 420 the view was almost level with the
-	// sand, which foreshortens the court so hard that 16 m of depth collapsed into a
-	// thin band — the whole playfield occupied barely a third of the frame height and
-	// there was no way to judge how far apart anyone stood. Lifting the eye opens the
-	// court back out into a readable rectangle: near and far baselines separate, the
-	// gap between players becomes a distance you can actually see.
+	// Earlier revisions of this file tried to keep the WHOLE 16x8m court in
+	// frame at all times, which caps how much "zoom" is possible from a fixed
+	// rig: FitFieldOfView had to widen (fisheye-prone) for any court corner
+	// that got too close. Erik asked to "dubbla zoomen" (double the zoom) —
+	// not reachable under that rule (halving these distances measured
+	// 137-170° required FOV, plus a latent bug where FitFieldOfView's own
+	// depth<50 skip starts dropping corners from the calculation entirely at
+	// that range, silently under-fitting). Decided instead to DROP the
+	// whole-court guarantee: FitFieldOfView (below) now fits a small zone
+	// centred on the ball (FocusHalfExtent) rather than the court's corners,
+	// so the far side of the court routinely leaves frame during play — the
+	// tradeoff Erik chose for a real telephoto-zoomed shot of the action.
 	//
-	// RAISED AGAIN 2026-09-01, 560 -> 850, distance still unchanged at 1050.
-	// Erik asked for players/lines/ball position to read as clearly as possible —
-	// a broadcast-style steeper angle over the old cinematic one that was tuned to
-	// keep the sunset horizon in frame. Deliberately not the earlier-rejected
-	// 900 @ -1250: that combo moved the camera BACK at the same time it went up,
-	// which is what shrank the court to a small rectangle with an empty foreground —
-	// the failure was the added distance, not the height. Raising the eye alone
-	// (distance held at the original 1050) buys the steeper, more plan-like angle
-	// on the court lines and ball height without that penalty.
-	//
-	// The distance/height here only sets the CAMERA'S POSITION now — how tight the
-	// shot reads is FitFieldOfView's job, not this number (see 2026-09-02 note there).
-	//
-	// DOLLIED BACK 2026-09-03, 1050/850 -> 2100/1560 (Erik: portrait's sidelines
-	// converged too hard toward a vanishing point — wanted them flatter/more
-	// parallel, plus tighter margins). The note above ("the failure was the
-	// added distance, not the height") is from BEFORE FitFieldOfView existed:
-	// under a fixed/hand-tuned FOV, moving back really did just shrink the
-	// court into a small rectangle with empty foreground. Now FOV is
-	// recomputed every frame from the LIVE camera position (FitFieldOfView),
-	// so moving back is compensated by an automatically narrower FOV —
-	// framing tightness is preserved, only perspective convergence drops.
-	// This is a straight 2x dolly-back along the same look-at ray (same
-	// downward viewing angle, so the tuned legibility/steepness is
-	// unchanged) — MEASURED (computed, not yet seen — this machine cannot
-	// render, see nullrhi-different-simulation): raw content half-angles
-	// roughly halve (42°/44° -> 17°/20°), and the excess margin that
-	// FitFieldOfView's max(horiz,vert) leaves on the non-binding axis at a
-	// tall phone aspect drops from ~20° to ~13°. Fully eliminating that
-	// excess needs a near-overhead angle, which trades away the steep
-	// broadcast look tuned above — this is the flattening trade Erik chose
-	// over that.
-	//
-	// DOLLIED BACK AGAIN 2026-09-05, then REVERSED THE SAME DAY. The dolly-back
-	// above (1.3x further, same math as the 2026-09-03 step) was computed on
-	// this machine without ever being seen rendered — it cannot render (see
-	// nullrhi-different-simulation) — on the theory that "mer inzoomad kamera
-	// och lite mindre perspektiv" meant more telephoto compression. Erik tried
-	// it on device and went the other way instead: these are now his own
-	// hand-set numbers, MUCH closer than any dolly-back step ever was (closer
-	// even than the original pre-2026-09-03 1050/850). Read "inzoomad" as
-	// "physically closer", not "narrower FOV" — FitFieldOfView will always
-	// widen to keep the full court in frame regardless of distance, so the
-	// only way to actually get closer to the subjects is to move the rig in.
-	FVector EndCamPos = FVector(-300, 0, 600);
+	// THE ACTUAL ZOOM LEVER IS FocusHalfExtent, NOT THIS DISTANCE — caught by
+	// rendering before this shipped: the first attempt just moved both rigs
+	// much farther back with the same 350 half-extent, on the reasoning that
+	// farther = narrower FOV = more telephoto. True, but useless on its own —
+	// narrowing FOV to match a farther camera at the SAME box size reproduces
+	// the SAME on-screen framing (that's what "zoom compensation" means), not
+	// a bigger one. A screenshot at that distance showed the entire court
+	// still comfortably in frame — no tighter than before FocusHalfExtent
+	// existed. Real magnification needs the box itself smaller at a given
+	// distance; distance here is now just each rig's own knob for matching
+	// its FOV to the other rig's, not the zoom control.
+	FVector EndCamPos = FVector(-800, 0, 950);   // unchanged from the previous round
+	FVector SideCamPos = FVector(0, -1300, 1950); // moved out along the same angle
+	// (33.7° off vertical, same as before) so landscape's naturally-tighter
+	// geometry at short range doesn't need a different FocusHalfExtent than
+	// portrait's to land on a comparable FOV.
 
-	// LANDSCAPE rig — also hand-set 2026-09-05, alongside EndCamPos above.
-	// NO LONGER off one sideline: X=Y=0 puts it dead centre over the net,
-	// looking straight down (LookAt is (0,0,140), directly below at this X/Y),
-	// a top-down crane shot rather than a side-on one. The "off one sideline"
-	// framing description this replaced no longer applies — if that framing
-	// is wanted back, this needs a nonzero Y again, not just a distance change.
-	FVector SideCamPos = FVector(0, 0, 1000);
+	// Half-size (cm) of the square zone around the ball that FitFieldOfView
+	// guarantees stays in frame — NOT the court's own half-extents anymore
+	// (see EndCamPos's comment). 200 = a 4x4m window: a hitter and the
+	// teammate setting them up, not the far baseline. Halved from an
+	// unrendered first guess (350) once the math above was actually checked
+	// against a screenshot. With the CamPos values above this measures
+	// ~34-45° across the whole court (ball at centre vs. right at this rig's
+	// baseline) for both rigs — roughly half the ~89-91° either rig measured
+	// under the old whole-court fit, i.e. Erik's "dubbla zoomen" taken at
+	// face value.
+	const float FocusHalfExtent = 200.0f;
 
 	FVector CamPos;
 	bool bLandscape = false;
 
-	// Aim point unchanged. Raising CamPos alone already steepens the downward angle;
-	// the horizon/sunset backdrop this used to preserve is a secondary concern now
-	// that legibility of players/lines/ball is the stated goal.
+	// Aim point. Defaults to court centre; Tick pans/tilts it onto the ball's
+	// full X/Y/Z once one is live (see Tick) — this is now the ONLY thing
+	// that tracks play, and it does double duty: FitFieldOfView's focus zone
+	// (FocusHalfExtent) is centred on this same point, so panning onto the
+	// ball is also what keeps it inside the now much-tighter frame. An
+	// earlier revision (2026-09-05) additionally nudged CamPos itself toward
+	// the ball ("den borde även följa bollen en del") on top of this; removed
+	// once this pan/tilt started carrying the ball's X/Y too — physically
+	// moving the rig on top of a camera that already aims itself at the ball
+	// every frame was redundant, not a second effect stacking usefully.
 	FVector CurrentLookAt = FVector(0, 0, 140);
-
-	// Smoothed actual position — CamPos above is the RIG'S ANCHOR (what a
-	// portrait/landscape flip snaps back to), this is where the camera actually
-	// sits once the ball-follow offset below is added and eased in. Kept
-	// separate so a hard orientation cut can still reset instantly (see
-	// UpdateOrientation) without the follow-lerp smearing across it.
-	FVector CurrentCamPos;
-
-	// 2026-09-05 (Erik: "den borde även följa bollen en del" — it should also
-	// follow the ball some). Now that the rig sits much closer to the court
-	// (see EndCamPos/SideCamPos), a dead-still camera reads as detached from
-	// the play in a way it didn't from further back. This is how much of the
-	// ball's court-space XY leaks into camera POSITION on top of the fixed
-	// anchor — not a chase cam glued to the ball, a broadcast operator giving
-	// it a little push toward the action. FitFieldOfView still widens every
-	// frame from wherever the camera actually ends up, so the full court
-	// never leaves frame no matter where this pushes the rig.
-	float CamFollowAmount = 0.2f;
 
 	float FollowSpeed = 4.0f;
 
@@ -120,8 +94,7 @@ class ABeachVolleyballCamera : AActor
 		CameraComp.AspectRatioAxisConstraint = EAspectRatioAxisConstraint::AspectRatio_MaintainXFOV;
 
 		UpdateOrientation();
-		CurrentCamPos = CamPos;
-		SetActorLocation(CurrentCamPos);
+		SetActorLocation(CamPos);
 
 		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr)
@@ -137,25 +110,25 @@ class ABeachVolleyballCamera : AActor
 
 		UpdateOrientation();
 
-		// Look at court centre; follow the ball's height only gently and clamp it so
-		// the camera never tilts up into empty sky on high balls.
+		// Look at court centre by default; once the ball is live, pan/tilt the
+		// aim onto it (X/Y directly, Z gently clamped so a high ball doesn't
+		// tilt the camera up into empty sky). This is now the PRIMARY way the
+		// camera tracks play — FitFieldOfView's focus zone (FocusHalfExtent)
+		// is centred on this same point, so panning onto the ball is what
+		// keeps it (and not empty sand) inside the zoomed-in frame.
 		FVector Target = FVector(0, 0, 140);
 		if (Ball != nullptr && Ball.bInPlay)
+		{
+			Target.X = Ball.Position.X;
+			Target.Y = Ball.Position.Y;
 			Target.Z = Math::Clamp(140.0f + Ball.Position.Z * 0.25f, 140.0f, 320.0f);
+		}
 
-		// Smooth tilt toward target
+		// Smooth pan/tilt toward target
 		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);
 		CurrentLookAt = CurrentLookAt + (Target - CurrentLookAt) * Alpha;
 
-		// Camera POSITION also eases toward the ball's XY, same Alpha/reasoning
-		// as the look-at tilt above — see CamFollowAmount.
-		FVector PosTarget = CamPos;
-		if (Ball != nullptr && Ball.bInPlay)
-			PosTarget += FVector(Ball.Position.X, Ball.Position.Y, 0.0f) * CamFollowAmount;
-		CurrentCamPos = CurrentCamPos + (PosTarget - CurrentCamPos) * Alpha;
-		SetActorLocation(CurrentCamPos);
-
-		FVector LookDir = (CurrentLookAt - CurrentCamPos).GetSafeNormal();
+		FVector LookDir = (CurrentLookAt - CamPos).GetSafeNormal();
 		SetActorRotation(LookDir.Rotation());
 
 		FitFieldOfView();
@@ -173,8 +146,7 @@ class ABeachVolleyballCamera : AActor
 
 		bLandscape = bNowLandscape;
 		CamPos = bLandscape ? SideCamPos : EndCamPos;
-		CurrentCamPos = CamPos; // hard cut, not eased — see CurrentCamPos's own comment
-		SetActorLocation(CurrentCamPos);
+		SetActorLocation(CamPos);
 	}
 
 	// 2026-09-02: replaces two hand-tuned CamPos distances (one scaled from
@@ -203,17 +175,21 @@ class ABeachVolleyballCamera : AActor
 	// wider frame than intended — "zoom in 3x" is roughly what shrinking that
 	// oversized horizontal fov back down looks like.
 	//
-	// No fixed CamPos distance is correct for every device this way — the
-	// same numbers produce a different crop on every aspect ratio depending
-	// on which axis MaintainYFOV happens to hold fixed. Fix: force
+	// No fixed CamPos distance/FOV pair is correct for every device this way —
+	// the same numbers produce a different crop on every aspect ratio
+	// depending on which axis MaintainYFOV happens to hold fixed. Fix: force
 	// MaintainXFOV instead (BeginPlay — makes FieldOfView deterministically
 	// the horizontal fov, full stop), then compute that horizontal fov HERE,
 	// every frame, from the actual runtime aspect ratio and the actual
-	// current camera transform, large enough that the court's full ground
-	// rectangle (both baselines, both sidelines) PLUS some headroom for a
-	// jumping spiker/high ball is guaranteed inside frame — instead of
-	// hoping a hand-picked distance happens to produce that on whatever
-	// screen it's shown on.
+	// current camera transform.
+	//
+	// FITS A ZONE AROUND THE BALL, NOT THE COURT (changed 2026-09-06 — see
+	// EndCamPos's comment for why). The eight corners below are
+	// (CurrentLookAt.X/Y ± FocusHalfExtent, world Z in {0, ActionHeight}):
+	// X/Y move with wherever the camera is currently panned/tilted (the ball,
+	// once one is live), Z stays two absolute world heights — ground contact
+	// and jump apex — regardless of where that pan point is, since a player
+	// can go from grounded to airborne at any spot on the court.
 	private void FitFieldOfView()
 	{
 		FVector Forward = GetActorForwardVector();
@@ -221,18 +197,18 @@ class ABeachVolleyballCamera : AActor
 		FVector Up = GetActorUpVector();
 		FVector Eye = GetActorLocation();
 
-		const float HalfLength = 800.0f;  // Court.as CourtHalfLength (16m/2)
-		const float HalfWidth = 400.0f;   // Court.as CourtHalfWidth (8m/2)
 		const float ActionHeight = 320.0f; // headroom for a jumping spiker / high ball
+		float FocusX = CurrentLookAt.X;
+		float FocusY = CurrentLookAt.Y;
 
 		float MaxHoriz = 0.0f;
 		float MaxVert = 0.0f;
 		for (int ix = 0; ix < 2; ix++)
 		{
-			float X = (ix == 0) ? -HalfLength : HalfLength;
+			float X = FocusX + ((ix == 0) ? -FocusHalfExtent : FocusHalfExtent);
 			for (int iy = 0; iy < 2; iy++)
 			{
-				float Y = (iy == 0) ? -HalfWidth : HalfWidth;
+				float Y = FocusY + ((iy == 0) ? -FocusHalfExtent : FocusHalfExtent);
 				for (int iz = 0; iz < 2; iz++)
 				{
 					float Z = (iz == 0) ? 0.0f : ActionHeight;
@@ -267,7 +243,14 @@ class ABeachVolleyballCamera : AActor
 		float FovFromVert = 2.0f * Math::Atan2(Aspect * Math::Tan(MaxVert), 1.0f);
 		float FovH = Math::Max(FovFromHoriz, FovFromVert) * (180.0f / PI);
 
-		CameraComp.FieldOfView = Math::Clamp(FovH, 30.0f, 130.0f);
+		// Upper bound dropped 130 -> 105 (Erik, 2026-09-06: "för mycket fisheye"),
+		// kept as a safety net after the focus-zone rework above: current
+		// EndCamPos/SideCamPos/FocusHalfExtent measure ~34-45° across the
+		// whole court (ball at centre vs. ball right at this rig's own
+		// baseline, the worst case), nowhere near 105 — so hitting this clamp
+		// now means either FocusHalfExtent grew a lot or a CamPos got moved
+		// much closer again, not routine play.
+		CameraComp.FieldOfView = Math::Clamp(FovH, 30.0f, 105.0f);
 	}
 
 	private void FindBall()
