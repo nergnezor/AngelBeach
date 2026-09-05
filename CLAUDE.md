@@ -134,6 +134,15 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
   mid-run. Choreograph UNHURRIED (serve = 1.9s), give gestures ~0.3s lead time before
   contact, and verify moving-target behavior in MatchFilmer bursts — the PhotoBooth's
   static poses ALWAYS converge and will hide this class of problem.
+- **Poses are choreographed against TIME TO CONTACT, not against "a gesture exists".**
+  `Reach()` carries the planner's τ (`AVolleyballPlayer::ReachTau`, ticking down every
+  frame); `GestureClock` turns it into monotone 0→1 progress — monotone because τ is a
+  re-prediction and a wind-up must never un-wind. `Prep` in `PlayerIK.as` is that clock
+  remapped so the PARKED poses (bump platform, set window) are built and still 0.4s
+  before contact, while the whip (spike backswing → cocked → strike) lands 0.18s before
+  it. Without this the arms snapped into the final contact shape and held it motionless
+  for the whole 1.15s gesture lead — "de har inga förberedande rörelser", and 40% more
+  hand reversals than filling that second with the movement into the pose.
   The older `ArmRotR/L` + `Transform (Modify) Bone` approach below is SUPERSEDED but the
   bone-space lessons still apply if Modify Bone nodes come back:
 - **The Modify Bone nodes are configured: Rotation Mode = `Add to Existing`, Rotation Space =

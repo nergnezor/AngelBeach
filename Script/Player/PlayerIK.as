@@ -164,6 +164,38 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// THROUGH the ball along the aim at contact instead of freezing on it.
 	float Swing = Self.SwingProgress();
 
+	// --- THE PREPARATION CLOCK ----------------------------------------------
+	// 0 when the gesture began, 1 at the contact it was started for. The pawn
+	// carries the time-to-contact the planner handed over (Self.ReachTau); this
+	// turns it into the monotone progress the poses are choreographed against
+	// (see GestureClock — a wind-up never un-winds).
+	//
+	// Every stroke below used to be posed as a function of Blend alone, which is
+	// the 0.2s ramp that says "a gesture exists". So the whole gesture lead — a
+	// second and a bit that the planner deliberately buys, and that the AI
+	// spends walking to the spot and planting — was animated as: snap into the
+	// final contact shape, then hold it, motionless, until the ball turns up.
+	// A player with no wind-up.
+	const float PrepWindow = 1.15f;   // = MB_GestureLead, the lead the planner buys
+	const float PrepSettle = 0.40f;   // parked poses are DONE this long before contact
+	{
+		float Raw;
+		if (Self.ReachTau < 90.0f)
+			Raw = Math::Clamp((PrepWindow - Self.ReachTau) / PrepWindow, 0.0f, 1.0f);
+		else
+			Raw = Blend;   // no plan behind this reach (AutoReach, dive rescue)
+		if (Swing > 0.0f) Raw = 1.0f;              // contact fired: the wind-up is over
+		if (Raw > Self.GestureClock) Self.GestureClock = Raw;
+	}
+	// The poses that PARK at the meet point (bump, set) want to arrive EARLY and
+	// then be still — "set your platform and let the ball come to you", and the
+	// hard-won rule that a static target is the one thing the speed-limited FBIK
+	// reliably converges on. So their preparation runs out at PrepSettle, not at
+	// contact. The whip strokes use GestureClock raw: a bow has to be drawn at
+	// the moment the hand meets the ball, not a third of a second before it.
+	float Prep = MinJerk(Math::Clamp(
+		Self.GestureClock * PrepWindow / (PrepWindow - PrepSettle), 0.0f, 1.0f));
+
 	if (Self.CurrentHit == EHitType::Hit_Bump)
 	{
 		// Bagger/dig: arms STRAIGHT, hands JOINED, contact on the FOREARMS. The
@@ -267,7 +299,24 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// on its own, because the pre-pull drags the root toward the goal whether
 		// or not the arm could have got there by itself.
 		float Ext = Math::Max((Platform - ChestMid).Size(), 72.0f);  // lock the elbows out
-		FVector PlatEnd = ChestMid + PlatDir * Ext;
+		// THE PLATFORM IS BUILT, NOT CONJURED. It starts as the loaded ready
+		// shape every defender waits in — hands joined low and in front, elbows
+		// still bent — and travels out to the meet point, arriving locked out and
+		// planted PrepSettle before the ball. That is the same pose it used to
+		// teleport into; the only thing that changed is that the second of lead
+		// time now contains the movement into it.
+		//
+		// THE READY END IS ANCHORED IN ACTOR SPACE, not on ChestMid, for exactly
+		// the reason the Ready hands above are: the chest is the SOLVER'S OUTPUT.
+		// A target defined purely relative to it is a closed loop with nothing
+		// damping it, and this one is worse than the ready pose because the whole
+		// preparation would ride it. Measured with the first (chest-anchored)
+		// version of this build: pelvis reversals 1-7 per run -> 9-14. The final
+		// platform still hangs off the chest — it has the meet point, a world
+		// anchor, holding the other end.
+		FVector PlatFinal = ChestMid + PlatDir * Ext;
+		FVector PlatReady = ActorMid + Up * (ShoulderUp - 30.0f) + Fwd * 30.0f;
+		FVector PlatEnd = PlatReady + (PlatFinal - PlatReady) * Prep;
 		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
 		// a bagger is a controlled swing from the shoulders, not a held tray.
 		//
@@ -320,9 +369,15 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		ContactR = PlatEnd - Right * 5.0f;
 		ContactL = PlatEnd + Right * 5.0f;
 		// Elbow hints sit ON the shoulder->hand line, nudged down/in, so the IK
-		// keeps the arms straight instead of chicken-winging them outward.
+		// keeps the arms straight instead of chicken-winging them outward — and
+		// they travel with the platform, or they would point at the meet point
+		// while the hands are still gathered low in front of the hips.
+		FVector ReadyPoleR = ReadyShR + Fwd * 16.0f - Up * 30.0f - Right * 4.0f;
+		FVector ReadyPoleL = ReadyShL + Fwd * 16.0f - Up * 30.0f + Right * 4.0f;
 		PoleR = ShR + PlatDir * 45.0f - Up * 22.0f - Right * 6.0f;
 		PoleL = ShL + PlatDir * 45.0f - Up * 22.0f + Right * 6.0f;
+		PoleR = ReadyPoleR + (PoleR - ReadyPoleR) * Prep;
+		PoleL = ReadyPoleL + (PoleL - ReadyPoleL) * Prep;
 		// Forearm platform faces up toward the aim arc.
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
@@ -382,6 +437,12 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 				: Self.ReachContact;
 		}
 		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
+		// PREPARATION: the window is not born above the brow. The hands gather in
+		// front of the chest and RISE into it, finishing before the ball arrives
+		// (Prep runs out at PrepSettle). Same reason as the bump's build — and the
+		// gathered end is in ACTOR space for the same reason too (see there).
+		FVector ReadyCup = ActorMid + Up * (ShoulderUp - 4.0f) + Fwd * 22.0f;
+		Cup = ReadyCup + (Cup - ReadyCup) * Prep;
 		FVector Push = (AimFlat * 0.6f + Up * 0.8f).GetSafeNormal();
 
 		// Offset along the push axis: CUSHION (give) then DRIVE through. Swing is
@@ -411,8 +472,14 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		ContactL = Cup - Right * 10.0f + Extend;
 		// Elbows OUT to the sides and forward — the open triangle window. (The old
 		// poles pulled the elbows INWARD, cramping the shape into a pancake.)
+		// They OPEN as the window rises: tucked at the ribs while gathering, out
+		// and forward once the triangle is up.
+		FVector ReadyPoleR = ReadyShR + Fwd * 8.0f + Right * 7.0f - Up * 20.0f;
+		FVector ReadyPoleL = ReadyShL + Fwd * 8.0f - Right * 7.0f - Up * 20.0f;
 		PoleR = ShR + Fwd * 30.0f + Right * 18.0f + Up * 4.0f;
 		PoleL = ShL + Fwd * 30.0f - Right * 18.0f + Up * 4.0f;
+		PoleR = ReadyPoleR + (PoleR - ReadyPoleR) * Prep;
+		PoleL = ReadyPoleL + (PoleL - ReadyPoleL) * Prep;
 		PalmR = (AimFlat * 0.5f + Up).GetSafeNormal().Rotation();
 		PalmL = PalmR;
 		// Legs load through the cushion and EXTEND through the drive — a set's
@@ -461,7 +528,28 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector Strike = ShR + Up * StrikeUp + Fwd * 24.0f + Right * 6.0f;  // above & front of R shoulder
 		FVector Finish = ShR - Up * 42.0f + Fwd * 6.0f - Right * 32.0f;     // snap down & across to far hip
 
+		// TIME is the honest clock for a wind-up: the bow has to be fully drawn
+		// at the moment the hand meets the ball. The ball-drop remap below reads
+		// like it does that, but it normalises over 260cm and a SET only peaks
+		// about a metre above the strike point — so every swing started at
+		// SwingPhase 0.6, already past the cocked phase, and the attacker's arm
+		// went straight to the strike with no backswing at all. That is the
+		// spike's share of "inga förberedande rörelser". The drop remap stays as
+		// the fallback for reaches nobody planned (AutoReach, whiff rescue).
+		// ...and it finishes SpikeLead BEFORE contact, not at it. The FBIK
+		// effectors converge at a limited speed, so a hand whose target reaches
+		// the strike point exactly at tau=0 arrives after the ball has gone —
+		// the same lesson the serve toss cost (choreograph unhurried, give the
+		// gesture lead time). Timing the bow to land on tau=0 measured 10-15
+		// attacks against 14-18 for the old drop clock.
+		const float SpikeLead = 0.18f;
 		float SwingPhase = Blend;
+		if (Self.ReachTau < 90.0f)
+		{
+			SwingPhase = Math::Clamp(
+				Self.GestureClock * PrepWindow / (PrepWindow - SpikeLead), 0.0f, 1.0f);
+		}
+		else
 		{
 			ABall SB = Self.GetWorldBall();
 			if (SB != nullptr && SB.bInPlay)
@@ -750,6 +838,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		Self.SmHandVelR = FVector::ZeroVector;
 		Self.SmHandVelL = FVector::ZeroVector;
 		Self.SmPlatDir = FVector::ZeroVector;
+		Self.GestureClock = 0.0f;
 	}
 	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
 	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);

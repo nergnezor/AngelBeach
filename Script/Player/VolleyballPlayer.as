@@ -913,6 +913,7 @@ class AVolleyballPlayer : APawn
 		{
 			CurrentHit = EHitType::Hit_None;
 			GestureAge = 0.0f;
+			GestureClock = 0.0f;
 		}
 
 		// Per-attempt summary tracking: while gesturing, remember how close the hand
@@ -980,10 +981,12 @@ class AVolleyballPlayer : APawn
 		// so they survive the gap between AI reaction ticks but still fade when
 		// the AI stops asking.
 		ReachHoldTimer -= DeltaTime;
+		ReachTau = Math::Max(ReachTau - DeltaTime, 0.0f);
 		if (ReachHoldTimer <= 0.0f)
 		{
 			bReaching = false;
 			bHasReachContact = false;
+			ReachTau = 99.0f;
 		}
 		// (Crouch decay moved to the TOP of UpdatePlayer — it must run before
 		// the per-frame writers, not after them.)
@@ -2247,6 +2250,27 @@ class AVolleyballPlayer : APawn
 	private float ReachHoldTimer = 0.0f;
 	private float CrouchHoldTimer = 0.0f;
 
+	// SECONDS UNTIL THE CONTACT THIS REACH IS AIMED AT — the other half of the
+	// handover above. 99 = "nobody told me", which every pose falls back from.
+	//
+	// The planner starts the gesture MB_GestureLead (1.15s) before contact, and
+	// until this existed the arms had no way to know that: they snapped into the
+	// final contact shape the frame the AI decided on the stroke and then stood
+	// perfectly still for the best part of a second waiting for the ball. That
+	// is what "de har inga förberedande rörelser" was — not a missing animation,
+	// but a whole second of lead time the poses never spent. It ticks down every
+	// frame (the AI only re-asserts at ~9Hz; a 9Hz staircase driving hand targets
+	// is exactly the class of jerk the sink exists to civilise).
+	float ReachTau = 99.0f;
+	// 0 when the gesture began, 1 at the contact it was started for.
+	//
+	// MONOTONE within a gesture, and that is the point: a wind-up never un-winds.
+	// ReachTau is a re-prediction, so it wobbles; feeding that wobble straight
+	// into the hand targets would let the arms walk backwards down their own
+	// preparation. Reset when the gesture releases (see the Blend<0.05
+	// passthrough in PlayerIK) and when Reach picks a different stroke.
+	float GestureClock = 0.0f;
+
 	// THE ONE CONTACT POINT. Whoever asks for the reach also says WHERE the
 	// contact is, because they already know: the AI hands over Plan.Contact,
 	// the point its feet are walking to, solved by the interpolated
@@ -2264,12 +2288,14 @@ class AVolleyballPlayer : APawn
 	//
 	// So the hands no longer estimate the meet point at all. They aim exactly
 	// where the feet are already going, at decision rate rather than frame rate.
-	void Reach(EHitType Type, FVector Contact)
+	void Reach(EHitType Type, FVector Contact, float Tau = 99.0f)
 	{
 		bReaching = true;
 		ReachHoldTimer = 0.25f;
 		bHasReachContact = Contact.SizeSquared() > 1.0f;
 		if (bHasReachContact) ReachContact = Contact;
+		// ...and WHEN, because the planner already knows. See ReachTau.
+		if (Tau < 90.0f) ReachTau = Math::Max(Tau, 0.0f);
 		if (HitAnimTimer > 0.0f) return;   // don't override an active swing
 		if (Type != CurrentHit)
 		{
@@ -2280,6 +2306,7 @@ class AVolleyballPlayer : APawn
 			if (GestureAge < MinGestureDwell) return;
 			CurrentHit = Type;
 			GestureAge = 0.0f;
+			GestureClock = 0.0f;
 		}
 	}
 
@@ -2383,7 +2410,7 @@ class AVolleyballPlayer : APawn
 		float Tau = 0.0f;
 		float WantZ = (Type == EHitType::Hit_Set) ? ForeheadZ : (FloorZ + 112.0f);
 		Predict::BallTimeToHeight(B, WantZ, Contact, Tau);
-		Reach(Type, Contact);
+		Reach(Type, Contact, Tau);
 	}
 
 

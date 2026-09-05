@@ -1087,7 +1087,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (IsDiving())
 		{
 			// The dive owns movement and facing; just keep the platform out.
-			Reach(EHitType::Hit_Bump, Plan.Contact);
+			Reach(EHitType::Hit_Bump, Plan.Contact, Plan.BallTime);
 			return;
 		}
 
@@ -1206,7 +1206,7 @@ class AAIPlayer : AVolleyballPlayer
 		// the spine to meet it — the "böjer sig framåt" silhouette on every
 		// approach. Late balls still get AutoReach at arm's length.
 		if (Plan.bStartGesture && (bHitterPlanted || DistToGoal < 160.0f))
-			Reach(Intend, Plan.Contact);
+			Reach(Intend, Plan.Contact, Plan.BallTime);
 	}
 
 	// Distance at which we START preparing the swing/arms. Generous so the wind-up
@@ -1642,7 +1642,9 @@ class AAIPlayer : AVolleyballPlayer
 		if ((bGo || !bIsGrounded) && Ball.Position.Z > GetActorLocation().Z + 40.0f)
 		{
 			DoSpike();
-			Reach(EHitType::Hit_Spike, Ball.Position);
+			// Tau here is the time to SpikeStrikeZ from the top of this function —
+			// the clock the arm's backswing is choreographed against.
+			Reach(EHitType::Hit_Spike, Ball.Position, Tau);
 		}
 	}
 
