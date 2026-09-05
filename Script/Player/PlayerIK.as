@@ -219,7 +219,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector PlatformBall = BallContact;
 		if (Self.bHasReachContact)
 		{
-			FVector ToMeet = Self.ReachContact - ChestMid;
+			FVector ToMeet = Self.SmReachContact - ChestMid;
 			// CLAMP TO ARM'S REACH, not to 110cm. The arm spans ~72 from ChestMid
 			// (hands joined on the centreline), so a 110 goal is unreachable and
 			// the full-body IK answers that by dragging the ROOT the difference.
@@ -229,7 +229,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 			// clamp. Off the gesture it sits 0.9cm out.
 			PlatformBall = (ToMeet.Size() > 72.0f)
 				? ChestMid + ToMeet.GetSafeNormal() * 72.0f
-				: Self.ReachContact;
+				: Self.SmReachContact;
 		}
 		FVector Platform = PlatformBall - Up * 12.0f;
 
@@ -346,23 +346,47 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// sits on a sphere of radius Ext around ChestMid and its position is set
 		// purely by the DIRECTION to the meet point, so the answer should be
 		// Ext/range — i.e. amplification grows as the ball comes closer in.
+		//
+		// BOTH STEPS ARE MEASURED IN THE CHEST'S FRAME, and that is the whole
+		// difference between this probe meaning something and not. Taken in world
+		// space it also counts the BODY WALKING: a running player carries PlatEnd
+		// with them while the meet point stands still, which is a ratio of
+		// infinity and has nothing to do with a bearing. It read as amplification
+		// 11.2 at ranges past 30cm — where the model says the answer cannot
+		// exceed Ext/range ~ 2.4 — purely because the gesture now starts a second
+		// before contact, with the hitter still closing.
 		if (Self.MonPlatLogs < 60 && Self.bHasReachContact)
 		{
-			float Range = (Self.ReachContact - ChestMid).Size();
-			if (Self.bMonPlatInit)
+			FVector RelReach = Self.ReachContact - ChestMid;
+			FVector RelPlat = PlatEnd - ChestMid;
+			float Range = RelReach.Size();
+			// SPEND THE SAMPLE BUDGET WHERE THE MODEL SAYS THE DANGER IS. The
+			// cap used to be filled by the long-range frames at the start of a
+			// gesture, which is exactly where amplification cannot happen
+			// (Ext/range < 1.2 out there), leaving the near field with almost no
+			// parked samples to judge from.
+			if (Self.bMonPlatInit && Range < 45.0f)
 			{
-				float RStep = (Self.ReachContact - Self.MonPrevReachC).Size();
-				float PStep = (PlatEnd - Self.MonPrevPlatEnd).Size();
+				float RStep = (RelReach - Self.MonPrevReachC).Size();
+				float PStep = (RelPlat - Self.MonPrevPlatEnd).Size();
 				if (RStep > 0.05f)
 				{
 					Self.MonPlatLogs++;
+					// PREP MUST BE ON THE LINE. The ratio below only means
+					// "how much does meet-point noise move the hand" while the
+					// platform is PARKED; during the build the hand is travelling
+					// out to the meet point on purpose, and counting that as
+					// amplification reads as a threefold regression at every
+					// range (measured: 30cm+ went 1.0 -> 3.44 the day the build
+					// landed, entirely from this).
 					Log("PLATAMP reachStep=" + int(RStep * 100) + " platStep=" + int(PStep * 100)
 						+ " range=" + int(Range) + " ext=" + int(Ext)
+						+ " prep=" + int(Prep * 100)
 						+ " swing=" + int(Swing * 100));
 				}
 			}
-			Self.MonPrevReachC = Self.ReachContact;
-			Self.MonPrevPlatEnd = PlatEnd;
+			Self.MonPrevReachC = RelReach;
+			Self.MonPrevPlatEnd = RelPlat;
 			Self.bMonPlatInit = true;
 		}
 
@@ -401,7 +425,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		float KneeKeyZ = PlatformBall.Z;
 		if (Self.bHasReachContact)
 		{
-			KneeKeyZ = Self.ReachContact.Z;
+			KneeKeyZ = Self.SmReachContact.Z;
 		}
 		else
 		{
@@ -431,10 +455,10 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector CupBall = BallContact;
 		if (Self.bHasReachContact)
 		{
-			FVector ToMeet = Self.ReachContact - ChestMid;
+			FVector ToMeet = Self.SmReachContact - ChestMid;
 			CupBall = (ToMeet.Size() > 72.0f)
 				? ChestMid + ToMeet.GetSafeNormal() * 72.0f
-				: Self.ReachContact;
+				: Self.SmReachContact;
 		}
 		FVector Cup = CupBall - Up * 6.0f;                   // finger window just under the ball
 		// PREPARATION: the window is not born above the brow. The hands gather in

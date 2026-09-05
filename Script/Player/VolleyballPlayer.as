@@ -902,6 +902,24 @@ class AVolleyballPlayer : APawn
 		// Pose shape uses the full 0..1 gesture curve, remapped so even the 0.85
 		// reach hold reaches the contact shape (reach should look committed).
 		float Shape = Math::Clamp(CurrentPose / 0.85f, 0.0f, 1.0f);
+		// Ease the handed-over meet point before the poses read it (see
+		// SmReachContact). Snapped on the first frame of a reach — there is
+		// nothing to ease from, and starting at the previous ball's contact
+		// point would drag the platform across the court.
+		if (bHasReachContact)
+		{
+			if (!bSmReachInit)
+			{
+				SmReachContact = ReachContact;
+				bSmReachInit = true;
+			}
+			else
+			{
+				float EaseA = Math::Clamp(DeltaTime / ReachEaseTime, 0.0f, 1.0f);
+				SmReachContact += (ReachContact - SmReachContact) * EaseA;
+			}
+		}
+		else bSmReachInit = false;
 		this.UpdateIKTargets(Shape, DeltaTime);   // mixin in PlayerIK.as
 
 		// Once the gesture has fully relaxed and we're no longer hitting/reaching,
@@ -986,6 +1004,7 @@ class AVolleyballPlayer : APawn
 		{
 			bReaching = false;
 			bHasReachContact = false;
+			bSmReachInit = false;
 			ReachTau = 99.0f;
 		}
 		// (Crouch decay moved to the TOP of UpdatePlayer — it must run before
@@ -2262,6 +2281,27 @@ class AVolleyballPlayer : APawn
 	// frame (the AI only re-asserts at ~9Hz; a 9Hz staircase driving hand targets
 	// is exactly the class of jerk the sink exists to civilise).
 	float ReachTau = 99.0f;
+	// THE MEET POINT THE HANDS ACTUALLY FOLLOW — ReachContact eased, not snapped.
+	//
+	// The AI re-plans at its reaction cadence (~9Hz) and hands over a fresh
+	// Plan.Contact each time, so the raw point STEPS: measured while the platform
+	// was parked inside 30cm, the meet point moved 0.38cm in a median frame but
+	// 8.9cm at p90 — the tick frames. The platform turns a step of the meet point
+	// into 2.45x that at the hand (it is placed by the BEARING to the point,
+	// walked out 72cm), so a 9cm re-plan became a 22cm hand jump for the sink to
+	// absorb. Fighting the amplification was the wrong end: the fix is to stop
+	// the input from stepping.
+	//
+	// THE TIME CONSTANT IS SHORT, AND THAT IS MEASURED. 0.08s looked obviously
+	// right — it steadied the parked platform tenfold (median step 0.70cm ->
+	// 0.06) — and cost hand reversals 0.110 -> 0.138 per gesture-second, because
+	// an eased point that is still catching up when the swing fires is one more
+	// thing for the stroke to turn around. 0.035 keeps most of the steadiness
+	// (0.24cm) at 0.116, i.e. back inside the baseline's noise. Steadier input
+	// is only worth having while the hand is not paying for the lag.
+	FVector SmReachContact = FVector::ZeroVector;
+	private bool bSmReachInit = false;
+	const float ReachEaseTime = 0.035f;
 	// 0 when the gesture began, 1 at the contact it was started for.
 	//
 	// MONOTONE within a gesture, and that is the point: a wind-up never un-winds.
