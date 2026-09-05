@@ -2473,7 +2473,7 @@ class AVolleyballPlayer : APawn
 	// contact height dropped 84 -> 46cm above the actor centre. The IK cannot
 	// yet put the hand on the ball accurately enough to live inside a 31cm
 	// volume at swing speed. Tighten this only together with that.
-	float ArmContactRadius = 32.0f;
+	float ArmContactRadius = 24.0f;
 
 	// Closest point on the segment AB to P. The one piece of maths a limb needs:
 	// an arm is a segment between two joints, not a point at one of them.
