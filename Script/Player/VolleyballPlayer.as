@@ -1269,6 +1269,36 @@ class AVolleyballPlayer : APawn
 	// almost nothing about whether the players rock. These count the windows that
 	// exceed the limit against the windows that were eligible at all, so the
 	// answer is a rate that means the same thing at any run length.
+	// TORSO PITCH — how far the spine is folded off vertical, in degrees, split
+	// by what the body is doing. The films show players bent to near horizontal
+	// while neither diving nor jumping, and the two candidate causes want
+	// opposite fixes: a locomotion clip that leans (fold while RUNNING, with no
+	// gesture) against the full-body solver hauling the chest down to an
+	// out-of-reach hand goal (fold while DIGGING). Nothing measured either.
+	private float MonTiltStillSum = 0.0f;
+	private float MonTiltStillN = 0.0f;
+	private float MonTiltRunSum = 0.0f;
+	private float MonTiltRunN = 0.0f;
+	private float MonTiltDigSum = 0.0f;
+	private float MonTiltDigN = 0.0f;
+	private float MonTiltMax = 0.0f;
+	// ...and the same fold with NO BALL TO WATCH. The head tracks the ball every
+	// frame with a Look At node; if that node's chain reaches into the spine, a
+	// low ball folds the whole torso toward it and would look exactly like a
+	// locomotion lean — identical on every player, worst when the ball is down.
+	// With the ball dead there is nothing to look at, so this bucket is the
+	// control: if the fold survives it, the clip is leaning; if it collapses,
+	// the head is dragging the chest.
+	private FString MonTiltWorst = "";
+	// The mean says 28 degrees and the worst says 104, and those two are
+	// compatible with completely different games: a body that leans a little all
+	// the time with two dive frames in it, or one that folds double every rally.
+	// Counted over the RUN bucket only, where the question lives.
+	private int MonTiltRunOver45 = 0;
+	private int MonTiltRunOver70 = 0;
+	private float MonTiltDeadSum = 0.0f;
+	private float MonTiltDeadN = 0.0f;
+	private int MonTiltLogs = 0;
 	private int MonWasteWindowsSeen = 0;
 	private int MonWasteOverWindows = 0;
 	private int MonGoalOverWindows = 0;
@@ -1846,6 +1876,15 @@ class AVolleyballPlayer : APawn
 			+ " pelvMedY=" + SlidePct(MonSlideHistY, 0.5f)
 			+ " pelvMedZ=" + SlidePct(MonSlideHistZ, 0.5f)
 			+ " pelvSamples=" + SlideCount(MonSlideHistX)
+			+ " tiltStill=" + int(MonTiltStillSum / Math::Max(MonTiltStillN, 1.0f))
+			+ " tiltRun=" + int(MonTiltRunSum / Math::Max(MonTiltRunN, 1.0f))
+			+ " tiltDig=" + int(MonTiltDigSum / Math::Max(MonTiltDigN, 1.0f))
+			+ " tiltMax=" + int(MonTiltMax)
+			+ " tiltDead=" + int(MonTiltDeadSum / Math::Max(MonTiltDeadN, 1.0f))
+			+ " tiltRunN=" + int(MonTiltRunN)
+			+ " tiltRun45=" + MonTiltRunOver45
+			+ " tiltRun70=" + MonTiltRunOver70
+			+ " | worst " + MonTiltWorst
 			// RAW COUNTS, not a per-rally ratio. Emitted as a percentage first,
 			// this read 100% on every run and said nothing: the denominator is
 			// one or two bookings per rally, so a single unmakeable one pins the
@@ -1937,6 +1976,75 @@ class AVolleyballPlayer : APawn
 			SlideAdd(MonSlideHistX, Slip.X);
 			SlideAdd(MonSlideHistY, Slip.Y);
 			SlideAdd(MonSlideHistZ, Slip.Z);
+		}
+		if (Mesh != nullptr && bIsGrounded && !IsDiving() && !bRagdollActive)
+		{
+			FVector Pelv = Mesh.GetBoneTransform(n"pelvis").Location;
+			FVector Hd = Mesh.GetBoneTransform(n"head").Location;
+			FVector Spine = Hd - Pelv;
+			if (Spine.Size() > 20.0f)
+			{
+				float CosT = Math::Clamp(Spine.GetSafeNormal().Z, -1.0f, 1.0f);
+				float TiltDeg = Math::RadiansToDegrees(Math::Acos(CosT));
+				if (TiltDeg > MonTiltMax)
+				{
+					// WHAT THE BODY WAS DOING AT ITS WORST FOLD. Every player
+					// reports the same maximum to the degree, which is the
+					// signature of a pose being fully reached rather than of a
+					// solver's excursion — so the question is which pose.
+					MonTiltMax = TiltDeg;
+					MonTiltWorst = "tilt=" + int(TiltDeg)
+						+ " spd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
+						+ " hit=" + int(CurrentHit)
+						+ " pose=" + int(CurrentPose * 100)
+						+ " hitAlpha=" + int((Anim != nullptr ? Anim.HitAlpha : 0.0f) * 100)
+						+ " ikAlpha=" + int((Anim != nullptr ? Anim.IKAlpha : 0.0f) * 100)
+						+ " legIK=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100)
+						+ " crouch=" + int((Anim != nullptr ? Anim.CrouchAmount : 0.0f) * 100)
+						+ " swing=" + int(SwingProgress() * 100)
+						+ " headUp=" + int(Hd.Z - Pelv.Z);
+				}
+				// WHEN does the body fold past anything human? Every player
+				// reached exactly 104 degrees, which is a shared pose rather
+				// than a solver reacting to its own situation — so log the state
+				// it happens in rather than guessing which clip it is.
+				if (TiltDeg > 70.0f && MonTiltLogs < 20)
+				{
+					MonTiltLogs++;
+					Log("TILT deg=" + int(TiltDeg)
+						+ " spd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size())
+						+ " hit=" + int(CurrentHit)
+						+ " pose=" + int(CurrentPose * 100)
+						+ " hitAlpha=" + int((Anim != nullptr ? Anim.HitAlpha : 0.0f) * 100)
+						+ " ikAlpha=" + int((Anim != nullptr ? Anim.IKAlpha : 0.0f) * 100)
+						+ " legAlpha=" + int((Anim != nullptr ? Anim.LegIKAlpha : 0.0f) * 100)
+						+ " crouch=" + int((Anim != nullptr ? Anim.CrouchAmount : 0.0f) * 100)
+						+ " land=" + int(LandAbsorbTimer * 100)
+						+ " jumpLoad=" + int(JumpLoadTimer * 100)
+						+ " recover=" + int(DiveRecoverTimer * 100)
+						+ " diving=" + (Anim != nullptr && Anim.bDiving ? 1 : 0));
+				}
+				float Spd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+				ABall TiltBall = GetWorldBall();
+				if (TiltBall == nullptr || !TiltBall.bInPlay)
+				{
+					MonTiltDeadSum += TiltDeg; MonTiltDeadN += 1.0f;
+				}
+				if (CurrentPose > 0.05f && CurrentHit == EHitType::Hit_Bump)
+				{
+					MonTiltDigSum += TiltDeg; MonTiltDigN += 1.0f;
+				}
+				else if (CurrentPose <= 0.05f && Spd > 150.0f)
+				{
+					MonTiltRunSum += TiltDeg; MonTiltRunN += 1.0f;
+					if (TiltDeg > 45.0f) MonTiltRunOver45 += 1;
+					if (TiltDeg > 70.0f) MonTiltRunOver70 += 1;
+				}
+				else if (CurrentPose <= 0.05f && Spd < 30.0f)
+				{
+					MonTiltStillSum += TiltDeg; MonTiltStillN += 1.0f;
+				}
+			}
 		}
 		if (!bMonitorMotion || DeltaTime <= 0.0f) return;
 		UpdateBiomech(DeltaTime);

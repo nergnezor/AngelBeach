@@ -52,14 +52,29 @@ class ABeachVolleyballCamera : AActor
 	// excess needs a near-overhead angle, which trades away the steep
 	// broadcast look tuned above — this is the flattening trade Erik chose
 	// over that.
-	FVector EndCamPos = FVector(-2100, 0, 1560);
+	//
+	// DOLLIED BACK AGAIN 2026-09-05 (Erik: "mer inzoomad kamera och lite
+	// mindre perspektiv" — more zoomed-in, a bit less perspective). Same
+	// lever as above: another ~1.3x dolly-back along the ray toward
+	// CurrentLookAt (0,0,140), not a raw scale of these numbers — the pivot
+	// is the look-at point, not the origin (that's why the 2026-09-03 step
+	// was 1050->2100 on X but 850->1560, not 1700, on Z: 2x of the
+	// LookAt-relative offset (-1050,710), not of the raw position). Farther
+	// + auto-narrowed FOV reads as more telephoto: same framing, flatter
+	// convergence — "more zoomed in" and "less perspective" are the same
+	// knob here, not two separate asks. UNVERIFIED on this machine (no
+	// render), same as the step above — Erik to confirm on device and call
+	// for more/less.
+	FVector EndCamPos = FVector(-2730, 0, 1986);
 
 	// LANDSCAPE rig: off one sideline, centred on the net, looking across the
 	// court's width, so the 16 m length spans the screen's wide axis directly
 	// instead of receding into depth. Centred on X=0 (not Team-A's baseline)
 	// since a side-on broadcast shot has no "near" team the way an end-zone
 	// shot does.
-	FVector SideCamPos = FVector(0, -1700, 1350);
+	// Dollied back 2026-09-05 alongside EndCamPos above — same ~1.3x
+	// LookAt-relative dolly, same reasoning.
+	FVector SideCamPos = FVector(0, -2210, 1713);
 
 	FVector CamPos;
 	bool bLandscape = false;

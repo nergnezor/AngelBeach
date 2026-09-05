@@ -537,6 +537,26 @@ class ABeachVolleyballGameMode : AGameModeBase
 				LC.SetForwardShadingPriority(1);
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 
+				// THE BALL HAS NO SHADOW (Erik, 2026-09-05). CastShadow already
+				// defaults true for any UMeshComponent (see UMeshComponent's own
+				// constructor — it overrides UPrimitiveComponent's CastShadow=false),
+				// so the ball's procedural mesh is already a shadow caster; nothing
+				// in Ball.as turns that off. The likely real cause is size, not
+				// intent: a 21cm sphere is squarely the case Virtual Shadow Maps can
+				// miss or under-resolve — thin/small dynamic casters don't reliably
+				// hit enough shadow-map texels to read, independent of CastShadow.
+				// Contact shadows are the engine's own fix for exactly that: a
+				// screen-space ray march from each shaded pixel that catches small/
+				// fast movers the shadow map's resolution missed. bCastContactShadow
+				// already defaults true on every primitive (ball included) — this
+				// line is the only piece that was actually off (ContactShadowLength
+				// defaults to 0, i.e. disabled) UNVERIFIED on this machine (no
+				// render) — desktop only for now, mobile's forward path is a
+				// separate, already-fragile fix (see the shadow-mobility block
+				// below) not worth risking on an unmeasured guess.
+				if (!bMobile)
+					LC.ContactShadowLength = 0.02f;
+
 				// THIS IS WHY MOBILE HAD NO GROUND SHADOWS AT ALL.
 				//
 				// ADirectionalLight's component defaults to STATIONARY, not Movable
