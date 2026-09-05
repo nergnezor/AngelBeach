@@ -110,6 +110,13 @@ Hard-won gotchas:
 - **A script compile error in `-game` opens a dialog that blocks frame 0 forever**
   (even with `-unattended`). If a run sits at frame `[  0]`, grep the log for
   `Angelscript: Error`. Always wrap runs in `timeout -k 15 <secs>`.
+- **`-resx=1280 -resy=720` hung at frame 0; `-resx=640 -resy=360` runs.** Twice in a
+  row, a MatchFilmer launch at 720p sat at frame `[  0]` until it was killed — no
+  script errors, shader workers idle, the game thread spinning while the render
+  thread waited on a futex. The same build at 640x360 completed 120 shots and quit
+  cleanly, and the plain GameMode at 720p reached frame 999, so it is neither the
+  scene nor the game code. **The screenshots are 1280x720 either way** — HighResShot
+  renders at its own resolution, so nothing is lost by launching small.
 - **`HighResShot` captures ~4 frames AFTER the console command** — don't move the
   camera in that window or every PNG shows the next camera position (PhotoBooth
   holds 0.5s after each shot for this reason).
