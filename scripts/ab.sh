@@ -48,6 +48,15 @@
 # contacts. (Worth remembering when the target is a 60fps phone.) Retake any
 # baseline with this script before comparing against it; at 2.5 minutes a run
 # that is cheap. AB_FPS must be identical on both sides of a comparison.
+#
+# RE-MEASURED 2026-09-05, and the gameplay half of that has closed: 60Hz against
+# 120Hz now gives contacts per rally 4.12-4.33 vs 4.08-5.18 and attacks 15-16 vs
+# 15-17 — overlapping, i.e. no resolvable difference. Nothing was aimed at it;
+# it went away as the contact test became a capsule and the poses became driven
+# by TIME TO CONTACT rather than by the frame (see PlayerIK's preparation clock).
+# What survives is pelvis slide Y, 50 at 120Hz against 55-60 at 60Hz. The rule
+# above is unchanged — same AB_FPS on both sides — but the target device's tick
+# rate is no longer a known gameplay risk.
 set -uo pipefail
 
 # Same NixOS workarounds play.sh documents: the engine binary looks for glib &
