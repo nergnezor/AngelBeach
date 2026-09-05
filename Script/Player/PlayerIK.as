@@ -200,7 +200,47 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 				: Self.ReachContact;
 		}
 		FVector Platform = PlatformBall - Up * 12.0f;
-		FVector PlatDir = (Platform - ChestMid).GetSafeNormal();
+
+		// A SHORT VECTOR HAS NO RELIABLE DIRECTION, and PlatEnd is placed by
+		// taking the bearing from the chest to the meet point and walking Ext
+		// (72cm+) along it — so the hand's position is set by that direction
+		// ALONE. Normalise a 5cm vector and a millimetre of prediction wobble
+		// becomes a centimetre of hand travel. Measured (PLATAMP below), platform
+		// step against meet-point step, bucketed by chest-to-meet range:
+		//
+		//   0-15cm    3.59x       (n=159)
+		//   15-30cm   1.11x
+		//   30cm+     ~1.0x or below
+		//
+		// 0-15cm is not a rare corner — it is where a dig is actually taken, so
+		// the amplifier is loudest exactly at contact. The guard below only
+		// catches an exactly-degenerate vector (under 1mm) and never fires, while
+		// the noisy band starts two orders of magnitude higher.
+		//
+		// So hold the last well-conditioned bearing while inside the noisy band —
+		// the same cure RequestBallFacing uses for the body — and let it die with
+		// the gesture (see the Blend passthrough), because carried across strokes
+		// it would point the next bagger wherever the previous ball happened to
+		// be.
+		//
+		// It cuts the bagger's reversals 106 -> 63 and lowers wasted yaw per
+		// standing second (47-54 -> 23-40) with no gated metric worse. It only
+		// PARTLY addresses what it was aimed at, though: the amplification itself
+		// moves 3.59 -> 3.37, because a gesture that STARTS with the ball already
+		// inside the band has no good bearing to hold and falls through to the
+		// raw path. The rest of that is still open.
+		const float PlatDirMinRange = 25.0f;
+		FVector RawPlatDir = Platform - ChestMid;
+		FVector PlatDir;
+		if (RawPlatDir.Size() >= PlatDirMinRange)
+		{
+			PlatDir = RawPlatDir.GetSafeNormal();
+			Self.SmPlatDir = PlatDir;
+		}
+		else if (Self.SmPlatDir.SizeSquared() > 0.01f)
+			PlatDir = Self.SmPlatDir;
+		else
+			PlatDir = RawPlatDir.GetSafeNormal();
 		if (PlatDir.SizeSquared() < 0.01f) PlatDir = Fwd - Up;
 		// 72cm, not 96: NEVER ASK THE SOLVER FOR SOMETHING IT CANNOT REACH.
 		// The hands join on the centreline, so the span available from ChestMid
@@ -252,6 +292,31 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		else
 			SwingT = -0.18f + 1.18f * MinJerk((Swing - 0.22f) / 0.78f);    // drive through
 		PlatEnd += SwingThrough * SwingT;
+
+		// DIAG: how much does a wobble in the meet point move the hand? PlatEnd
+		// sits on a sphere of radius Ext around ChestMid and its position is set
+		// purely by the DIRECTION to the meet point, so the answer should be
+		// Ext/range — i.e. amplification grows as the ball comes closer in.
+		if (Self.MonPlatLogs < 60 && Self.bHasReachContact)
+		{
+			float Range = (Self.ReachContact - ChestMid).Size();
+			if (Self.bMonPlatInit)
+			{
+				float RStep = (Self.ReachContact - Self.MonPrevReachC).Size();
+				float PStep = (PlatEnd - Self.MonPrevPlatEnd).Size();
+				if (RStep > 0.05f)
+				{
+					Self.MonPlatLogs++;
+					Log("PLATAMP reachStep=" + int(RStep * 100) + " platStep=" + int(PStep * 100)
+						+ " range=" + int(Range) + " ext=" + int(Ext)
+						+ " swing=" + int(Swing * 100));
+				}
+			}
+			Self.MonPrevReachC = Self.ReachContact;
+			Self.MonPrevPlatEnd = PlatEnd;
+			Self.bMonPlatInit = true;
+		}
+
 		ContactR = PlatEnd - Right * 5.0f;
 		ContactL = PlatEnd + Right * 5.0f;
 		// Elbow hints sit ON the shoulder->hand line, nudged down/in, so the IK
@@ -684,6 +749,7 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		Self.SmHandL = WantHandL;
 		Self.SmHandVelR = FVector::ZeroVector;
 		Self.SmHandVelL = FVector::ZeroVector;
+		Self.SmPlatDir = FVector::ZeroVector;
 	}
 	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
 	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);

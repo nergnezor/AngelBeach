@@ -1034,6 +1034,13 @@ class AVolleyballPlayer : APawn
 	private float MonHandTurnMax = 0.0f;
 	private float MonHandGestureTime = 0.0f;
 	private int MonJerkLogs = 0;
+	// PLATFORM AMPLIFICATION probe: last frame's meet point and the platform end
+	// it produced, so the bump branch can report how much a given wobble in the
+	// meet point moved the hand. Public — PlayerIK is a mixin and writes them.
+	FVector MonPrevReachC;
+	FVector MonPrevPlatEnd;
+	bool bMonPlatInit = false;
+	int MonPlatLogs = 0;
 	private bool bMonInit = false;
 	private int MonCFlipLogs = 0;
 	// Written by UpdateIKTargets each frame so CFLIP can attribute the source.
@@ -2193,6 +2200,8 @@ class AVolleyballPlayer : APawn
 	// Effector VELOCITIES, so the sink can limit acceleration and not just speed
 	// (see MoveTowardAccel in PlayerIK). New members — a full reload, not a soft
 	// one, is needed to pick these up in the editor.
+	// Last well-conditioned platform bearing (see the bump branch in PlayerIK).
+	FVector SmPlatDir;
 	FVector SmHandVelR;
 	FVector SmHandVelL;
 	FVector SmHandR;
