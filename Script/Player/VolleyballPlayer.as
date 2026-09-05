@@ -1736,10 +1736,22 @@ class AVolleyballPlayer : APawn
 
 	private int SlideP90(const TArray<int>& Hist) const
 	{
+		return SlidePct(Hist, 0.9f);
+	}
+
+	private int SlideCount(const TArray<int>& Hist) const
+	{
+		int Total = 0;
+		for (int i = 0; i < Hist.Num(); i++) Total += Hist[i];
+		return Total;
+	}
+
+	private int SlidePct(const TArray<int>& Hist, float Pct) const
+	{
 		int Total = 0;
 		for (int i = 0; i < Hist.Num(); i++) Total += Hist[i];
 		if (Total == 0) return 0;
-		int Want = int(Total * 0.9f);
+		int Want = int(Total * Pct);
 		int Seen = 0;
 		for (int i = 0; i < Hist.Num(); i++)
 		{
@@ -1800,6 +1812,12 @@ class AVolleyballPlayer : APawn
 			+ " pelvSlideX=" + SlideP90(MonSlideHistX)
 			+ " pelvSlideY=" + SlideP90(MonSlideHistY)
 			+ " pelvSlideZ=" + SlideP90(MonSlideHistZ)
+			// The p90 alone cannot say whether the solver drags the pelvis
+			// CONSTANTLY or only in a bad tail, and those are different bugs.
+			+ " pelvMedX=" + SlidePct(MonSlideHistX, 0.5f)
+			+ " pelvMedY=" + SlidePct(MonSlideHistY, 0.5f)
+			+ " pelvMedZ=" + SlidePct(MonSlideHistZ, 0.5f)
+			+ " pelvSamples=" + SlideCount(MonSlideHistX)
 			// RAW COUNTS, not a per-rally ratio. Emitted as a percentage first,
 			// this read 100% on every run and said nothing: the denominator is
 			// one or two bookings per rally, so a single unmakeable one pins the
@@ -1849,9 +1867,14 @@ class AVolleyballPlayer : APawn
 		MonYawRateSamples = 0.0f;
 		MonYawRateMax = 0.0f;
 		MonFootSlide = 0.0f;
-		MonSlideHistX.Empty(); MonSlideHistX.SetNum(SlideBuckets);
-		MonSlideHistY.Empty(); MonSlideHistY.SetNum(SlideBuckets);
-		MonSlideHistZ.Empty(); MonSlideHistZ.SetNum(SlideBuckets);
+		// NOT RESET. These histograms accumulate over the whole run, and the
+		// report reads the LAST emission rather than the largest. A percentile
+		// taken over one report period is 100-300 samples, so its p90 is the
+		// twentieth worst frame of a few hundred; maxing that across ~20 periods
+		// and four players reported 85cm while the median slip was 5 and most
+		// periods' own p90 was 10. Same extreme-value trap as the rocking and
+		// gait rows, one level up: the percentile was fine, the max over
+		// percentiles was not.
 		MonPlanBookings = 0;
 		MonPlanInfeasible = 0;
 		MonPelvisFlips = 0;

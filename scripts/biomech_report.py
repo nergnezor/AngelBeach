@@ -269,6 +269,13 @@ def main():
         # the underlying cause is fixed; never raise it to make a run pass.
         print("COMPENSATION — one layer covering another (ratchets on known debt)")
         comp_fail = 0
+        # The pelvis-slip rows are percentiles over a histogram that accumulates
+        # for the whole run, so the LAST emission is the run's answer and the
+        # largest is whichever early period had the fewest samples. Everything
+        # else in this section is a counter or an extreme, where max is right.
+        for k in ("pelvSlideX", "pelvSlideY", "pelvSlideZ"):
+            if raw.get(k):
+                raw[k] = [raw[k][-1]]
         for key, limit, unit, why in (
                 ("pelvSlideX", 95.0, "cm", "solver drags the pelvis off the script's target, p90"),
                 ("pelvSlideY", 60.0, "cm", "same, sideways — the axis a one-axis gauge missed"),
