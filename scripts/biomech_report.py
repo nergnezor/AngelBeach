@@ -33,6 +33,11 @@ TARGETS = {
     "bob": (3, 8, "cm", "running COM oscillation 4-6"),
     "airErr": (0, 60, "cm/s^2", "pure ballistic once airborne"),
     "jump": (40, 95, "cm", "elite spike jump 60-90"),
+    # No speed row existed until 2026-09-05, and a dive was travelling at 10.2
+    # m/s — faster than a sprint record, through sand — with every acceleration
+    # row green, because the dive assigned its velocity instead of building it.
+    # 8 is generous: a sprint on dry sand is well short of a track sprint.
+    "topSpeed": (0, 8, "m/s", "ground speed; a sand sprint is under a track one"),
 }
 
 

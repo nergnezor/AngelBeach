@@ -1422,6 +1422,11 @@ class AVolleyballPlayer : APawn
 	//   turn rate               <= ~360 deg/s while travelling
 	// Values are stored in the units the engine already uses (cm/s^2) and only
 	// converted at the log line, so nothing silently mixes units mid-sum.
+	// Fastest the body has actually travelled, cm/s. THE RATCHET HAD NO SPEED
+	// ROW, and that is how a dive at 10.2 m/s — faster than a sprint record,
+	// through sand — lived in the game long enough to be found by accident while
+	// reading an aim-error tail. Acceleration was gated from the first day.
+	private float MonTopSpeed = 0.0f;
 	private float MonPeakAccel = 0.0f;      // cm/s^2, strongest speeding-up
 	private float MonPeakDecel = 0.0f;      // cm/s^2, strongest slowing-down
 	private float MonPeakPlant = 0.0f;      // cm/s^2, strongest braking inside a jump gather
@@ -1462,27 +1467,35 @@ class AVolleyballPlayer : APawn
 		// body's limits differ (you can stop harder than you can start), but the
 		// over-budget test uses the full magnitude since that is what the ground
 		// actually has to push back.
+		if (V.Size() > MonTopSpeed) MonTopSpeed = V.Size();
 		FVector A = (V - MonPrevVelBio) / DeltaTime;
 		if (bIsGrounded)
 		{
 			float Along = (V.Size() - MonPrevVelBio.Size()) / DeltaTime;
-			if (Along > MonPeakAccel) MonPeakAccel = Along;
+			// A DIVE PUSH-OFF IS A PLANT, and belongs in the plant's band for the
+			// same reason the gather does: both are brief explosive ground events
+			// at several times bodyweight, and holding them to the sprint band
+			// would demand the game be LESS real. Scored in both directions here
+			// because a dive accelerates out of the ground where a gather brakes
+			// into it.
+			bool bExplosiveGround = JumpLoadTimer > 0.0f || DiveTimer > 0.0f;
+			if (bExplosiveGround)
+			{
+				if (Math::Abs(Along) > MonPeakPlant) MonPeakPlant = Math::Abs(Along);
+			}
+			else if (Along > MonPeakAccel) MonPeakAccel = Along;
 			// The approach PLANT is scored separately, on its own band. It is the
 			// most violent legal thing in the sport — an elite gather puts 3-5x
 			// bodyweight through the foot and kills most of the run in ~0.16s, so
 			// holding it to the same 12 m/s^2 as ordinary braking would demand
 			// the game be LESS real, not more. Everything outside the gather is
 			// normal locomotion and does answer to the ordinary limit.
-			if (JumpLoadTimer > 0.0f)
-			{
-				if (-Along > MonPeakPlant) MonPeakPlant = -Along;
-			}
-			else if (-Along > MonPeakDecel) MonPeakDecel = -Along;
+			if (!bExplosiveGround && -Along > MonPeakDecel) MonPeakDecel = -Along;
 			// 5% tolerance: ApplyMoveInput accelerates at EXACTLY the limit, and a
 			// bare > counted every ordinary frame of a run as a violation. That
 			// filled the diagnostic's log budget with at-the-cap noise and hid the
 			// real offenders completely.
-			if (A.Size() > HumanAccelLimit * 1.05f && JumpLoadTimer <= 0.0f)
+			if (A.Size() > HumanAccelLimit * 1.05f && !bExplosiveGround)
 			{
 				MonAccelOverBudget += DeltaTime;
 				// WHAT is producing it, not just how much. Only genuinely large
@@ -1747,7 +1760,8 @@ class AVolleyballPlayer : APawn
 			+ " overBudget=" + int(MonAccelOverBudget * 100.0f)  // centiseconds outside the band
 			+ " bob=" + int(BobCm)                            // cm, running 4-6
 			+ " airErr=" + AirErr                             // cm/s^2 off pure ballistic, want 0
-			+ " jump=" + int(MonJumpApex));                   // cm hip rise, elite spike 60-90
+			+ " jump=" + int(MonJumpApex)                     // cm hip rise, elite spike 60-90
+			+ " topSpeed=" + int(MonTopSpeed / 100.0f));      // m/s, sand sprint <= 8
 
 		MonPeakAccel = 0.0f;
 		MonPeakDecel = 0.0f;
@@ -1760,6 +1774,7 @@ class AVolleyballPlayer : APawn
 		MonAirBallisticErr = 0.0f;
 		MonAirSamples = 0.0f;
 		MonJumpApex = 0.0f;
+		MonTopSpeed = 0.0f;
 		MonTotMoveFlips = 0;
 		MonTotYawFlips = 0;
 		MonTotCrouchFlips = 0;
@@ -3069,9 +3084,11 @@ class AVolleyballPlayer : APawn
 	// with attacks unchanged. 1.0 measures the same as 1.15 (6.68-8.06); 1.15 is
 	// kept because a lunge IS briefly faster than a run — just not twice as fast.
 	//
-	// (UpdateDive still SETS this speed rather than accelerating into it, which
-	// is an infinite first frame. Smaller now, still not honest.)
 	const float DiveSpeedMul = 1.15f;
+	// Push-off rate for the lunge, cm/s^2. See UpdateDive: this is in the plant
+	// band (3-5x bodyweight, the most violent legal thing in the sport), not the
+	// sprint band, because that is what a dive take-off is.
+	const float DiveAccel = 4000.0f;
 
 	// Ragdoll slide at dive landing: physics blend on PA_Mannequin, capsule follows
 	// the pelvis horizontally while the body deforms sand on contact.
@@ -3115,9 +3132,26 @@ class AVolleyballPlayer : APawn
 		if (DiveTimer > 0.0f)
 		{
 			DiveTimer -= DeltaTime;
-			// The dive owns the velocity and the facing while active.
-			PlayerVelocity.X = DiveDir.X * MoveSpeed * DiveSpeedMul;
-			PlayerVelocity.Y = DiveDir.Y * MoveSpeed * DiveSpeedMul;
+			// The dive owns the velocity and the facing while active — but it
+			// ACCELERATES INTO IT rather than assigning it. Assignment is an
+			// infinite first frame, and it was not a theoretical complaint: every
+			// one of the 265 acceleration excursions logged in a three-run match
+			// carried dive=1, and the peak read 286 m/s^2 against a human limit
+			// of 10. The dive was the only thing in the game breaking that band,
+			// and it broke it by two orders of magnitude.
+			//
+			// DiveAccel sits in the PLANT band, not the sprint band, because a
+			// dive push-off is the same class of event as a spike gather: brief,
+			// explosive, and legal at 3-5x bodyweight. It reaches the lunge speed
+			// in ~0.17s, comfortably inside the 0.42s dive.
+			FVector DiveWant = DiveDir * (MoveSpeed * DiveSpeedMul);
+			FVector DiveCur = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0.0f);
+			FVector DiveStep = DiveWant - DiveCur;
+			float DiveMax = DiveAccel * DeltaTime;
+			if (DiveStep.Size() > DiveMax)
+				DiveStep = DiveStep.GetSafeNormal() * DiveMax;
+			PlayerVelocity.X = DiveCur.X + DiveStep.X;
+			PlayerVelocity.Y = DiveCur.Y + DiveStep.Y;
 			FacingDir = DiveDir;
 			bHasFacing = true;
 			ExtraCrouch = Math::Max(ExtraCrouch, 0.35f);
