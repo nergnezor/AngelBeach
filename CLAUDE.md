@@ -63,7 +63,30 @@ cannot come from script: there is now a `SphereReflectionCapture` placed in
 owns — `r.ReflectionCapture.Runtime 1` (without it a runtime-flagged capture is skipped
 entirely) and one `RefreshCapture()` a second after `BeginPlay`, once.
 
-Placing it was done head-less through the project's own MCP bridge, which is the way to
+**The MCP bridge can rewire the AnimGraph but cannot configure a node.** Nodes added
+through it are structurally real — they appear, they connect, they compile, and the pose
+flows through them — but the inner `FAnimNode_*` struct set with
+`set_editor_property('Node', an)` reads back correctly in the editor and does not reach
+the compiled class. Measured twice, on 2026-09-06, each time with a full autopsy:
+
+- A `Transform (Modify) Bone` on the spine applied no rotation at 13 degrees, at 60, with
+  the alpha forced to 1, and pointed at `pelvis` (the bone an existing node already
+  drives). Trunk lean measured 28 degrees off vertical in every case.
+- A `BlendSpacePlayer` wired in place of the binary idle/run switch DID take over the pose
+  — trunk lean 28 -> 1, so the node is on the live path — but played the reference pose
+  rather than the blend space: knee bend 17 -> 1, knee travel 1373 -> 126, foot slide
+  2120 -> 4544. A body gliding with locked legs.
+
+Skeletons were ruled out for both: repointing the mesh to
+`/MoverExamples/.../SKM_Manny_Simple`, which shares the ABP's and the blend space's
+skeleton exactly, changed neither result.
+
+So: use the bridge to place actors and set ordinary asset properties (the reflection
+capture below), and to inspect a graph (`scripts/etapp5_reachability.py`). Do NOT trust it
+to author an anim node's settings — that needs the editor UI, and until someone does it in
+the UI the locomotion stays the binary switch it is.
+
+Placing the capture was done head-less through the project's own MCP bridge, which is the way to
 make editor-only asset changes from a terminal: `scripts/launch_ue.sh editor` (add
 `EXTRA_ARGS="-RenderOffscreen -nosplash"`, and `AS_DEBUG_PORT=` if a headless match
 already holds 27099), then `scripts/etapp5_mcp.py <command> <json>` for
