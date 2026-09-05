@@ -230,8 +230,28 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		FVector PlatEnd = ChestMid + PlatDir * Ext;
 		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
 		// a bagger is a controlled swing from the shoulders, not a held tray.
-		// EaseOut: the through-swing starts at contact speed and bleeds off.
-		PlatEnd += (AimFlat * 26.0f + Up * 18.0f) * EaseOut(Swing);
+		//
+		// CUSHION FIRST, THEN DRIVE — the same shape the set below already uses,
+		// and for the same reason. This used to be a bare EaseOut(Swing), which
+		// has its steepest slope at Swing=0: the platform spent the approach
+		// travelling DOWN to meet the ball and then, in the frame contact fired,
+		// started travelling UP the aim at full rate. That is a velocity
+		// reversal with no deceleration between the halves, and it was the
+		// bagger's share of the jerk — 365 of the first 480 reversals logged
+		// were this gesture, and the survivors cluster at swing 0.10-0.21 with a
+		// mean turn of 123 degrees.
+		//
+		// A real platform absorbs the ball before it lifts it. MinJerk on both
+		// segments puts zero slope at contact AND at the seam between them, so
+		// there is no corner in velocity anywhere in the stroke: the platform
+		// gives a few centimetres into the ball, pauses, then drives through.
+		FVector SwingThrough = AimFlat * 26.0f + Up * 18.0f;
+		float SwingT;
+		if (Swing < 0.22f)
+			SwingT = -0.18f * MinJerk(Swing / 0.22f);                      // absorb
+		else
+			SwingT = -0.18f + 1.18f * MinJerk((Swing - 0.22f) / 0.78f);    // drive through
+		PlatEnd += SwingThrough * SwingT;
 		ContactR = PlatEnd - Right * 5.0f;
 		ContactL = PlatEnd + Right * 5.0f;
 		// Elbow hints sit ON the shoulder->hand line, nudged down/in, so the IK

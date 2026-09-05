@@ -1972,7 +1972,13 @@ class AVolleyballPlayer : APawn
 							+ " step=" + int(HandStepVec.Size() * 100)
 							+ " prev=" + int(MonPrevHandStep.Size() * 100)
 							+ " swing=" + int(SwingProgress() * 100)
-							+ " grounded=" + bIsGrounded);
+							+ " grounded=" + bIsGrounded
+							// The platform hangs off the chest frame (ChestMid +
+							// direction * reach), so a rotating or translating
+							// body swings the hands with it. Record both, or the
+							// arm gets blamed for the body's motion.
+							+ " yawRate=" + int(YawRate)
+							+ " bodySpd=" + int(FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size()));
 					}
 				}
 			}
