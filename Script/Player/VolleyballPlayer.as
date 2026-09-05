@@ -1595,6 +1595,16 @@ class AVolleyballPlayer : APawn
 				{
 					float Swing = MonPelvisZMax - MonPelvisZMin;
 					if (Swing > MonBobWorst) MonBobWorst = Swing;
+					// ...and the TYPICAL stride, not only the worst one in the
+					// match. bob is a claim about human gait (4-6cm), and the
+					// worst of several hundred stride windows is not what that
+					// claim is about — it read 9, 25 and 34 across three runs of
+					// identical code, which is the signature of a single window
+					// setting the number rather than of a body that changed.
+					// Monotone counters, divided in the report (see the rocking
+					// rate, same reasoning).
+					MonBobSum += Swing * 10.0f;   // tenths of a cm
+					MonBobWindows += 1;
 					MonBobWindow = 0.0f;
 					MonPelvisZMin = 99999.0f;
 					MonPelvisZMax = -99999.0f;
@@ -1638,6 +1648,8 @@ class AVolleyballPlayer : APawn
 	const float BobWindowSecs = 0.4f;
 	private float MonBobWindow = 0.0f;
 	private float MonBobWorst = 0.0f;
+	private float MonBobSum = 0.0f;
+	private int MonBobWindows = 0;
 
 	// How bent one knee is, as a 0..100 "shortening" percentage rather than an
 	// angle: a straight leg spans exactly thigh+shin from hip to ankle, and any
@@ -1802,7 +1814,9 @@ class AVolleyballPlayer : APawn
 			+ " decel=" + int(MonPeakDecel / 100.0f)          // m/s^2, human <= 12
 			+ " plant=" + int(MonPeakPlant / 100.0f)          // m/s^2, approach gather 20-45
 			+ " overBudget=" + int(MonAccelOverBudget * 100.0f)  // centiseconds outside the band
-			+ " bob=" + int(BobCm)                            // cm, running 4-6
+			+ " bob=" + int(BobCm)                            // cm, running 4-6 (worst window)
+			+ " bobSum=" + int(MonBobSum)                     // tenths of a cm, all windows
+			+ " bobWindows=" + MonBobWindows
 			+ " airErr=" + AirErr                             // cm/s^2 off pure ballistic, want 0
 			+ " jump=" + int(MonJumpApex)                     // cm hip rise, elite spike 60-90
 			+ " topSpeed=" + int(MonTopSpeed / 100.0f));      // m/s, sand sprint <= 8

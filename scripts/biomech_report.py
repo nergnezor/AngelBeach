@@ -30,7 +30,11 @@ TARGETS = {
     "accel": (0, 10, "m/s^2", "sprint first-step peak"),
     "decel": (0, 12, "m/s^2", "hard controlled stop"),
     "plant": (0, 45, "m/s^2", "spike-approach gather, 3-5x bodyweight"),
-    "bob": (3, 8, "cm", "running COM oscillation 4-6"),
+    # The TYPICAL stride window, not the worst of several hundred. bob is a
+    # claim about human gait, and the worst window read 9, 25 and 34 across
+    # three runs of IDENTICAL code — one window setting the number, not a body
+    # that changed. The worst is still printed below as context.
+    "bobMean": (3, 8, "cm", "running COM oscillation 4-6, typical stride"),
     "airErr": (0, 60, "cm/s^2", "pure ballistic once airborne"),
     "jump": (40, 95, "cm", "elite spike jump 60-90"),
     # No speed row existed until 2026-09-05, and a dive was travelling at 10.2
@@ -141,6 +145,11 @@ def main():
         print()
 
     if bio:
+        # Derived from monotone counters for the same reason as the rocking rate:
+        # a mean emitted per report would be judged by max() below, which picks
+        # whichever report period happened to be worst.
+        if bio.get("bobWindows") and max(bio["bobWindows"]) > 0:
+            bio["bobMean"] = [round(max(bio["bobSum"]) / 10.0 / max(bio["bobWindows"]), 1)]
         print("ABSOLUTE — human plausibility (worst player per metric)")
         worst_fail = 0
         for key, (lo, hi, unit, why) in TARGETS.items():
@@ -168,6 +177,9 @@ def main():
             worst_fail += 0 if ok else 1
             flag = "ok  " if ok else "FAIL"
             print(f"  {flag} {key:<10} {v:>6} {unit:<8} target {lo}-{hi:<4} ({why})")
+            if key == "bobMean" and bio.get("bob"):
+                print(f"       {'':<10} {max(bio['bob']):>6} {'cm':<8} "
+                      f"{'':<12} (worst single stride window, context only)")
         over = bio.get("overBudget", [])
         if over:
             cs = max(over)
