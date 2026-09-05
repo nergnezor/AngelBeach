@@ -146,6 +146,7 @@ class AAIPlayer : AVolleyballPlayer
 			bSpikeCueOn = false;    // a committed attack cue must not outlive its ball
 			bServeRecvLogged = false;
 			bRecvPlanLogged = false;
+			bSpikeBudgetLogged = false;
 			// Start every rally in Base with the dwell already spent. StateDwell
 			// only advances inside UpdateAI, which the dead ball returns before —
 			// so without this a player carried the previous rally's state AND a
@@ -870,6 +871,8 @@ class AAIPlayer : AVolleyballPlayer
 	private bool bServeRecvLogged = false;
 	// One RECVPLAN line per ball, reset with the other per-rally flags.
 	private bool bRecvPlanLogged = false;
+	// One SPIKEBUDGET line per ball; reset with the other per-rally flags.
+	private bool bSpikeBudgetLogged = false;
 
 	// Hysteresis state for AmIHitter (who owns the current ball).
 	private bool bWasHitter = false;
@@ -1523,6 +1526,20 @@ class AAIPlayer : AVolleyballPlayer
 		// Same body-time model as the intercept budget (accel-limited + lag).
 		float SprintTime = this.BodyTravelTime(DistToPlant);
 
+		// ONE LINE PER BALL, the first time this hitter sees a jumpable set: how
+		// far is the plant, and how much time is left before the jump has to
+		// fire (TimeToApex + the load)? That difference is the whole question —
+		// the arc is known good (SETARC: peak 507, 1.40s to the strike-height
+		// crossing), so if the attack still fails it fails in the legs.
+		if (!bSpikeBudgetLogged)
+		{
+			bSpikeBudgetLogged = true;
+			Log("SPIKEBUDGET tau=" + int(Tau * 100)
+				+ " dist=" + int(DistToPlant)
+				+ " sprintT=" + int(SprintTime * 100)
+				+ " needBy=" + int((TimeToApex + JumpLoadDuration) * 100));
+		}
+
 		bool bGo = false;
 		if (bIsGrounded)
 		{
@@ -1672,10 +1689,45 @@ class AAIPlayer : AVolleyballPlayer
 
 	// Where I WAIT for the pass I'm expecting: the approach start behind my
 	// own-half pin, ready to run in and attack or set whatever arrives.
+	// WAIT WHERE THE BALL IS ATTACKABLE, NOT WHERE IT LANDS.
+	//
+	// The pass is aimed at the floor at my pin, and this used to wait a run-up
+	// behind that aim point. But a jump attack does not meet the ball on the
+	// floor — it meets it at SpikeStrikeZ on the way down, which happens well
+	// BEFORE the landing spot, back along the line from the setter. Measured
+	// over three runs: the ball peaks at 507cm and crosses strike height 1.40s
+	// into a 1.80s flight, i.e. a bit over a fifth of the way short of the pin.
+	//
+	// Waiting at the pin therefore parks the hitter past the only place the ball
+	// can be hit from. The bill, measured on the first tick of every jumpable
+	// set: a median 303cm still to cover, 0.64s of run time left before the jump
+	// has to fire, and 1.17s needed to cover it — slack -0.43s, and NOT ONE of
+	// 171 sets was reachable. That is why two thirds of third touches are met
+	// below the brow: every jump in the game is late, and the ones that connect
+	// connect on the way down.
+	//
+	// The other endpoint of that line is where the set comes FROM: the partner,
+	// who is standing there playing the ball. Their LIVE position, not the
+	// nominal setter zone — the zone assumes Y=0 while a real setter is at their
+	// own pin, and 22% of that error is ~77cm of Y, which is the difference
+	// between meeting the ball in front of the shoulder and wearing it. The
+	// static-zone version was measured: contacts per rally came out higher still
+	// (4.20-5.73) but 33% of attacks were taken with the ball behind the chest,
+	// against 3-4% here over two runs. Rule 1 decides that trade.
+	// (Goal churn is not a concern: MoveToHold only re-chases past 110cm.)
+	const float StrikeShortOfPin = 0.22f;
 	protected FVector MyPinApproachStart() const
 	{
+		FVector Pin = FVector(MySign() * 100.0f, MyHalfPinY(), 0);
+		FVector Expect = Pin;
+		if (Teammate != nullptr)
+		{
+			FVector Setter = Teammate.GetActorLocation();
+			Expect = Pin + (FVector(Setter.X, Setter.Y, 0) - Pin) * StrikeShortOfPin;
+		}
+		// ...and the run-up starts a stride behind THAT, on our own side.
 		return ClampToCourt(FVector(
-			MySign() * (100.0f + ApproachBack), MyHalfPinY(), FloorZ + PlayerHeight));
+			Expect.X + MySign() * ApproachBack, Expect.Y, FloorZ + PlayerHeight));
 	}
 
 	private FVector PassTarget() const
