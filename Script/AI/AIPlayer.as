@@ -1483,7 +1483,22 @@ class AAIPlayer : AVolleyballPlayer
 	// contact at the same height, so the strike zone and every timing budget
 	// built on it are unchanged. (Sanity: 90 + 90 + 150 = 330; net is 243 and
 	// real elite contact is 330-350.)
-	const float StrikeReachAboveCenter = 150.0f;
+	//
+	// ...EXCEPT THE RIG NEVER REACHED 150, AND THE WHOLE JUMP IS TIMED ON IT.
+	// Measured at the moment of contact (PLANVA handUp, hand_r against the actor
+	// centre) over three runs: on a landed attack the hand is at 105 with a
+	// maximum of 106 — the arm simply cannot get further from the shoulder, and
+	// the shoulder is where it is. 150 described an anatomy the IK does not have.
+	//
+	// It matters because SpikeStrikeZ is not decoration: the jump fires when the
+	// ball is TimeToApex + the load away from crossing it. Set 45cm too high,
+	// the ball crosses the imaginary height, keeps falling the extra 45 to reach
+	// the real hand, and by then the body is on its way down — measured, the
+	// failed third touches contact at myVz -285 (median, -491 worst) with the
+	// ball at waist height, and get rescued as a bagger. Half of all attacks.
+	// So: the constant is the reach the RIG achieves, not the one a person has.
+	// (90 + 90 + 105 = 285; still well over the 243 net.)
+	const float StrikeReachAboveCenter = 105.0f;
 	float SpikeStrikeZ() const
 	{
 		float Rise = (LoadedJumpVelocity * LoadedJumpVelocity) / (2.0f * Math::Abs(Gravity));

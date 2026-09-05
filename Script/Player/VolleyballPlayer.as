@@ -2795,6 +2795,20 @@ class AVolleyballPlayer : APawn
 			+ " handErr=" + int(HandErr)
 			+ " aimErr=" + int(AimErrCm)
 			+ " grounded=" + bIsGrounded
+			// WHO WAS FALLING PAST WHOM. A third touch taken airborne but at waist
+			// height is either an EARLY JUMP (the body already coming down, myVz
+			// strongly negative, while the ball is still up) or a ball that FELL PAST
+			// the hands (ballVz strongly negative, myVz near the top of the arc).
+			// The two call for opposite fixes and nothing logged could tell them apart.
+			// How high the HAND actually was, same frame and same frame of
+			// reference as ballUp: SpikeStrikeZ assumes a reach of
+			// StrikeReachAboveCenter above the body centre, and the whole jump
+			// timing is built on that assumption being true.
+			+ " handUp=" + int(Mesh != nullptr
+				? Mesh.GetBoneTransform(n"hand_r").Location.Z - GetActorLocation().Z
+				: -999.0f)
+			+ " myVz=" + int(PlayerVelocity.Z)
+			+ " ballVz=" + int(BallVelIn.Z)
 			+ " bookedInfeasible=" + (bBookedInfeasible ? 1 : 0));
 		PlanSlackLog = -1.0f;
 		PlanSpeedFracLog = -1.0f;
