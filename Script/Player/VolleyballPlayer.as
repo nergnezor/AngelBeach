@@ -2723,9 +2723,30 @@ class AVolleyballPlayer : APawn
 		// hand vs its IK target). This is what makes the planner's "arrive
 		// planted and early" measurably worth paying for.
 		float BodySpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+		// AGAINST A REACHABLE GOAL, NOT THE RAW TARGET. The spike deliberately
+		// asks for a point past the end of the arm (see the Strike pose: the FBIK
+		// saturates at full extension, and under-asking left the hand 40cm below
+		// the ball at the apex). Measured against the raw target, that over-ask
+		// IS the error: 33cm at the median on a LANDED attack, i.e. on the swings
+		// that worked. It was being read as unconverged hands and charged to the
+		// aim below, 16cm of scatter on every spike for a target nobody intended
+		// the arm to reach. The honest question is whether the arm went as far as
+		// it could along the line it was given, so the goal is clamped to the
+		// chain's own length first (bone lengths are pose-invariant, so this is
+		// the rig's real arm, not a guess).
 		float HandErr = 0.0f;
 		if (Mesh != nullptr && Anim != nullptr)
-			HandErr = (Mesh.GetBoneTransform(n"hand_r").Location - Anim.HandTargetR).Size();
+		{
+			FVector ShoulderP = Mesh.GetBoneTransform(n"upperarm_r").Location;
+			FVector ElbowP = Mesh.GetBoneTransform(n"lowerarm_r").Location;
+			FVector HandP = Mesh.GetBoneTransform(n"hand_r").Location;
+			float ArmLen = (ElbowP - ShoulderP).Size() + (HandP - ElbowP).Size();
+			FVector ToT = Anim.HandTargetR - ShoulderP;
+			FVector Goal = (ToT.Size() > ArmLen)
+				? ShoulderP + ToT.GetSafeNormal() * ArmLen
+				: Anim.HandTargetR;
+			HandErr = (HandP - Goal).Size();
+		}
 		float AimErrCm = 0.0f;
 		if (!bBlockContact)
 		{
