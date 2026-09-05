@@ -53,28 +53,26 @@ class ABeachVolleyballCamera : AActor
 	// broadcast look tuned above — this is the flattening trade Erik chose
 	// over that.
 	//
-	// DOLLIED BACK AGAIN 2026-09-05 (Erik: "mer inzoomad kamera och lite
-	// mindre perspektiv" — more zoomed-in, a bit less perspective). Same
-	// lever as above: another ~1.3x dolly-back along the ray toward
-	// CurrentLookAt (0,0,140), not a raw scale of these numbers — the pivot
-	// is the look-at point, not the origin (that's why the 2026-09-03 step
-	// was 1050->2100 on X but 850->1560, not 1700, on Z: 2x of the
-	// LookAt-relative offset (-1050,710), not of the raw position). Farther
-	// + auto-narrowed FOV reads as more telephoto: same framing, flatter
-	// convergence — "more zoomed in" and "less perspective" are the same
-	// knob here, not two separate asks. UNVERIFIED on this machine (no
-	// render), same as the step above — Erik to confirm on device and call
-	// for more/less.
-	FVector EndCamPos = FVector(-2730, 0, 1986);
+	// DOLLIED BACK AGAIN 2026-09-05, then REVERSED THE SAME DAY. The dolly-back
+	// above (1.3x further, same math as the 2026-09-03 step) was computed on
+	// this machine without ever being seen rendered — it cannot render (see
+	// nullrhi-different-simulation) — on the theory that "mer inzoomad kamera
+	// och lite mindre perspektiv" meant more telephoto compression. Erik tried
+	// it on device and went the other way instead: these are now his own
+	// hand-set numbers, MUCH closer than any dolly-back step ever was (closer
+	// even than the original pre-2026-09-03 1050/850). Read "inzoomad" as
+	// "physically closer", not "narrower FOV" — FitFieldOfView will always
+	// widen to keep the full court in frame regardless of distance, so the
+	// only way to actually get closer to the subjects is to move the rig in.
+	FVector EndCamPos = FVector(-300, 0, 600);
 
-	// LANDSCAPE rig: off one sideline, centred on the net, looking across the
-	// court's width, so the 16 m length spans the screen's wide axis directly
-	// instead of receding into depth. Centred on X=0 (not Team-A's baseline)
-	// since a side-on broadcast shot has no "near" team the way an end-zone
-	// shot does.
-	// Dollied back 2026-09-05 alongside EndCamPos above — same ~1.3x
-	// LookAt-relative dolly, same reasoning.
-	FVector SideCamPos = FVector(0, -2210, 1713);
+	// LANDSCAPE rig — also hand-set 2026-09-05, alongside EndCamPos above.
+	// NO LONGER off one sideline: X=Y=0 puts it dead centre over the net,
+	// looking straight down (LookAt is (0,0,140), directly below at this X/Y),
+	// a top-down crane shot rather than a side-on one. The "off one sideline"
+	// framing description this replaced no longer applies — if that framing
+	// is wanted back, this needs a nonzero Y again, not just a distance change.
+	FVector SideCamPos = FVector(0, 0, 1000);
 
 	FVector CamPos;
 	bool bLandscape = false;
@@ -83,6 +81,24 @@ class ABeachVolleyballCamera : AActor
 	// the horizon/sunset backdrop this used to preserve is a secondary concern now
 	// that legibility of players/lines/ball is the stated goal.
 	FVector CurrentLookAt = FVector(0, 0, 140);
+
+	// Smoothed actual position — CamPos above is the RIG'S ANCHOR (what a
+	// portrait/landscape flip snaps back to), this is where the camera actually
+	// sits once the ball-follow offset below is added and eased in. Kept
+	// separate so a hard orientation cut can still reset instantly (see
+	// UpdateOrientation) without the follow-lerp smearing across it.
+	FVector CurrentCamPos;
+
+	// 2026-09-05 (Erik: "den borde även följa bollen en del" — it should also
+	// follow the ball some). Now that the rig sits much closer to the court
+	// (see EndCamPos/SideCamPos), a dead-still camera reads as detached from
+	// the play in a way it didn't from further back. This is how much of the
+	// ball's court-space XY leaks into camera POSITION on top of the fixed
+	// anchor — not a chase cam glued to the ball, a broadcast operator giving
+	// it a little push toward the action. FitFieldOfView still widens every
+	// frame from wherever the camera actually ends up, so the full court
+	// never leaves frame no matter where this pushes the rig.
+	float CamFollowAmount = 0.2f;
 
 	float FollowSpeed = 4.0f;
 
@@ -104,7 +120,8 @@ class ABeachVolleyballCamera : AActor
 		CameraComp.AspectRatioAxisConstraint = EAspectRatioAxisConstraint::AspectRatio_MaintainXFOV;
 
 		UpdateOrientation();
-		SetActorLocation(CamPos);
+		CurrentCamPos = CamPos;
+		SetActorLocation(CurrentCamPos);
 
 		APlayerController PC = Gameplay::GetPlayerController(0);
 		if (PC != nullptr)
@@ -130,7 +147,15 @@ class ABeachVolleyballCamera : AActor
 		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);
 		CurrentLookAt = CurrentLookAt + (Target - CurrentLookAt) * Alpha;
 
-		FVector LookDir = (CurrentLookAt - CamPos).GetSafeNormal();
+		// Camera POSITION also eases toward the ball's XY, same Alpha/reasoning
+		// as the look-at tilt above — see CamFollowAmount.
+		FVector PosTarget = CamPos;
+		if (Ball != nullptr && Ball.bInPlay)
+			PosTarget += FVector(Ball.Position.X, Ball.Position.Y, 0.0f) * CamFollowAmount;
+		CurrentCamPos = CurrentCamPos + (PosTarget - CurrentCamPos) * Alpha;
+		SetActorLocation(CurrentCamPos);
+
+		FVector LookDir = (CurrentLookAt - CurrentCamPos).GetSafeNormal();
 		SetActorRotation(LookDir.Rotation());
 
 		FitFieldOfView();
@@ -148,7 +173,8 @@ class ABeachVolleyballCamera : AActor
 
 		bLandscape = bNowLandscape;
 		CamPos = bLandscape ? SideCamPos : EndCamPos;
-		SetActorLocation(CamPos);
+		CurrentCamPos = CamPos; // hard cut, not eased — see CurrentCamPos's own comment
+		SetActorLocation(CurrentCamPos);
 	}
 
 	// 2026-09-02: replaces two hand-tuned CamPos distances (one scaled from

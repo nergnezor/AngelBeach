@@ -76,6 +76,31 @@ class UVolleyballAnimInstance : UAnimInstance
 	// below re-planting them via Two Bone IK, which is what actually bends the
 	// knees (the pelvis moves rigidly; the legs solve to keep the foot fixed).
 	UPROPERTY(BlueprintReadWrite) FVector   PelvisTarget = FVector::ZeroVector;
+	// TRUNK LEAN CORRECTION, in degrees, for a Modify Bone on the spine.
+	//
+	// The locomotion blendspace leans the trunk 28 degrees off vertical while
+	// running against 8-9 standing — measured, and identical on every player to
+	// the degree, which is what an authored pose looks like. A human at the pace
+	// these players actually keep (53% of top speed) leans 5-10. The clip cannot
+	// be re-authored from here and no bone setter is bound in this fork, so the
+	// correction goes through the graph: additive, bone space, driven by this.
+	//
+	// This is the WEIGHT, 0..1, not the angle. The angle lives in the graph node's
+	// own Rotation default, in COMPONENT space (a pitch about the component Y
+	// axis is a clean forward/back trunk lean, where bone space on the spine is
+	// the same guessing game the arms were — see the bone-space warning in
+	// CLAUDE.md). Driving the node's Alpha with the pace instead of building a
+	// rotator per frame keeps the whole thing to one node and two wires, and the
+	// angle stays a thing that can be calibrated by sweeping.
+	// INERT AS SHIPPED, and deliberately kept. The graph node it drives is
+	// installed (scripts/etapp5_spine_lean.py) and measurably does nothing: at
+	// 13 degrees, at 60, and with the alpha forced to 1 with the pin broken, the
+	// measured trunk lean stays at 28 to the degree. The wiring was verified on
+	// the LIVE chain by tracing back from Output Pose, so it is not a dead
+	// branch — see the two structural findings in that script's header. The
+	// property and the node stay because the moment the skeleton mismatch is
+	// fixed, this is the whole correction.
+	UPROPERTY(BlueprintReadWrite) float     SpineLeanAlpha = 0.0f;
 	// WORLD-space foot targets for the leg Two Bone IK nodes: last frame's
 	// solved foot position, read fresh each tick (see UpdateIKTargets) so the
 	// foot holds still under a moving pelvis instead of sliding with it —

@@ -29,6 +29,7 @@ class AVolleyballPlayer : APawn
 	FLinearColor AppliedRingColor = FLinearColor(-1, -1, -1, -1);
 
 	float MoveSpeed = 450.0f;
+
 	// PLAYER gravity is ~2x earth (the ball keeps real -980): with real g the
 	// tuned jump heights hung airborne ~1.5s and read as moon-floating. Heavy
 	// player gravity + scaled jump speeds is the standard trick for snappy,
@@ -844,6 +845,16 @@ class AVolleyballPlayer : APawn
 		// honest value below is correct again.
 		Anim.bDiving       = IsDiving() || bRagdollActive;
 
+		// Trunk lean correction (see SpineLean). The clip's lean rides with
+		// speed, so the correction has to as well — a fixed offset would stand
+		// a standing player up out of their own idle pose. Zero at rest, full
+		// at top speed, and only while grounded: airborne posture is the jump's
+		// business and the crouch is already forced upright there.
+		{
+			float LeanSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+			float LeanFrac = Math::Clamp(LeanSpd / Math::Max(MoveSpeed, 1.0f), 0.0f, 1.0f);
+			Anim.SpineLeanAlpha = bIsGrounded ? LeanFrac : 0.0f;
+		}
 		Anim.bIsHitting = HitAnimTimer > 0.0f || bReaching;
 		Anim.HitType    = CurrentHit;
 		int Clip = HitClipIndexFor(CurrentHit);
