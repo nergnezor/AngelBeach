@@ -3054,7 +3054,24 @@ class AVolleyballPlayer : APawn
 	private FVector DiveDir = FVector(1, 0, 0);
 	const float DiveDuration = 0.42f;
 	const float DiveRecovery = 0.75f;
-	const float DiveSpeedMul = 1.75f;
+	// A DIVE IS A LUNGE, NOT A ROCKET. This was 1.75, which at the AI's move
+	// speed put the body through the sand at 10.2 m/s — sprint-record territory,
+	// in a dive. It survived because the BIOMECH ratchet gates acceleration and
+	// never gated SPEED, and because nothing downstream complained: the dig's
+	// aim error is quadratic in body speed and simply saturated at its cap on
+	// every dive, so a dive was a coin toss that also left the diver metres out
+	// of position.
+	//
+	// Measured, 1.75 -> 1.15 (three runs each, ranges not overlapping):
+	//   contacts per rally      4.08-5.14 -> 7.44-8.00
+	//   median rally length     3 -> 6 touches (both sides now build)
+	//   worst dig aim error     359cm -> 197
+	// with attacks unchanged. 1.0 measures the same as 1.15 (6.68-8.06); 1.15 is
+	// kept because a lunge IS briefly faster than a run — just not twice as fast.
+	//
+	// (UpdateDive still SETS this speed rather than accelerating into it, which
+	// is an infinite first frame. Smaller now, still not honest.)
+	const float DiveSpeedMul = 1.15f;
 
 	// Ragdoll slide at dive landing: physics blend on PA_Mannequin, capsule follows
 	// the pelvis horizontally while the body deforms sand on contact.
