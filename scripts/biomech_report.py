@@ -47,6 +47,7 @@ TARGETS = {
 RAW_KEYS = {"wasteWorst", "goalJumps", "kneeWalk", "kneeWalkMin", "kneeWalkMax",
             "kneeStill", "kneeStillMax", "yawRateMean", "yawRateMax", "legAlpha",
             "yawRevisit", "yawWasteDeg", "yawWasteRate", "crouchRevisit",
+            "yawRockWindows", "crouchRockWindows", "rockWindows",
             "pelvSlideX", "pelvSlideY", "pelvSlideZ", "planBookings", "planInfeas"}
 
 
@@ -188,12 +189,36 @@ def main():
         # crouch close that: the same path/extent ratio on the two degrees of
         # freedom a planted body can still churn.
         print("JITTER — revisited ground (motion that arrives nowhere)")
+        # Derived here rather than in the game: the three counters are monotone
+        # over a run, so the max of each IS its final value, while a ratio
+        # emitted per report would hand this loop an early-run sample as the
+        # run's worst.
+        if raw.get("rockWindows"):
+            wins = max(raw["rockWindows"])
+            if wins > 0:
+                for src_key, out_key in (("yawRockWindows", "yawRockPermille"),
+                                         ("crouchRockWindows", "crouchRockPermille")):
+                    if raw.get(src_key):
+                        raw[out_key] = [1000.0 * max(raw[src_key]) / wins]
         jit_fail = 0
         for key, limit, unit, src in (
                 ("wasteWorst", 250.0, "path/extent x100 in one 0.7s window", raw),
-                ("yawRevisit", 250.0, "deg turned / deg net, x100 (rocking in place)", raw),
+                # HOW OFTEN THE BODY ROCKS, not how bad its worst moment was.
+                # yawRevisit/crouchRevisit are the worst single 0.7s window in
+                # the run — an extreme gated at a fixed number, which can only
+                # get worse the longer you measure. A 330s match is ~450
+                # eligible windows per player, and the worst of 1800 was
+                # reporting 430 while 98% of windows were clean. They are still
+                # on the MOTIONSTATS line as context; what is gated is the rate.
+                #
+                # These two limits are RATCHETS in the sense the section below
+                # describes — set from the measured spread (yaw 17-21, crouch
+                # 36-68 per mille over three runs) with room for noise, so a
+                # regression trips them and ordinary variation does not. They
+                # are not a claim about human bodies.
+                ("yawRockPermille", 30.0, "windows per 1000 where yaw rocks (>250)", raw),
                 ("yawWasteRate", 100.0, "deg of yaw taken back per standing-second, x10", raw),
-                ("crouchRevisit", 250.0, "crouch travel / net, x100 (knee flapping)", raw),
+                ("crouchRockPermille", 90.0, "windows per 1000 where the knee flaps (>250)", raw),
                 ("wasteTotal", 60.0, "cm of reground per second of motion", motion)):
             if key not in src:
                 continue

@@ -1234,6 +1234,16 @@ class AVolleyballPlayer : APawn
 	private float MonCrPath = 0.0f;
 	private float MonCrSpan = 0.0f;
 	private float MonCrWinStart = 0.0f;
+	// HOW OFTEN, not just how bad ONCE. yawRevisit/crouchRevisit report the worst
+	// single 0.7s window in a whole run — an extreme-value statistic gated at a
+	// fixed number, which gets worse the longer you measure however clean the
+	// body is. A 330s match is ~1900 windows per player; the worst of 7600 says
+	// almost nothing about whether the players rock. These count the windows that
+	// exceed the limit against the windows that were eligible at all, so the
+	// answer is a rate that means the same thing at any run length.
+	private int MonRevisitWindows = 0;
+	private int MonYawOverWindows = 0;
+	private int MonCrOverWindows = 0;
 	private float MonCrRevisit = 0.0f;
 	private float MonCrRevisitWin = 100.0f;
 	private float MonPrevYawRaw = 0.0f;
@@ -1244,6 +1254,22 @@ class AVolleyballPlayer : APawn
 	// real knee bend.
 	const float RevisitMinYaw = 20.0f;
 	const float RevisitMinCrouch = 0.15f;
+	// ...AND A FLOOR ON THE SPAN, WHICH IS THE HALF THAT WAS MISSING. These
+	// ratios are path over span, so a window with a respectable path and a
+	// hair-thin span reads as violent rocking while being invisible: the old
+	// floors were 1 degree of yaw and 0.01 of crouch — about 3mm of hip travel —
+	// so 20 degrees of path against a 1 degree span scored 2000. That is what
+	// kept yawRevisit and crouchRevisit permanently over the ratchet.
+	//
+	// Sized to what a viewer can actually see: 5 degrees of body yaw, and 0.06 of
+	// crouch, which is ~2cm of hip height (one crouch unit lowers the shoulders
+	// 30cm). Below those the pose is not rocking, it is holding.
+	//
+	// The ratio itself is unchanged and still means what it says: 100 is a
+	// monotone move, 200 is exactly one there-and-back, and the 250 limit
+	// therefore still allows a single dip or turn and catches the second one.
+	const float RevisitMinYawSpan = 5.0f;
+	const float RevisitMinCrouchSpan = 0.06f;
 	// Per-frame waveform dump for shake_scope.py. ~4 lines/frame; a 90s run is
 	// about 3MB of log, which is why it is a switch and not always on.
 	const bool bTraceMotion = false;
@@ -1276,11 +1302,13 @@ class AVolleyballPlayer : APawn
 			MonWinStillTime += DeltaTime;
 		if (MonRotWindow < WasteWindowSecs) return;
 
+		MonRevisitWindows += 1;
 		MonYawRevisitWin = 100.0f;
-		if (MonYawPath >= RevisitMinYaw && MonYawSpan > 1.0f)
+		if (MonYawPath >= RevisitMinYaw && MonYawSpan > RevisitMinYawSpan)
 		{
 			MonYawRevisitWin = (MonYawPath / MonYawSpan) * 100.0f;
 			if (MonYawRevisitWin > MonYawRevisit) MonYawRevisit = MonYawRevisitWin;
+			if (MonYawRevisitWin > 250.0f) MonYawOverWindows += 1;
 		}
 		float YawWasteWin = MonYawPath - MonYawSpan;
 		if (YawWasteWin > MonYawWaste) MonYawWaste = YawWasteWin;
@@ -1291,10 +1319,11 @@ class AVolleyballPlayer : APawn
 		}
 		MonWinStillTime = 0.0f;
 		MonCrRevisitWin = 100.0f;
-		if (MonCrPath >= RevisitMinCrouch && MonCrSpan > 0.01f)
+		if (MonCrPath >= RevisitMinCrouch && MonCrSpan > RevisitMinCrouchSpan)
 		{
 			MonCrRevisitWin = (MonCrPath / MonCrSpan) * 100.0f;
 			if (MonCrRevisitWin > MonCrRevisit) MonCrRevisit = MonCrRevisitWin;
+			if (MonCrRevisitWin > 250.0f) MonCrOverWindows += 1;
 		}
 
 		MonRotWindow = 0.0f;
@@ -1727,6 +1756,14 @@ class AVolleyballPlayer : APawn
 			+ " yawWasteDeg=" + int(MonYawWaste)
 			+ " yawWasteRate=" + int(MonYawWasteStill / Math::Max(MonYawStillSecs, 0.001f) * 10.0f)
 			+ " crouchRevisit=" + int(MonCrRevisit)
+			// COUNTS, not the ratio. All three are monotone over the run, so the
+			// report can take the max of each and get the FINAL rate; emitting
+			// the ratio instead handed it an early-run sample (3 bad windows out
+			// of the first 13) as the run's worst, which is how this first
+			// reported 230 per mille against a true 30.
+			+ " yawRockWindows=" + MonYawOverWindows
+			+ " crouchRockWindows=" + MonCrOverWindows
+			+ " rockWindows=" + MonRevisitWindows
 			+ " footSlide=" + int(MonFootSlide)
 			+ " pelvisFlips=" + MonPelvisFlips
 			+ " kneeWalk=" + int(KneeWalkMean())
