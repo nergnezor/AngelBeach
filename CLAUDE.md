@@ -77,9 +77,23 @@ the compiled class. Measured twice, on 2026-09-06, each time with a full autopsy
   rather than the blend space: knee bend 17 -> 1, knee travel 1373 -> 126, foot slide
   2120 -> 4544. A body gliding with locked legs.
 
-Skeletons were ruled out for both: repointing the mesh to
-`/MoverExamples/.../SKM_Manny_Simple`, which shares the ABP's and the blend space's
-skeleton exactly, changed neither result.
+Ruled out, each by measurement rather than by reasoning:
+
+- **The skeleton.** Repointing the mesh to `/MoverExamples/.../SKM_Manny_Simple`, which
+  shares the ABP's and the blend space's skeleton exactly, changed neither result.
+- **A pin default shadowing the property.** The BlendSpacePlayer has no BlendSpace pin at
+  all — the asset is a struct property, and it reads back correctly after compile AND
+  after save.
+- **The input.** With the Speed link broken and the X pin pinned to a constant 400 (between
+  the walk sample at 240 and the run sample at 532), the legs stay locked. So it is not the
+  variable, the connection, or the value.
+- **An unreconstructed node.** `reconstruct_node()` before compiling changes nothing.
+- **The asset.** BS_VolleyballLocomotion is well formed: axis "Speed" 0-560, grid 4,
+  samples MM_Idle at 0, MM_Walk_Fwd at 240, MM_Run_Fwd at 532.
+
+What is left is the node itself: it takes over the pose (trunk lean 28 -> 1, so it is
+evaluated) and produces no animation. The one test not run, because it needs a person in
+the editor: add ONE node by hand in the UI and diff the two assets.
 
 So: use the bridge to place actors and set ordinary asset properties (the reflection
 capture below), and to inspect a graph (`scripts/etapp5_reachability.py`). Do NOT trust it
