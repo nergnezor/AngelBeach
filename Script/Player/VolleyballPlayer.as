@@ -1275,6 +1275,15 @@ class AVolleyballPlayer : APawn
 	// opposite fixes: a locomotion clip that leans (fold while RUNNING, with no
 	// gesture) against the full-body solver hauling the chest down to an
 	// out-of-reach hand goal (fold while DIGGING). Nothing measured either.
+	// HOW HARD ARE THEY ACTUALLY RUNNING? "Relaxed" and "efficient" both cash out
+	// as not sprinting when there is time. Frames spent moving, and of those, the
+	// share near top speed.
+	private float MonSpeedSum = 0.0f;
+	private float MonSpeedN = 0.0f;
+	private int MonSpeedHot = 0;
+	private float MonRunCrouchSum = 0.0f;
+	private float MonRunHeldSum = 0.0f;
+	private float MonRunExtraSum = 0.0f;
 	private float MonTiltStillSum = 0.0f;
 	private float MonTiltStillN = 0.0f;
 	private float MonTiltRunSum = 0.0f;
@@ -1881,6 +1890,13 @@ class AVolleyballPlayer : APawn
 			+ " tiltDig=" + int(MonTiltDigSum / Math::Max(MonTiltDigN, 1.0f))
 			+ " tiltMax=" + int(MonTiltMax)
 			+ " tiltDead=" + int(MonTiltDeadSum / Math::Max(MonTiltDeadN, 1.0f))
+			+ " spdMean=" + int(MonSpeedSum / Math::Max(MonSpeedN, 1.0f))
+			+ " spdTop=" + int(MoveSpeed)
+			+ " spdFrames=" + int(MonSpeedN)
+			+ " spdHot=" + MonSpeedHot
+			+ " runCrouch=" + int(100.0f * MonRunCrouchSum / Math::Max(MonTiltRunN, 1.0f))
+			+ " runHeld=" + int(100.0f * MonRunHeldSum / Math::Max(MonTiltRunN, 1.0f))
+			+ " runExtra=" + int(100.0f * MonRunExtraSum / Math::Max(MonTiltRunN, 1.0f))
 			+ " tiltRunN=" + int(MonTiltRunN)
 			+ " tiltRun45=" + MonTiltRunOver45
 			+ " tiltRun70=" + MonTiltRunOver70
@@ -1977,6 +1993,15 @@ class AVolleyballPlayer : APawn
 			SlideAdd(MonSlideHistY, Slip.Y);
 			SlideAdd(MonSlideHistZ, Slip.Z);
 		}
+		if (bIsGrounded && !IsDiving() && !bRagdollActive)
+		{
+			float SpdNow = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+			if (SpdNow > 60.0f)
+			{
+				MonSpeedSum += SpdNow; MonSpeedN += 1.0f;
+				if (SpdNow > 0.8f * MoveSpeed) MonSpeedHot += 1;
+			}
+		}
 		if (Mesh != nullptr && bIsGrounded && !IsDiving() && !bRagdollActive)
 		{
 			FVector Pelv = Mesh.GetBoneTransform(n"pelvis").Location;
@@ -2037,6 +2062,13 @@ class AVolleyballPlayer : APawn
 				else if (CurrentPose <= 0.05f && Spd > 150.0f)
 				{
 					MonTiltRunSum += TiltDeg; MonTiltRunN += 1.0f;
+					// Is the RUNNING body also crouched? A held ready-stance that
+					// never fades with speed would sink the hips and pitch the
+					// chest — a script-side cause for what otherwise has to be
+					// blamed on the authored run clip.
+					MonRunCrouchSum += (Anim != nullptr) ? Anim.CrouchAmount : 0.0f;
+					MonRunHeldSum += HeldCrouch;
+					MonRunExtraSum += ExtraCrouch;
 					if (TiltDeg > 45.0f) MonTiltRunOver45 += 1;
 					if (TiltDeg > 70.0f) MonTiltRunOver70 += 1;
 				}

@@ -409,6 +409,31 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 	private void SetupWorld()
 	{
+		// THE BALL HAD NO SHADOW (Erik, 2026-09-05) — ROOT CAUSE FOUND AND
+		// MEASURED, not guessed: r.Shadow.RadiusThreshold (ShadowSetup.cpp,
+		// GMinScreenRadiusForShadowCaster, default 0.01) culls a shadow caster
+		// from the depth pass entirely once SphereRadius < Threshold * Distance,
+		// where Distance is measured from the MAIN CAMERA (DependentView's
+		// ShadowViewMatrices origin) — not from the light, not from the object's
+		// own draw distance. The ball's procedural sphere is already
+		// CastShadow=true, Mobility=Movable (logged and confirmed in-engine,
+		// not assumed) — it was never a disabled flag. It's pure math: BallRadius
+		// 10.66 / 0.01 = a hard 1066-unit (10.66 m) cutoff — beyond that
+		// distance from the camera the ball is invisible to every shadow pass,
+		// full stop, regardless of light setup. ABeachVolleyballCamera sits
+		// 1300-3500+ units from anywhere on court (see Camera.as), so the ball
+		// was ALWAYS past the cutoff — confirmed by a HighResShot capture
+		// (Film_112 in a MatchFilmer run) showing a clearly visible airborne
+		// ball with no shadow anywhere near its ground projection, while
+		// players (bounding radius ~9x the ball's, so a ~9x more permissive
+		// cutoff) cast normal, clearly visible ones in the same frame. Contact
+		// shadows (tried first, reverted) can't fix this: that's a ~2%-of-depth
+		// near-field ray march, useless for a caster several metres from the
+		// surface it should be shadowing. Lowering the threshold is the actual
+		// fix and costs nothing here — a handful of actors on an empty court,
+		// not an open world with thousands of small props to newly un-cull.
+		System::ExecuteConsoleCommand("r.Shadow.RadiusThreshold 0.0005");
+
 		// Sun: pitch -90 puts it straight overhead (noon), light travelling
 		// straight down — yaw is irrelevant at the zenith. This replaces the
 		// earlier low-sunset sun (pitch -6, warm backlit rim); see git history
@@ -536,26 +561,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 				// screen. Purely a tie-break; it changes no lighting on its own.
 				LC.SetForwardShadingPriority(1);
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
-
-				// THE BALL HAS NO SHADOW (Erik, 2026-09-05). CastShadow already
-				// defaults true for any UMeshComponent (see UMeshComponent's own
-				// constructor — it overrides UPrimitiveComponent's CastShadow=false),
-				// so the ball's procedural mesh is already a shadow caster; nothing
-				// in Ball.as turns that off. The likely real cause is size, not
-				// intent: a 21cm sphere is squarely the case Virtual Shadow Maps can
-				// miss or under-resolve — thin/small dynamic casters don't reliably
-				// hit enough shadow-map texels to read, independent of CastShadow.
-				// Contact shadows are the engine's own fix for exactly that: a
-				// screen-space ray march from each shaded pixel that catches small/
-				// fast movers the shadow map's resolution missed. bCastContactShadow
-				// already defaults true on every primitive (ball included) — this
-				// line is the only piece that was actually off (ContactShadowLength
-				// defaults to 0, i.e. disabled) UNVERIFIED on this machine (no
-				// render) — desktop only for now, mobile's forward path is a
-				// separate, already-fragile fix (see the shadow-mobility block
-				// below) not worth risking on an unmeasured guess.
-				if (!bMobile)
-					LC.ContactShadowLength = 0.02f;
 
 				// THIS IS WHY MOBILE HAD NO GROUND SHADOWS AT ALL.
 				//
