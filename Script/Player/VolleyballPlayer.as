@@ -1021,6 +1021,19 @@ class AVolleyballPlayer : APawn
 	private float MonPrevCrouch = 0.0f;
 	private float MonPrevCrouchDelta = 0.0f;
 	private FVector MonPrevHandR;
+	// HAND JERK, the thing "stötiga slaganimationer" actually is. The teleport
+	// check above only catches the hand target moving too FAST; a gesture can sit
+	// inside that speed ceiling the whole time and still look like it is being
+	// shoved, because what the eye reads as a jolt is a reversal — the hand
+	// changing direction sharply between frames. Measured only while a hit
+	// gesture is live, so ordinary repositioning does not dilute it.
+	private FVector MonPrevHandStep;
+	private bool bMonHandStepInit = false;
+	private int MonHandJerks = 0;
+	private int MonTotHandJerks = 0;
+	private float MonHandTurnMax = 0.0f;
+	private float MonHandGestureTime = 0.0f;
+	private int MonJerkLogs = 0;
 	private bool bMonInit = false;
 	private int MonCFlipLogs = 0;
 	// Written by UpdateIKTargets each frame so CFLIP can attribute the source.
@@ -1653,6 +1666,9 @@ class AVolleyballPlayer : APawn
 			+ " yawFlips=" + MonTotYawFlips
 			+ " crouchFlips=" + MonTotCrouchFlips
 			+ " ikTeleports=" + MonTotIKTeleports
+			+ " handJerks=" + MonTotHandJerks
+			+ " handTurnMax=" + int(MonHandTurnMax)
+			+ " gestureT=" + int(MonHandGestureTime * 100.0f)
 			+ " goalJumps=" + MonGoalJumps
 			+ " yawRateMean=" + YawMean
 			+ " yawRateMax=" + int(MonYawRateMax)
@@ -1931,6 +1947,41 @@ class AVolleyballPlayer : APawn
 			MonIKTeleports++;
 			MonTotIKTeleports++;
 		}
+		// 4b) HAND JERK during a hit gesture: the step direction reversing hard
+		// between frames, with real movement on both sides of the reversal so a
+		// hand that is merely settling cannot register. Both magnitudes are in
+		// cm per frame; 1.5 at 120Hz is 180cm/s, i.e. deliberate motion.
+		FVector HandStepVec = HandR - MonPrevHandR;
+		if (bReaching && DeltaTime > 0.0f)
+		{
+			MonHandGestureTime += DeltaTime;
+			if (bMonHandStepInit && HandStepVec.Size() > 1.5f && MonPrevHandStep.Size() > 1.5f)
+			{
+				float CosT = HandStepVec.GetSafeNormal()
+					.DotProduct(MonPrevHandStep.GetSafeNormal());
+				float TurnDeg = Math::RadiansToDegrees(Math::Acos(Math::Clamp(CosT, -1.0f, 1.0f)));
+				if (TurnDeg > MonHandTurnMax) MonHandTurnMax = TurnDeg;
+				if (TurnDeg > 90.0f)
+				{
+					MonHandJerks++;
+					MonTotHandJerks++;
+					if (MonJerkLogs < 40)
+					{
+						MonJerkLogs++;
+						Log("HANDJERK turn=" + int(TurnDeg) + " hit=" + int(CurrentHit)
+							+ " step=" + int(HandStepVec.Size() * 100)
+							+ " prev=" + int(MonPrevHandStep.Size() * 100)
+							+ " swing=" + int(SwingProgress() * 100)
+							+ " grounded=" + bIsGrounded);
+					}
+				}
+			}
+			MonPrevHandStep = HandStepVec;
+			bMonHandStepInit = true;
+		}
+		else
+			bMonHandStepInit = false;
+
 		// Rolling hand-speed peak for the SWING telemetry (decays ~0.5s).
 		PeakHandSpd = Math::Max(HandStep / DeltaTime, PeakHandSpd - 4000.0f * DeltaTime);
 
