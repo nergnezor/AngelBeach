@@ -107,7 +107,9 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// sand spray) leaving lines, net and posts, and the players stop being textured
 	// bodies and become their reflection layer only — smooth shells lit by the sky
 	// (see AVolleyballPlayer::SetLightGraphics). Shadows, volumetric fog and Lumen
-	// GI go with it, which is where most of the frame time actually is.
+	// go with it — all of Lumen, reflections included — and what is left renders at
+	// half resolution behind a frame cap. That second half is where the frame time
+	// actually is: hiding geometry alone barely moved it.
 	//
 	// It is a rendering switch and NOTHING ELSE: no gameplay state, no physics, no
 	// AI input reads it, so a match can be toggled in and out mid-rally without the
@@ -145,6 +147,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 		for (AVolleyballPlayer P : Players)
 			P.SetLightGraphics(bOn);
 
+		ApplyLightGraphicsFill(bOn);
+		ApplyLightGraphicsSkyLight(bOn);
 		ApplyLightGraphicsCVars(bOn);
 
 		if (bOn)
@@ -153,29 +157,254 @@ class ABeachVolleyballGameMode : AGameModeBase
 			Print("Light graphics OFF");
 	}
 
-	// The restore values are the engine defaults these cvars have on this project,
-	// not a remembered snapshot: nothing else in the game writes them, so there is
-	// no other setting to trample. r.VolumetricFog only matters on desktop anyway
-	// (SetupWorld turns the fog component's volumetric mode off on mobile), and
-	// Lumen is desktop-only to begin with — on mobile the two are simply no-ops and
-	// shadow quality carries the whole win.
+	// Half resolution each way, so a quarter of the pixels. This is the single
+	// biggest lever in the mode: hiding the beach removes triangles, but every
+	// remaining pixel still paid full price for reflections and post — the first
+	// version of light graphics left the GPU pinned. TSR upsamples back to the
+	// window, so the shells stay smooth-edged rather than turning into stairs.
+	// Lower it to 33 if a machine still can't keep up; below that TSR gives up.
+	const int LightGraphicsScreenPercentage = 50;
+
+	// WHY A SECOND LIGHT EXISTS ONLY IN THIS MODE.
+	//
+	// In normal mode the side of a player the camera sees is lit by Lumen. The sun
+	// comes in at pitch -45 and the SkyLight's diffuse reaches this fully dynamic
+	// scene through Lumen, so with Lumen switched off there is almost nothing left
+	// on a vertical surface: the first film of the Lumen-free mode came back with
+	// four black cutouts standing on a lit court, whatever colour the shells were
+	// given. That is the exact failure mobile has for the same reason — see the
+	// SkyLight block in SetupWorld, "MOBILE STANDS IN FOR LUMEN HERE".
+	//
+	// So the mode brings its own fill: one directional light, shadows off, aimed
+	// back at the bodies from the far side of the sun's yaw and slightly above.
+	// It replaces the missing bounce term for the price of one more light pass
+	// over four characters and a net — orders of magnitude below what Lumen cost.
+	// Cool-tinted, because what it stands in for is sky.
+	private UDirectionalLightComponent LightModeFill;
+
+	// FREEZE THE SKY RATHER THAN SWITCH IT OFF.
+	//
+	// The SkyLight runs with real-time capture: it re-renders and re-convolves its
+	// cubemap every single frame (CaptureConvolveSkyEnvMap), for a sky with a fixed
+	// sun, a fixed atmosphere and nothing in it that reacts to the match. That is a
+	// per-frame price for a constant, and it is paid in both modes.
+	//
+	// The obvious way to stop it — r.SkyLight.RealTimeReflectionCapture 0 — is a
+	// trap, and it was in here for one filming: pulling the cvar out from under a
+	// real-time SkyLight leaves it without a valid cubemap, and the whole scene
+	// filmed blown out to near-white (players, rings and lines all clipped; the
+	// beach in normal mode was fine, which is how the cvar was identified rather
+	// than the reflection capture that landed in the same change).
+	//
+	// Doing it through the component instead keeps a valid cubemap: stop capturing,
+	// then take exactly one capture of the scene as it now stands. On the way back,
+	// hand the sky its live capture again.
+	private USkyLightComponent SkyLight;
+
+	private void ApplyLightGraphicsSkyLight(bool bOn)
+	{
+		if (SkyLight == nullptr) return;
+
+		SkyLight.SetRealTimeCapture(!bOn);
+		if (bOn)
+			SkyLight.RecaptureSky();
+	}
+
+	private void ApplyLightGraphicsFill(bool bOn)
+	{
+		if (LightModeFill == nullptr)
+		{
+			if (!bOn) return;   // never turned on, nothing to turn off
+
+			ADirectionalLight FillActor = Cast<ADirectionalLight>(SpawnActor(
+				ADirectionalLight, FVector(0, 0, 10000), FRotator(-20, 230, 0)));
+			if (FillActor == nullptr) return;
+
+			LightModeFill = Cast<UDirectionalLightComponent>(
+				FillActor.GetComponentByClass(UDirectionalLightComponent));
+			if (LightModeFill == nullptr) return;
+
+			LightModeFill.SetMobility(EComponentMobility::Movable);
+		}
+
+		// EVERY setting is re-applied on every enable, not once at spawn. The light
+		// outlives a soft reload — the actor is already in the world, so code that
+		// only ran in the spawn branch never runs again and an edit here appears to
+		// do nothing until the editor is restarted. That is exactly how the
+		// ForwardShadingPriority line below looked broken when it was first added.
+		LightModeFill.SetIntensity(4.0f);
+		LightModeFill.SetLightColor(FLinearColor(0.72f, 0.82f, 1.0f));
+		LightModeFill.CastShadows = false;
+		// NOT an atmosphere sun light: that slot belongs to the real sun, and
+		// handing it to a second light would give the sky a second sun disc.
+		LightModeFill.SetAtmosphereSunLight(false);
+		// Forward shading, translucency, water and volumetric fog each pick ONE
+		// directional light, and the editor puts a banner across the screen while
+		// two lights tie for it ("Multiple directional lights are competing to be
+		// the single one used for forward shading..."). The tie is on priority
+		// alone — LightGridInjection.cpp only counts lights sharing the highest
+		// value, then falls back to brightness — so the fill ranks below the sun,
+		// which SetupWorld raises to 1 for the same reason. This is a fill; it
+		// should never be the light those passes speak for.
+		LightModeFill.SetForwardShadingPriority(-1);
+
+		LightModeFill.SetVisibility(bOn);
+	}
+
+	// Uncapped, the renderer draws as fast as the card allows and pins the GPU no
+	// matter how cheap the scene is — which is exactly what "light graphics didn't
+	// feel light" looked like. A cap is the one setting that makes the card idle,
+	// and 60 is above anything a rally needs to be readable at.
+	const int LightGraphicsMaxFPS = 60;
+
+	// The restore values are this PROJECT's settings (Config/DefaultEngine.ini),
+	// not the engine's cvar defaults — those differ: the engine ships GI=None and
+	// Reflections=SSR, while DefaultEngine.ini asks for Lumen on both. Restoring
+	// the engine defaults would silently downgrade the normal look. Nothing else
+	// in the game writes these, so there is no third setting to trample.
+	// r.VolumetricFog only matters on desktop anyway (SetupWorld turns the fog
+	// component's volumetric mode off on mobile) and Lumen is desktop-only to
+	// begin with — on mobile those are no-ops and the resolution scale, the frame
+	// cap and shadows carry the whole win.
 	private void ApplyLightGraphicsCVars(bool bOn)
 	{
 		if (bOn)
 		{
+			System::ExecuteConsoleCommand("t.MaxFPS " + LightGraphicsMaxFPS);
+			System::ExecuteConsoleCommand("r.ScreenPercentage " + LightGraphicsScreenPercentage);
+
+			// Lumen off ENTIRELY, GI and reflections both. The first version of
+			// this mode kept Lumen reflections on the grounds that they are what
+			// the shells are made of — but hardware-ray-traced reflections are
+			// the most expensive thing in the frame, so the "cheap" mode was
+			// paying for the priciest pass in the renderer. ReflectionMethod 0 is
+			// not "no reflections": placed Reflection Captures and the SkyLight
+			// still light the shells, and SetupWorld spawns a
+			// SphereReflectionCapture over the court precisely for this. The
+			// mirror look survives as a cubemap lookup instead of a ray trace.
+			// (If the shells ever need to reflect each OTHER rather than just the
+			// sky, ReflectionMethod 2 is SSR — screen-space, still far below
+			// Lumen's cost. Do not go back to 1 in this mode.)
+			System::ExecuteConsoleCommand("r.DynamicGlobalIlluminationMethod 0");
+			System::ExecuteConsoleCommand("r.ReflectionMethod 0");
+
+			// AND THE REFLECTION CAPTURE GOES WITH THEM.
+			//
+			// With ReflectionMethod 0 the placed capture stops being a fallback and
+			// becomes the ONLY specular source in the frame, applied at the full HDR
+			// radiance of the sky it photographed. Filmed: every player, every team
+			// ring and the court lines clipped to white. Normal mode is fine with the
+			// same capture precisely because Lumen is in front of it there — which is
+			// why filming normal mode did NOT clear the capture of suspicion, and the
+			// bisect had to be run in this mode.
+			//
+			// A mode whose players are flat tinted bodies has nothing to reflect
+			// anyway. Turning captures off here costs the look nothing and saves the
+			// cubemap lookups on top.
+			System::ExecuteConsoleCommand("r.ReflectionCapture.Runtime 0");
+
 			System::ExecuteConsoleCommand("r.ShadowQuality 0");
+			// r.ShadowQuality does NOT reach virtual shadow maps — with VSMs on,
+			// the directional light keeps rendering its shadow pass at quality 0
+			// and the "cheap" mode quietly stays expensive. Kill the page pool too.
+			System::ExecuteConsoleCommand("r.Shadow.Virtual.Enable 0");
 			System::ExecuteConsoleCommand("r.VolumetricFog 0");
-			// Reflections are deliberately left ON: they are what the players'
-			// shells are made of. The SphereReflectionCapture SetupWorld spawns
-			// keeps them specular even with Lumen's GI switched off underneath.
-			System::ExecuteConsoleCommand("r.Lumen.DiffuseIndirect.Allow 0");
+
+			// THE SKY DOES NOT CARE HOW EMPTY THE COURT IS. Volumetric clouds are
+			// a raymarch every frame (CloudView in a GPU profile) whatever is on
+			// the sand below. The gradient and the sun disc stay; only the clouds go.
+			System::ExecuteConsoleCommand("r.VolumetricCloud 0");
+
+			// The post chain, which profiled bigger than the whole scene render:
+			// bloom's downsample pyramid, film grain, and the rest of the effects
+			// a mode built to read motion clearly has no use for.
+			//
+			// EYE ADAPTATION STAYS ON, though it profiled as one of the biggest
+			// single passes (the log-luminance setup and the histogram readback).
+			// The scene's whole tonemapping assumes it — see the exposure notes in
+			// SetupWorld — and switching it off pins exposure at a fixed value the
+			// image was never graded for: the court, the lines and all four players
+			// filmed blown out to near-white. A correct picture is worth its ~2ms.
+			System::ExecuteConsoleCommand("r.BloomQuality 0");
+			System::ExecuteConsoleCommand("r.FilmGrain 0");
+			System::ExecuteConsoleCommand("r.MotionBlurQuality 0");
+			System::ExecuteConsoleCommand("r.DepthOfFieldQuality 0");
+			System::ExecuteConsoleCommand("r.LensFlareQuality 0");
+
+			// TSR keeps its history at 2x output by default — at 1280x720 that is a
+			// 2560x1440 buffer being read and rewritten every frame, which is more
+			// pixels than anything else in the mode touches. 100 keeps TSR (it is
+			// what makes half-resolution look like anything) at history parity.
+			System::ExecuteConsoleCommand("r.TSR.History.ScreenPercentage 100");
 		}
 		else
 		{
+			System::ExecuteConsoleCommand("t.MaxFPS 0");
+			System::ExecuteConsoleCommand("r.ScreenPercentage 100");
+			System::ExecuteConsoleCommand("r.DynamicGlobalIlluminationMethod 1");
+			System::ExecuteConsoleCommand("r.ReflectionMethod 1");
+			System::ExecuteConsoleCommand("r.ReflectionCapture.Runtime 1");
 			System::ExecuteConsoleCommand("r.ShadowQuality 5");
+			System::ExecuteConsoleCommand("r.Shadow.Virtual.Enable 1");
 			System::ExecuteConsoleCommand("r.VolumetricFog 1");
-			System::ExecuteConsoleCommand("r.Lumen.DiffuseIndirect.Allow 1");
+			System::ExecuteConsoleCommand("r.VolumetricCloud 1");
+			System::ExecuteConsoleCommand("r.BloomQuality 5");
+			System::ExecuteConsoleCommand("r.FilmGrain 1");
+			System::ExecuteConsoleCommand("r.MotionBlurQuality 4");
+			System::ExecuteConsoleCommand("r.DepthOfFieldQuality 2");
+			System::ExecuteConsoleCommand("r.LensFlareQuality 2");
+			System::ExecuteConsoleCommand("r.TSR.History.ScreenPercentage 200");
 		}
+	}
+
+	// THE COURT'S REFLECTION CAPTURE LIVES IN THE LEVEL, NOT IN THIS FILE.
+	//
+	// It used to be spawned here at runtime, and the editor said what was wrong with
+	// that across the top of the screen: "REFLECTION CAPTURES NEED TO BE REBUILT
+	// (1 unbuilt)". A capture normally gets its cubemap from a lighting build stored
+	// in the map's MapBuildData, and this scene is built at runtime onto an empty
+	// level, so there was nothing to bake and nothing baked. What made it look fine
+	// anyway is that the EDITOR hands an unbuilt capture preview data
+	// (Scene->NumUnbuiltReflectionCaptures counts exactly the proxies flagged
+	// bUsingPreviewCaptureData, RendererScene.cpp:2782). Preview data does not exist
+	// in a packaged build: shipped, that capture contributed nothing at all.
+	//
+	// The fix is a RUNTIME capture — rendered live into a cubemap, no build data —
+	// and bRuntimeCapture is UPROPERTY(BlueprintReadOnly) with no setter anywhere in
+	// the engine, so script cannot turn it on. It has to be a placed actor with the
+	// box ticked, which is why there is now a SphereReflectionCapture in
+	// CourtLevel.umap (the one map .gitignore keeps, so it survives a fresh clone).
+	//
+	// Two things this file still owns:
+	//   - r.ReflectionCapture.Runtime 1, without which a runtime-flagged capture is
+	//     skipped entirely (bRuntimeMode == IsRuntimeCapture(), ReflectionCapture-
+	//     Component.cpp:793). There are no baked captures to lose by switching.
+	//   - one RefreshCapture() once the world exists. Once is the whole point: the
+	//     sun, the sky and the court never change, so this is a photograph of a room
+	//     that will look the same all match. Nothing here re-captures per frame.
+	private void EnableCourtReflectionCapture()
+	{
+		System::ExecuteConsoleCommand("r.ReflectionCapture.Runtime 1");
+		// Not this frame — SetupWorld is still building the court, the net and the
+		// sky around it, and a capture taken now would photograph a half-made scene
+		// and keep it for the whole match.
+		System::SetTimer(this, n"CaptureCourtReflections", 1.0f, bLooping = false);
+	}
+
+	UFUNCTION()
+	void CaptureCourtReflections()
+	{
+		TArray<ASphereReflectionCapture> Captures;
+		GetAllActorsOfClass(ASphereReflectionCapture, Captures);
+		for (ASphereReflectionCapture Cap : Captures)
+		{
+			UReflectionCaptureComponent CC = Cast<UReflectionCaptureComponent>(
+				Cap.GetComponentByClass(UReflectionCaptureComponent));
+			// bFastRender: all six faces in one frame instead of timesliced across
+			// six. One hitch at match start beats six frames of a half-built cubemap.
+			if (CC != nullptr) CC.RefreshCapture(bFastRender = true);
+		}
+		Log("REFLECT captured court reflections, captures=" + Captures.Num());
 	}
 
 	private void SetupWorld()
@@ -299,6 +528,13 @@ class ABeachVolleyballGameMode : AGameModeBase
 					LC.SetIntensity(bMobile ? 8.0f : 10.0f);
 				LC.SetLightColor(FLinearColor(1.0f, 0.96f, 0.90f));   // midday sun, barely warm
 				LC.CastShadows = true;
+				// THIS is the directional light forward shading, translucency, water
+				// and volumetric fog should speak for — stated outright rather than
+				// left to the brightness fallback, because light graphics mode adds a
+				// second directional light and a tie on the default priority of 0 is
+				// what puts the "multiple directional lights are competing" banner on
+				// screen. Purely a tie-break; it changes no lighting on its own.
+				LC.SetForwardShadingPriority(1);
 				LC.SetAtmosphereSunLight(true);                        // visible sun disc for the flare
 
 				// THIS IS WHY MOBILE HAD NO GROUND SHADOWS AT ALL.
@@ -391,35 +627,32 @@ class ABeachVolleyballGameMode : AGameModeBase
 			}
 		}
 
-		if (!bMobile)
-		{
-			// One capture at court centre. Lumen reflections fall back to it wherever
-			// screen-space traces run off the edge of frame and hardware traces miss,
-			// which on a scene this open is most of the horizon. Mobile has its own,
-			// separate capture below — do not spawn a second one here.
-			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
-		}
-
-		// MOBILE GETS A CAPTURE TOO, outside the Lumen-fallback block above.
+		// The capture itself is placed in CourtLevel (see EnableCourtReflectionCapture
+		// for why it cannot be spawned here). Lumen reflections fall back to it
+		// wherever screen-space traces run off the edge of frame and hardware traces
+		// miss — on a scene this open, most of the horizon — and in light graphics
+		// mode, with Lumen off entirely, it is the only source of specular there is.
 		//
-		// Reflection captures predate Lumen and are the standard mobile specular
-		// source in forward rendering — mobile has no SSR and no Lumen, so
-		// without one there is nothing at all for a specular surface (wet sand,
-		// water) to reflect, which is part of why the measured mobile reference
-		// shot never got past a peak of 207/255: nothing in frame could catch a
-		// highlight. Cheap (one bake, no per-frame cost) and standard enough that
-		// it should be safe, but the actual gain is unverified without a device
-		// — check peak luminance moves past 207 before trusting this comment.
-		if (bMobile)
-		{
-			SpawnActor(ASphereReflectionCapture, FVector(0, 0, 250), FRotator::ZeroRotator);
-		}
+		// MOBILE GETS THE SAME ONE. It used to spawn its own, on the reasoning that
+		// reflection captures predate Lumen and are the standard mobile specular
+		// source in forward rendering (no SSR, no Lumen: without a capture nothing in
+		// frame can catch a highlight, which is part of why the measured mobile
+		// reference shot never got past a peak of 207/255). That reasoning is intact;
+		// only the actor moved. Whether a RUNTIME capture works on Android is
+		// unverified — but the spawned one it replaces was unbuilt, so a packaged
+		// mobile build had no working capture either way. Check peak luminance on
+		// device before trusting either version.
+		EnableCourtReflectionCapture();
 
 		// SkyLight captures the sky for soft ambient fill so the court isn't black.
 		ASkyLight SkyLightActor = Cast<ASkyLight>(
 			SpawnActor(ASkyLight, FVector(0, 0, 500), FRotator::ZeroRotator));
 		if (SkyLightActor != nullptr)
 		{
+			// Kept: light graphics mode freezes this one rather than let it
+			// re-capture the sky every frame. See ApplyLightGraphicsSkyLight.
+			SkyLight = Cast<USkyLightComponent>(
+				SkyLightActor.GetComponentByClass(USkyLightComponent));
 			USkyLightComponent SLC = Cast<USkyLightComponent>(
 				SkyLightActor.GetComponentByClass(USkyLightComponent));
 			if (SLC != nullptr)

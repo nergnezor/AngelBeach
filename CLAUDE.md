@@ -16,11 +16,69 @@ their arm bones; AI plays structured volleyball (receive → set → attack).
 `B` toggles a stripped-down render of the same match — `ABeachVolleyballGameMode::
 ToggleLightGraphics()`, bound in `AHumanPlayer` because a possessed pawn is the only
 place script sees a keyboard in this fork. It hides the beach (sand, sea, coastline,
-dunes, props, sand spray — court lines, net and posts stay), swaps every player's
-skin for its reflection layer only (BasicShapeMaterial at roughness 0.05, dark
-team-tinted base — see `AVolleyballPlayer::SetLightGraphics`), and drops shadows,
-volumetric fog and Lumen GI. Lumen *reflections* stay on deliberately: they are what
-the shells are made of.
+dunes, props, sand spray — court lines, net and posts stay) and paints every player
+in a strong flat team tint (`AVolleyballPlayer::SetLightGraphics`).
+
+**Where the frame time actually goes.** Hiding geometry barely moved it — this scene
+is a handful of meshes; the cost is per-pixel. So the mode also:
+- turns **all** of Lumen off, reflections included (`r.DynamicGlobalIlluminationMethod 0`,
+  `r.ReflectionMethod 0`). Hardware-ray-traced reflections were the single most
+  expensive pass in the frame. The level's reflection capture goes off with them
+  (`r.ReflectionCapture.Runtime 0`): with no Lumen in front of it, the capture becomes
+  the only specular source and clips every player, ring and line to white.
+- freezes the SkyLight — `SetRealTimeCapture(false)` + one `RecaptureSky()` — instead
+  of re-capturing and re-convolving a cubemap every frame for a sky that never changes.
+  Do **not** use `r.SkyLight.RealTimeReflectionCapture 0` for this: it leaves the light
+  without a valid cubemap and blows the whole scene out.
+- renders at **50% screen percentage** (a quarter of the pixels, TSR upsamples back).
+- caps at **60 fps** (`t.MaxFPS`). Uncapped, the GPU pins at 100% however cheap the
+  scene is, which is what "light graphics isn't light" felt like.
+- drops shadows — **both** `r.ShadowQuality 0` *and* `r.Shadow.Virtual.Enable 0`; the
+  first does not reach virtual shadow maps, so on its own the shadow pass survives.
+- drops clouds, bloom, film grain, motion blur, DOF and lens flare. **Eye adaptation
+  stays on** even though it profiles large: the scene is graded for auto-exposure, and
+  switching it off pins exposure where the image was never graded and blows it out.
+- adds one shadowless directional fill light. With Lumen gone, the sun at pitch −45
+  leaves the camera-facing side of a body almost black — the same failure mobile has
+  (see the SkyLight block in `SetupWorld`).
+
+Restore values are read from `Config/DefaultEngine.ini`, **not** the engine cvar
+defaults: the engine ships GI=None/Reflections=SSR while this project asks for Lumen
+on both, so restoring "defaults" would silently downgrade the normal look.
+
+**Bisect renderer regressions in the mode that shows them.** The capture blow-out above
+filmed perfectly fine in normal mode, because Lumen sits in front of the capture there.
+A clean normal-mode frame proves nothing about a change that only light mode exposes.
+
+## The court's reflection capture lives in CourtLevel
+
+It used to be spawned at runtime, and was therefore never built: a capture's cubemap
+comes from the map's MapBuildData, and this scene is assembled at runtime onto an empty
+level. The editor hides that by handing an unbuilt capture *preview* data (hence
+"REFLECTION CAPTURES NEED TO BE REBUILT" on screen) — preview data a packaged build does
+not have, so shipped it contributed nothing. The fix is a **runtime capture**, and
+`bRuntimeCapture` is `BlueprintReadOnly` with no setter anywhere in the engine, so it
+cannot come from script: there is now a `SphereReflectionCapture` placed in
+`CourtLevel.umap` with the box ticked. `GameMode` supplies the two halves script still
+owns — `r.ReflectionCapture.Runtime 1` (without it a runtime-flagged capture is skipped
+entirely) and one `RefreshCapture()` a second after `BeginPlay`, once.
+
+Placing it was done head-less through the project's own MCP bridge, which is the way to
+make editor-only asset changes from a terminal: `scripts/launch_ue.sh editor` (add
+`EXTRA_ARGS="-RenderOffscreen -nosplash"`, and `AS_DEBUG_PORT=` if a headless match
+already holds 27099), then `scripts/etapp5_mcp.py <command> <json>` for
+`spawn_actor_from_class` / `set_actor_property` (it takes `component_name`) /
+`save_asset`. The `unreal` server in `.mcp.json` is a different, unrelated thing and its
+binary is not installed.
+
+**A material assigned from script must have the right usage flag.** The players were
+first rendered as mirror shells (BasicShapeMaterial, roughness 0.05). That works in
+the *editor*, which sets usage flags for you on assignment, and renders as the black
+**default material** in `-game`: `Material .../BasicShapeMaterial missing usage flag
+SkeletalMesh! Default Material will be used in game.` Nothing in script can set that
+flag, and a hand-authored material asset would be gitignored (`Content/*.uasset`) and
+therefore missing on a fresh clone and in CI. Hence a tint on the mesh's own material.
+Same trap for any future skeletal-mesh material swap — check the log, not the editor.
 
 - **It is a rendering switch and nothing else** — no gameplay, physics or AI state
   reads it, so toggling mid-rally cannot change the result. Keep it that way.
