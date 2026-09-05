@@ -1241,6 +1241,9 @@ class AVolleyballPlayer : APawn
 	// almost nothing about whether the players rock. These count the windows that
 	// exceed the limit against the windows that were eligible at all, so the
 	// answer is a rate that means the same thing at any run length.
+	private int MonWasteWindowsSeen = 0;
+	private int MonWasteOverWindows = 0;
+	private int MonGoalOverWindows = 0;
 	private int MonRevisitWindows = 0;
 	private int MonYawOverWindows = 0;
 	private int MonCrOverWindows = 0;
@@ -1763,6 +1766,9 @@ class AVolleyballPlayer : APawn
 			+ " yawRateMean=" + YawMean
 			+ " yawRateMax=" + int(MonYawRateMax)
 			+ " wasteWorst=" + int(MonWasteWorst)
+			+ " wasteOverWindows=" + MonWasteOverWindows
+			+ " goalOverWindows=" + MonGoalOverWindows
+			+ " wasteWindowsSeen=" + MonWasteWindowsSeen
 			+ " wasteTotal=" + int(MonWasteTotal)
 			+ " yawRevisit=" + int(MonYawRevisit)
 			+ " yawWasteDeg=" + int(MonYawWaste)
@@ -2255,13 +2261,29 @@ class AVolleyballPlayer : APawn
 			// The window's own wasted travel, so the emit condition can see the
 			// thing the three flip counters structurally cannot. 25cm of walking
 			// that arrives nowhere inside half a second is a shuttle, not a run.
-			float WinExtent = Math::Max(MonWasteExtent, 1.0f);
-			float WinRatio = (MonWastePath >= WasteMinPath) ? MonWastePath / WinExtent : 1.0f;
+			// THE EXTENT NEEDS A FLOOR TOO, and it had one of 1cm — so a window
+			// where the body walked its minimum path but ended up 1cm from where
+			// it started scored 2500, from a motion nobody can see. Both ratios
+			// are path over extent, and a floor on the path alone leaves the
+			// denominator free to go to nothing. 20cm is where "went somewhere"
+			// starts; below it the player, or the goal, has stayed put and the
+			// ratio has no meaning to report.
+			const float WasteMinExtent = 20.0f;
+			float WinExtent = Math::Max(MonWasteExtent, WasteMinExtent);
+			float WinRatio = (MonWastePath >= WasteMinPath
+				&& MonWasteExtent >= WasteMinExtent) ? MonWastePath / WinExtent : 1.0f;
 			// Same primitive for the commanded goal. 25cm floor for the same
 			// reason: below it the extent is noise and the ratio is meaningless.
-			float GoalRatio = (MonGoalPath >= 25.0f)
-				? MonGoalPath / Math::Max(MonGoalExtent, 1.0f) : 1.0f;
+			float GoalRatio = (MonGoalPath >= 25.0f && MonGoalExtent >= WasteMinExtent)
+				? MonGoalPath / Math::Max(MonGoalExtent, WasteMinExtent) : 1.0f;
 			if (int(GoalRatio * 100.0f) > MonGoalJumps) MonGoalJumps = int(GoalRatio * 100.0f);
+			// ...and how OFTEN, not only the worst window in the match. Same
+			// reasoning as the rocking rate and the gait: these are extremes
+			// gated at a fixed number, and an extreme can only grow with the
+			// length of the run.
+			MonWasteWindowsSeen += 1;
+			if (WinRatio > 2.5f) MonWasteOverWindows += 1;
+			if (GoalRatio > 2.5f) MonGoalOverWindows += 1;
 			if (MonMoveFlips >= 2 || MonYawFlips >= 3 || MonCrouchFlips >= 3
 				|| MonIKTeleports >= 1 || WinRatio > 2.5f || GoalRatio > 2.5f
 				|| MonYawRevisitWin > 250.0f || MonCrRevisitWin > 250.0f)
