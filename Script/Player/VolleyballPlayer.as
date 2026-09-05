@@ -1444,6 +1444,12 @@ class AVolleyballPlayer : APawn
 	// Human bands, in engine units. Deliberately generous — the point is to
 	// catch "no human could do that", not to police centimetres.
 	const float HumanAccelLimit = 1000.0f;   // cm/s^2 (10 m/s^2)
+	// The body can STOP harder than it can start, which is why the report bands
+	// them separately (accel 10, decel 12) — and why the over-budget test has to
+	// as well. It did not: it charged every frame against the accel limit, so
+	// GroundDecel, which is exactly 12 by design, was a violation on every hard
+	// stop in the game. The row could not reach its target of zero no matter what
+	// the body did.
 	const float HumanDecelLimit = 1200.0f;   // cm/s^2 (12 m/s^2)
 
 	private void UpdateBiomech(float DeltaTime)
@@ -1495,13 +1501,14 @@ class AVolleyballPlayer : APawn
 			// bare > counted every ordinary frame of a run as a violation. That
 			// filled the diagnostic's log budget with at-the-cap noise and hid the
 			// real offenders completely.
-			if (A.Size() > HumanAccelLimit * 1.05f && !bExplosiveGround)
+			float BudgetLimit = (Along < 0.0f) ? HumanDecelLimit : HumanAccelLimit;
+			if (A.Size() > BudgetLimit * 1.05f && !bExplosiveGround)
 			{
 				MonAccelOverBudget += DeltaTime;
 				// WHAT is producing it, not just how much. Only genuinely large
 				// excursions are logged (2x the limit), for the same reason: the
 				// interesting cases are velocity discontinuities, not the cap.
-				if (MonAccelLogs < 25 && A.Size() > HumanAccelLimit * 2.0f)
+				if (MonAccelLogs < 25 && A.Size() > BudgetLimit * 2.0f)
 				{
 					MonAccelLogs++;
 					Log("ACCELSPIKE " + GetName()
