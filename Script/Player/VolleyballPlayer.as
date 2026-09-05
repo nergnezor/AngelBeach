@@ -2603,6 +2603,19 @@ class AVolleyballPlayer : APawn
 				OutVel = Pure;
 		}
 
+		// THE SECOND BALL'S ARC, measured at the moment it leaves the setter —
+		// this is the whole budget the attacker gets. The jump needs the ball to
+		// still be above SpikeStrikeZ (~330) with a load + time-to-apex (~0.76s)
+		// left, so both the peak and the time to the descending crossing are
+		// decided right here, by this one velocity.
+		if (MyTouches == 1 && !bBlockContact)
+		{
+			float PeakZ = BallPos.Z + (OutVel.Z * OutVel.Z) / (2.0f * 980.0f);
+			Log("SETARC contactZ=" + int(BallPos.Z) + " vz=" + int(OutVel.Z)
+				+ " peak=" + int(PeakZ) + " type=" + int(Type)
+				+ " aimErr=" + int(AimErrCm));
+		}
+
 		// PLAN vs ACTUAL: grade the budget's promise at the moment of truth.
 		// slack/speedFrac are what the plan booked (×100), settle is how long
 		// the body was planted before this contact, bodySpd/handErr/aimErr are
