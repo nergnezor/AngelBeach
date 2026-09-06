@@ -11,6 +11,30 @@ their arm bones; AI plays structured volleyball (receive → set → attack).
   (Ctrl+Alt+F11 or restart editor) — soft reload will NOT pick it up.
 - Logs: `Saved/Logs/BeachVolleyball.log`. Angelscript `Log()` lines are prefixed `Angelscript:`.
 
+**When a change does not take, the reload almost certainly RAN and FAILED.** A compile
+error does not stop the editor and does not pop anything you will notice — it logs
+
+    Angelscript: Error:  (284:3): 'bHoldGapLogged' is not declared
+    Angelscript: Error: Hot reload failed due to script compile errors. Keeping all old script code.
+
+and carries on running the previous build. Everything looks normal and every edit after
+that appears to do nothing. So, in this order:
+
+1. `grep -n "Angelscript: Error" Saved/Logs/launch-editor-*.log | tail` — a compile error
+   is the answer nearly every time, and the line number is in the message.
+2. A new member variable or UPROPERTY needs a **Full Reload** (Ctrl+Alt+F11); soft reload
+   will not pick it up. See above.
+3. Only if neither: scripts loaded from `PrecompiledScript.Cache` disable hot reload for
+   the whole run, and the engine says so outright — *"Using fully precompiled scripts. Hot
+   reloading is disabled for this run."* Delete the cache or pass `-as-development-mode`.
+
+`Config/DefaultEngine.ini` used to carry an `[/Script/AngelscriptCode.AngelscriptSettings]`
+section setting `bEnableAngelscriptHotReload=True` and `bLogScriptCompilation=False`.
+NEITHER KEY EXISTS in the engine — the strings appear nowhere in the fork's source. They
+were invented, they did nothing, and they are exactly the sort of thing that sends you
+looking in the wrong place. Removed. Hot reload is on regardless; the settings class the
+section names is real and editable under Project Settings > Plugins > Angelscript.
+
 ## Light graphics mode (B)
 
 `B` toggles a stripped-down render of the same match — `ABeachVolleyballGameMode::
