@@ -170,16 +170,56 @@ class ABeachVolleyballGameMode : AGameModeBase
 			Print("Light graphics OFF");
 	}
 
-	// Restored to full resolution (Erik, 2026-09-06: "återställ till full
-	// upplösning") now that light graphics is the default look rather than a
-	// last-resort performance toggle — half resolution as the everyday
-	// picture read as soft/blurry, not "light". This was THE single biggest
-	// performance lever in the mode (a quarter of the pixels; hiding the
-	// beach removes triangles, but every remaining pixel still paid full
-	// price for reflections and post), so on a machine that can't hold frame
-	// rate at 100 this is the first thing to drop back down — try 66, then
-	// 50; below ~33 TSR gives up and the upsample itself gets ugly.
-	const int LightGraphicsScreenPercentage = 100;
+	// SCALES TO THE ACTUAL DISPLAY, NOT A FIXED PERCENTAGE (Erik, 2026-09-06:
+	// first "återställ till full upplösning" — restored to 100 now that this
+	// is the everyday look, not a last-resort toggle, and half resolution
+	// read as soft — then "det blev för tungt i 4k" the same day: a flat 100
+	// is 4x the PIXEL COUNT at 4K that it is at 1080p, the exact cost the
+	// old flat 50 was hiding, just now paid at the highest resolutions
+	// instead of all of them equally.
+	//
+	// ComputeLightGraphicsScreenPercentage targets a fixed PIXEL BUDGET
+	// (~1080p) instead: it scales the percentage by sqrt(target/actual), so
+	// 1080p and below still render at a full 100 (this is a floor, not a
+	// downscale — Clamp's upper bound stops it ever asking for MORE than
+	// native) while 4K lands at 50 automatically — coincidentally almost
+	// exactly the old flat value, but now only paid where it is actually
+	// needed instead of on every display. This was THE single biggest
+	// performance lever in the mode (hiding the beach removes triangles,
+	// but every remaining pixel still paid full price for reflections and
+	// post) — on a machine that still can't hold frame rate at its own
+	// computed value, lower LightGraphicsTargetPixels below 1080p's; TSR
+	// gives up somewhere under ~33% of native and the upsample itself gets
+	// ugly, which bounds how far this can go regardless of target.
+	const float LightGraphicsTargetPixels = 1920.0f * 1080.0f;
+
+	private int ComputeLightGraphicsScreenPercentage() const
+	{
+		FVector2D ViewportSize = WidgetLayout::GetViewportSize();
+		float ActualPixels = ViewportSize.X * ViewportSize.Y;
+		if (ActualPixels < 1.0f) return 100; // no real viewport yet — do not divide by ~0
+		float Pct = 100.0f * Math::Sqrt(LightGraphicsTargetPixels / ActualPixels);
+		return int(Math::Clamp(Pct, 50.0f, 100.0f));
+	}
+
+	// Delayed application — see the SetTimer call in ApplyLightGraphicsCVars for
+	// why this can't run synchronously the instant light graphics turns on.
+	// Guarded on bLightGraphics still being true: a fast B/B toggle inside this
+	// 0.2s window must not have this land after the mode was already turned
+	// back off, silently downscaling normal mode.
+	UFUNCTION()
+	void ApplyLightGraphicsScreenPercentage()
+	{
+		if (!bLightGraphics) return;
+		int Pct = ComputeLightGraphicsScreenPercentage();
+		FVector2D VS = WidgetLayout::GetViewportSize();
+		// Greppable record of what this actually computed against, since it
+		// depends on the live viewport rather than a constant — the first
+		// thing to check if a resolution-specific performance report ever
+		// comes in again.
+		Log("SCREENPCT viewport=(" + VS.X + "," + VS.Y + ") pct=" + Pct);
+		System::ExecuteConsoleCommand("r.ScreenPercentage " + Pct);
+	}
 
 	// WHY A SECOND LIGHT EXISTS ONLY IN THIS MODE.
 	//
@@ -287,7 +327,19 @@ class ABeachVolleyballGameMode : AGameModeBase
 		if (bOn)
 		{
 			System::ExecuteConsoleCommand("t.MaxFPS " + LightGraphicsMaxFPS);
-			System::ExecuteConsoleCommand("r.ScreenPercentage " + LightGraphicsScreenPercentage);
+
+			// NOT applied synchronously here, on the same "not ready yet at
+			// frame 0" theory as CaptureCourtReflections' own one-shot timer
+			// below — UNCONFIRMED, not measured: a real check needed a real
+			// windowed 4K viewport, and every -RenderOffscreen headless launch
+			// tried on this machine silently ceilinged at 1280x720 regardless
+			// of -resx/-resy above that (640x480 and 1280x720 both read back
+			// correctly; 1920x1080 and 3840x2160 both came back as 1280x720),
+			// so frame-0 timing was never actually isolated from that ceiling.
+			// The delay is cheap enough (0.2s, once) to keep as a defensive
+			// guess either way; SCREENPCT below logs what it actually computed
+			// so a real 4K run can confirm or disprove this properly.
+			System::SetTimer(this, n"ApplyLightGraphicsScreenPercentage", 0.2f, bLooping = false);
 
 			// Lumen off ENTIRELY, GI and reflections both. The first version of
 			// this mode kept Lumen reflections on the grounds that they are what
