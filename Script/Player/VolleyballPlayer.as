@@ -307,14 +307,14 @@ class AVolleyballPlayer : APawn
 	}
 
 	// Pre-divided by the measured per-channel light gain (0.314,0.162,0.067) — see
-	// the long note in Environment.as. Blue reaches the screen at 21% of red under
-	// this sunset, so an honest blue would read as grey; 3.0 in the blue channel is
-	// what it costs to actually look blue. Red is lifted too, but less, since it
-	// needs no help getting through.
+	// the long note in Environment.as. Green reaches the screen at 52% of red under
+	// this sunset (better than blue's 21%, which is why the old blue tuple's 3.0
+	// boost — now in the green channel — reads brighter than it needed to, not
+	// dimmer). Red is lifted too, but less, since it needs no help getting through.
 	private FLinearColor TeamRingColor() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.10f, 0.60f, 3.00f, 1)
+			? FLinearColor(0.10f, 3.00f, 0.60f, 1)
 			: FLinearColor(1.60f, 0.25f, 0.15f, 1);
 	}
 
@@ -437,14 +437,14 @@ class AVolleyballPlayer : APawn
 
 	// Far stronger than TeamBodyTint(): this is a multiply over the body texture,
 	// and in light graphics the point is to tell two bodies apart instantly with a
-	// beach that is no longer there to give them context. Blue and orange rather
+	// beach that is no longer there to give them context. Green and orange rather
 	// than blue and red — red goes muddy against the sand-free grey-blue ground.
 	// Values above ~2 blow the texture out to a flat silhouette, which is the
 	// failure this whole mode keeps circling back to; do not raise them further.
 	private FLinearColor LightModeTint() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.30f, 0.75f, 1.90f, 1)
+			? FLinearColor(0.30f, 1.90f, 0.75f, 1)
 			: FLinearColor(1.90f, 0.70f, 0.18f, 1);
 	}
 
@@ -455,7 +455,7 @@ class AVolleyballPlayer : APawn
 	private FLinearColor TeamBodyTint() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.74f, 0.88f, 1.06f, 1)
+			? FLinearColor(0.74f, 1.06f, 0.88f, 1)
 			: FLinearColor(1.06f, 0.84f, 0.76f, 1);
 	}
 
@@ -3872,7 +3872,7 @@ class AVolleyballPlayer : APawn
 	private FLinearColor TeamColor() const
 	{
 		return (TeamSide == ETeam::Team_A)
-			? FLinearColor(0.30f, 0.70f, 1.90f, 1)
+			? FLinearColor(0.30f, 1.90f, 0.70f, 1)
 			: FLinearColor(1.90f, 0.35f, 0.30f, 1);
 	}
 
