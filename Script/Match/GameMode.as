@@ -170,13 +170,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 			Print("Light graphics OFF");
 	}
 
-	// Half resolution each way, so a quarter of the pixels. This is the single
-	// biggest lever in the mode: hiding the beach removes triangles, but every
-	// remaining pixel still paid full price for reflections and post — the first
-	// version of light graphics left the GPU pinned. TSR upsamples back to the
-	// window, so the shells stay smooth-edged rather than turning into stairs.
-	// Lower it to 33 if a machine still can't keep up; below that TSR gives up.
-	const int LightGraphicsScreenPercentage = 50;
+	// Restored to full resolution (Erik, 2026-09-06: "återställ till full
+	// upplösning") now that light graphics is the default look rather than a
+	// last-resort performance toggle — half resolution as the everyday
+	// picture read as soft/blurry, not "light". This was THE single biggest
+	// performance lever in the mode (a quarter of the pixels; hiding the
+	// beach removes triangles, but every remaining pixel still paid full
+	// price for reflections and post), so on a machine that can't hold frame
+	// rate at 100 this is the first thing to drop back down — try 66, then
+	// 50; below ~33 TSR gives up and the upsample itself gets ugly.
+	const int LightGraphicsScreenPercentage = 100;
 
 	// WHY A SECOND LIGHT EXISTS ONLY IN THIS MODE.
 	//

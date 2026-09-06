@@ -30,7 +30,17 @@ class ABeachVolleyballCamera : AActor
 	// clamp — see FitFieldOfView's own comment for the reasoning and prior
 	// measurements (2026-09-03 dolly, 2026-09-06 zoom rounds) if either
 	// number ever needs to move again.
-	FVector EndCamPos = FVector(-800, 0, 950);
+	//
+	// PORTRAIT MOVED FARTHER, same day, same angle (Erik: "sänk fov för
+	// porträttläge" — lower portrait's FOV). FitFieldOfView auto-widens to
+	// keep everyone in frame, so FOV cannot just be set directly without
+	// breaking that rule — the only real lever is distance, moving farther
+	// along the SAME 40° look-down angle (a straight ~1.3x dolly-back, same
+	// technique as the earlier zoom rounds). Measured (standalone script,
+	// same one as before): worst-case FOV across the whole court 27° -> 24°,
+	// centre-of-court 20° -> 17°. Landscape untouched — only portrait was
+	// asked for.
+	FVector EndCamPos = FVector(-1040, 0, 1235);
 	FVector SideCamPos = FVector(0, -1300, 1950);
 
 	// Half-width (cm) of margin added around each player's and the ball's
