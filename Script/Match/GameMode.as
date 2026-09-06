@@ -85,7 +85,17 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// KEY, and a key needs a keyboard: headless verification runs (and any
 		// launch that wants the mode on from frame one) have no way to press B.
 		// Read after SpawnActors on purpose — SetLightGraphics walks the actors.
-		if (FCommandLine::Get().Contains("-lightgraphics"))
+		//
+		// ...and PLAY-IN-EDITOR gets it by default. The editor is already holding
+		// the whole scene, the shader cache and its own UI on the same GPU, so
+		// the heavy render is exactly where it can least afford to be — and PIE
+		// is the mode used for reading motion, which is what the light render is
+		// for. IsEditorWorld() is true for PIE and false for a -game launch, so
+		// the headless verification runs and the match filmer keep the full
+		// render: a renderer regression has to be bisected in the mode that
+		// shows it. B still toggles from here as before.
+		if (FCommandLine::Get().Contains("-lightgraphics")
+			|| (GetWorld() != nullptr && GetWorld().IsEditorWorld()))
 			SetLightGraphics(true);
 	}
 
