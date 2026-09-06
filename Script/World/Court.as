@@ -69,17 +69,13 @@ class ACourt : AActor
 	const float SandUpdateInterval = 0.06f;
 
 	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
-	// The sand STAYS VISIBLE, frozen (2026-09-06: Erik asked for the mode to
-	// read as nicer and clearer — floating lines/net/posts over a plain sky
-	// with no ground plane at all cut the one thing a player actually needs,
-	// a floor to judge height and footing against). Only the per-frame heal +
-	// rebuild is skipped, which is the part that actually costs anything (an
-	// 80x48 vertex grid re-uploaded every SandUpdateInterval) — a mesh that
-	// is not being re-uploaded costs the same whether it is shown or hidden,
-	// same as Net/Lines/Posts already staying visible for free. Water,
-	// coastline, dunes and props (Environment.as) are still cut: those are
-	// scenery, not the playing surface, and contribute nothing to reading a
-	// contact or a footing.
+	// The sand goes away completely again (2026-09-06: briefly kept it visible
+	// and frozen for a ground-plane reference — see git log — then reverted:
+	// Erik asked for player shadow blobs instead, see
+	// AVolleyballPlayer::ShadowBlob, which solves the same depth/footing
+	// problem without needing the sand back). Net, lines and posts stay —
+	// they are a few hundred triangles between them and they are what still
+	// makes the thing read as a court once the beach is gone.
 	private bool bLightGraphics = false;
 
 	void SetLightGraphics(bool bOn)
@@ -87,10 +83,13 @@ class ACourt : AActor
 		if (bOn == bLightGraphics) return;
 		bLightGraphics = bOn;
 
-		// Footprints and craters keep accumulating in the heightfield while
-		// frozen, so coming back to full graphics needs one rebuild to show
-		// the current state instead of the shape the sand had when the mode
-		// was switched on.
+		// bPropagateToChildren stays false on purpose: NetMesh/LinesMesh/PostsMesh
+		// are attached to SandMesh (it is the root), and they must not follow it.
+		SandMesh.SetVisibility(!bOn);
+
+		// Footprints and craters keep accumulating in the heightfield while the
+		// mesh is hidden, so coming back needs one rebuild to show the current
+		// state instead of the shape the sand had when the mode was switched on.
 		if (!bOn) bSandDirty = true;
 	}
 

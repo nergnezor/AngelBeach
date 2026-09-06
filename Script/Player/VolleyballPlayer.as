@@ -526,6 +526,16 @@ class AVolleyballPlayer : APawn
 		TeamRing.SetRelativeLocation(FVector(0, 0, 2.0f - GetActorLocation().Z));
 		RefreshTeamRingColor();
 
+		// Pin the shadow blob the same way, one unit below the ring so the
+		// ring still reads as a bright accent on top of it, and shrink it
+		// with jump height (same idea as ABall's own ShadowBlob) so a
+		// grounded player reads full-size and an airborne one reads as
+		// further from their shadow, not just displaced.
+		float HeightAboveFloor = Math::Max(0.0f, GetActorLocation().Z - FloorZ - PlayerHeight);
+		float ShadowShrink = Math::Clamp(1.0f - HeightAboveFloor / 300.0f, 0.4f, 1.0f);
+		ShadowBlob.SetRelativeLocation(FVector(0, 0, 1.0f - GetActorLocation().Z));
+		ShadowBlob.SetRelativeScale3D(FVector(ShadowShrink, ShadowShrink, 1.0f));
+
 		// Crouch release runs FIRST, before any writer: with the decay at the
 		// end of the frame it subtracted from what dive/tuck/split-step had
 		// just asserted and ExtraCrouch sawtoothed ±0.04 at frame rate — the

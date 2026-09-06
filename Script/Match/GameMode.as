@@ -113,16 +113,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// --- Light graphics mode -------------------------------------------------
 	//
 	// One key (B, see AHumanPlayer::OnLightGraphics) strips the scene down to what
-	// the rally needs: the SCENERY goes away (sea, coastline, dunes, props, sand
-	// spray) leaving the sand itself, lines, net and posts — the sand stays and
-	// freezes rather than disappearing (2026-09-06: a floating court with no
-	// ground plane at all read as barren and cost depth/footing cues, not just
-	// looks — see Court.as's own comment), and the players stop being textured
-	// bodies and become their reflection layer only — smooth shells lit by the sky
-	// (see AVolleyballPlayer::SetLightGraphics). Shadows, volumetric fog and Lumen
-	// go with it — all of Lumen, reflections included — and what is left renders at
-	// half resolution behind a frame cap. That second half is where the frame time
-	// actually is: hiding geometry alone barely moved it.
+	// the rally needs: the beach goes away (sand, sea, coastline, dunes, props —
+	// sand spray stays, see ASandFX) leaving lines, net and posts, and the players
+	// stop being textured bodies and become their reflection layer only — smooth
+	// shells lit by the sky (see AVolleyballPlayer::SetLightGraphics), each with
+	// its own grounded contact-shadow blob (AVolleyballPlayer::ShadowBlob) now
+	// that there is no sand and no real shadow pass to read a footing against
+	// otherwise. Shadows, volumetric fog and Lumen go with it — all of Lumen,
+	// reflections included — and what is left renders at half resolution behind
+	// a frame cap. That second half is where the frame time actually is: hiding
+	// geometry alone barely moved it.
 	//
 	// It is a rendering switch and NOTHING ELSE: no gameplay state, no physics, no
 	// AI input reads it, so a match can be toggled in and out mid-rally without the
