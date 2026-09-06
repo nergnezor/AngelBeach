@@ -116,13 +116,20 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// the rally needs: the beach goes away (sand, sea, coastline, dunes, props —
 	// sand spray stays, see ASandFX) leaving lines, net and posts, and the players
 	// stop being textured bodies and become their reflection layer only — smooth
-	// shells lit by the sky (see AVolleyballPlayer::SetLightGraphics), each with
-	// its own grounded contact-shadow blob (AVolleyballPlayer::ShadowBlob) now
-	// that there is no sand and no real shadow pass to read a footing against
-	// otherwise. Shadows, volumetric fog and Lumen go with it — all of Lumen,
-	// reflections included — and what is left renders at half resolution behind
-	// a frame cap. That second half is where the frame time actually is: hiding
-	// geometry alone barely moved it.
+	// shells lit by the sky (see AVolleyballPlayer::SetLightGraphics). Volumetric
+	// fog and Lumen go with it — all of Lumen, reflections included — and what is
+	// left renders at half resolution behind a frame cap. That second half is
+	// where the frame time actually is: hiding geometry alone barely moved it.
+	//
+	// REAL SHADOWS STAY ON (Erik, 2026-09-06: "ingen uppskattning, riktiga
+	// skuggor" — no approximation, real shadows), reversing an earlier attempt
+	// at a fake grounded contact-shadow blob per player: it read as "gråa runda
+	// hål" (grey round holes) with no real fix cheap enough to be worth it. This
+	// mode used to also force r.ShadowQuality 0 and r.Shadow.Virtual.Enable 0 —
+	// removed, so the directional light's VSM pass keeps running here same as
+	// normal mode, at whatever cost that is. Known and accepted going in: this
+	// mode was built specifically to cut that cost, so re-adding it here is a
+	// real, deliberate step back from the frame-time work above, not free.
 	//
 	// It is a rendering switch and NOTHING ELSE: no gameplay state, no physics, no
 	// AI input reads it, so a match can be toggled in and out mid-rally without the
@@ -371,11 +378,6 @@ class ABeachVolleyballGameMode : AGameModeBase
 			// cubemap lookups on top.
 			System::ExecuteConsoleCommand("r.ReflectionCapture.Runtime 0");
 
-			System::ExecuteConsoleCommand("r.ShadowQuality 0");
-			// r.ShadowQuality does NOT reach virtual shadow maps — with VSMs on,
-			// the directional light keeps rendering its shadow pass at quality 0
-			// and the "cheap" mode quietly stays expensive. Kill the page pool too.
-			System::ExecuteConsoleCommand("r.Shadow.Virtual.Enable 0");
 			System::ExecuteConsoleCommand("r.VolumetricFog 0");
 
 			// THE SKY DOES NOT CARE HOW EMPTY THE COURT IS. Volumetric clouds are

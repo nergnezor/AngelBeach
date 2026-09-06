@@ -110,6 +110,12 @@ class AHumanPlayer : AAIPlayer
 			}
 		}
 
+		// "de kan aktiveras ifall spelaren är kontrollerad av en människa" —
+		// the ring is otherwise hidden (see BuildTeamRing). Only this pawn
+		// can ever be human-driven, and only while bPlayerControlled is
+		// actually true, so this is the one place that needs to touch it.
+		TeamRing.SetVisibility(bPlayerControlled);
+
 		if (bPlayerControlled && Ball != nullptr && Ball.bInPlay)
 		{
 			// Direct control: player drives movement, hits via buttons

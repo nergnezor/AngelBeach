@@ -21,17 +21,6 @@ class AVolleyballPlayer : APawn
 	UPROPERTY(DefaultComponent, Attach = Capsule)
 	UProceduralMeshComponent TeamRing;
 
-	// Grounded contact shadow — light graphics ONLY (Erik, 2026-09-06: "prova
-	// skuggor"). Normal mode already has a real dynamic shadow (see
-	// SetLightGraphics's Mesh.SetCastShadow); light mode turns every shadow
-	// pass off project-wide, and the team ring alone ("a marker ring floating
-	// at head height would read as a bug rather than as a shadow" — see
-	// UpdatePlayer) doesn't shrink with height the way an actual shadow does.
-	// Same technique as ABall's own ShadowBlob: a flat disc, filled not a
-	// ring, that shrinks as the player leaves the ground.
-	UPROPERTY(DefaultComponent, Attach = Capsule)
-	UProceduralMeshComponent ShadowBlob;
-
 	// The ring is built once at construction, so editing TeamRingColor() would not show
 	// up on players that already exist — hot reload swaps code, it does not re-run
 	// construction. Holding the material instance and the colour last pushed to it lets
@@ -180,7 +169,6 @@ class AVolleyballPlayer : APawn
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
 		BuildTeamRing();
-		BuildShadowBlob();
 		SetupRagdollPhysics();
 	}
 
@@ -278,6 +266,13 @@ class AVolleyballPlayer : APawn
 
 		TeamRing.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
 		TeamRing.SetCastShadow(false);
+		// Hidden by default (Erik, 2026-09-06: "ta bort ringarna under
+		// spelarna") — every player showed one regardless of who, if anyone,
+		// was actually being controlled. AHumanPlayer.Tick is the only place
+		// that turns it back on, and only for itself, only while
+		// bPlayerControlled is true: a "this is you" marker, not ambient
+		// court decoration.
+		TeamRing.SetVisibility(false);
 
 		// Same helper as ACourt/AEnvironment, copied rather than shared: this fork
 		// compiles each .as file as its own module, so a global function is only
@@ -292,62 +287,6 @@ class AVolleyballPlayer : APawn
 				RingMID.SetVectorParameterValue(n"Color", Col);
 				AppliedRingColor = Col;
 			}
-		}
-	}
-
-	// Filled disc, same fan-of-triangles technique as ABall's own
-	// ShadowBlob (see that file's comment for the winding story — both
-	// windings are emitted on purpose, not a guess this time). Radius
-	// matches TeamRing's own ROuter so the shadow roughly fills the
-	// ring's footprint. Starts hidden: SetLightGraphics turns it on.
-	private void BuildShadowBlob()
-	{
-		const float Radius = 58.0f;
-		const int Segs = 20;
-
-		TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
-		TArray<FVector2D> UV; TArray<FLinearColor> C;
-		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
-
-		FProcMeshTangent FlatTangent;
-		FlatTangent.TangentX = FVector(1, 0, 0);
-		FlatTangent.bFlipTangentY = false;
-
-		V.Add(FVector::ZeroVector);
-		N.Add(FVector(0, 0, 1));
-		UV.Add(FVector2D(0.5f, 0.5f));
-		C.Add(FLinearColor(1, 1, 1, 1));
-		Tan.Add(FlatTangent);
-
-		for (int i = 0; i <= Segs; i++)
-		{
-			float A = 2.0f * PI * i / Segs;
-			V.Add(FVector(Math::Cos(A) * Radius, Math::Sin(A) * Radius, 0));
-			N.Add(FVector(0, 0, 1));
-			UV.Add(FVector2D(0.5f + 0.5f * Math::Cos(A), 0.5f + 0.5f * Math::Sin(A)));
-			C.Add(FLinearColor(1, 1, 1, 1));
-			Tan.Add(FlatTangent);
-		}
-
-		for (int i = 1; i <= Segs; i++)
-		{
-			T.Add(0); T.Add(i);     T.Add(i + 1);
-			T.Add(0); T.Add(i + 1); T.Add(i);
-		}
-
-		ShadowBlob.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
-		ShadowBlob.SetCastShadow(false);
-		ShadowBlob.SetVisibility(false);   // SetLightGraphics turns it on
-
-		UMaterialInterface ShadowBase = Cast<UMaterialInterface>(LoadObject(nullptr,
-			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-		if (ShadowBase != nullptr)
-		{
-			UMaterialInstanceDynamic MID = ShadowBlob.CreateDynamicMaterialInstance(0, ShadowBase);
-			// Dark, not pure black — see ABall's own ShadowBlob comment: flat
-			// black on lit sand reads as a hole cut in the ground.
-			if (MID != nullptr)
-				MID.SetVectorParameterValue(n"Color", FLinearColor(0.08f, 0.07f, 0.06f, 1.0f));
 		}
 	}
 
@@ -488,8 +427,11 @@ class AVolleyballPlayer : APawn
 		else
 			ApplyTeamMaterial();
 
-		Mesh.SetCastShadow(!bOn);
-		ShadowBlob.SetVisibility(bOn);
+		// Real dynamic shadow stays on in both modes (Erik, 2026-09-06: "riktiga
+		// skuggor" — see GameMode.as's SetLightGraphics comment for the cost
+		// this reverses). Used to be Mesh.SetCastShadow(!bOn) — turned off in
+		// light mode to pair with a fake per-player shadow blob that has since
+		// been removed entirely.
 		bLightGraphics = bOn;
 	}
 
@@ -525,16 +467,6 @@ class AVolleyballPlayer : APawn
 		// Cancelling the actor's Z keeps it flat on the beach at all times.
 		TeamRing.SetRelativeLocation(FVector(0, 0, 2.0f - GetActorLocation().Z));
 		RefreshTeamRingColor();
-
-		// Pin the shadow blob the same way, one unit below the ring so the
-		// ring still reads as a bright accent on top of it, and shrink it
-		// with jump height (same idea as ABall's own ShadowBlob) so a
-		// grounded player reads full-size and an airborne one reads as
-		// further from their shadow, not just displaced.
-		float HeightAboveFloor = Math::Max(0.0f, GetActorLocation().Z - FloorZ - PlayerHeight);
-		float ShadowShrink = Math::Clamp(1.0f - HeightAboveFloor / 300.0f, 0.4f, 1.0f);
-		ShadowBlob.SetRelativeLocation(FVector(0, 0, 1.0f - GetActorLocation().Z));
-		ShadowBlob.SetRelativeScale3D(FVector(ShadowShrink, ShadowShrink, 1.0f));
 
 		// Crouch release runs FIRST, before any writer: with the decay at the
 		// end of the frame it subtracted from what dive/tuck/split-step had

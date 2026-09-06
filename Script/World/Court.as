@@ -71,11 +71,13 @@ class ACourt : AActor
 	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
 	// The sand goes away completely again (2026-09-06: briefly kept it visible
 	// and frozen for a ground-plane reference — see git log — then reverted:
-	// Erik asked for player shadow blobs instead, see
-	// AVolleyballPlayer::ShadowBlob, which solves the same depth/footing
-	// problem without needing the sand back). Net, lines and posts stay —
-	// they are a few hundred triangles between them and they are what still
-	// makes the thing read as a court once the beach is gone.
+	// a fake per-player shadow blob was tried instead, then that too, in
+	// favour of just keeping the REAL dynamic shadow on in this mode — see
+	// AVolleyballPlayer::SetLightGraphics and GameMode.as's own comment on
+	// its light-graphics block — which solves the same depth/footing problem
+	// without needing the sand back). Net, lines and posts stay — they are a
+	// few hundred triangles between them and they are what still makes the
+	// thing read as a court once the beach is gone.
 	private bool bLightGraphics = false;
 
 	void SetLightGraphics(bool bOn)

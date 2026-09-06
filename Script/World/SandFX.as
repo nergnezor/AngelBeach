@@ -40,7 +40,7 @@ class ASandFX : AActor
 	// material does not read them, the same "renders as the flat default,
 	// not what the vertex data says" trap CLAUDE.md documents for a missing
 	// usage flag. Every OTHER coloured element in this codebase (Ball, Court,
-	// TeamRing, the player tint, both ShadowBlobs) carries its colour on a
+	// TeamRing, the player tint, ABall's ShadowBlob) carries its colour on a
 	// BasicShapeMaterial "Color" PARAMETER instead of vertex colour, for
 	// exactly this reason — DustMesh now matches. Per-vertex colour stays in
 	// RebuildDust as plain white; the parameter below is the only thing that
