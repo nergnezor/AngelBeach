@@ -2559,6 +2559,11 @@ class AVolleyballPlayer : APawn
 	// one, is needed to pick these up in the editor.
 	// Last well-conditioned platform bearing (see the bump branch in PlayerIK).
 	FVector SmPlatDir;
+	// A PLANTED FOOT IS A POINT ON THE SAND, not a point recomputed from where the
+	// foot currently is. See the plant block in PlayerIK.
+	FVector PlantHoldL = FVector::ZeroVector;
+	FVector PlantHoldR = FVector::ZeroVector;
+	bool bPlantHeld = false;
 	FVector SmHandVelR;
 	FVector SmHandVelL;
 	FVector SmHandR;

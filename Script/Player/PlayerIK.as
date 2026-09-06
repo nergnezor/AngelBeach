@@ -1048,6 +1048,41 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 
 	float FootAlpha = Math::Max(PlantAlpha, FloorFix);
 
+	// A PLANTED FOOT IS A POINT ON THE SAND. PlantL/PlantR above are derived from
+	// FootL/FootR — the solver's own output from last frame — rotated about the
+	// actor and grounded. So the "plant" the foot is pulled toward is recomputed
+	// every frame FROM WHERE THE FOOT ALREADY IS, at every alpha including 1. The
+	// foot is never pinned to anything; it is pinned to itself, and the loop
+	// walked the goals 146cm under the body during a single dig.
+	//
+	// Latch the point instead: capture it the frame the plant starts and hold it
+	// in world space until the plant releases, which is what standing on a spot
+	// means. (Latching the ALPHA was tried first and made it worse — 146 -> 188cm
+	// — because both branches of the blend still read the live bone.)
+	// ...and A FOOT SLIPS WHEN YOU PULL HARD ENOUGH. Holding the point no matter
+	// what pins a player who still needs to go somewhere, and the first version
+	// of this cost rallies: dead-after-one-touch 0% -> 5-7%, builds 100% -> 93-95%.
+	// Re-plant once the leg has genuinely travelled past the held point, which is
+	// what taking a step is.
+	const float PlantBreakDist = 30.0f;
+	if (FootAlpha > 0.001f)
+	{
+		if (!Self.bPlantHeld
+			|| (PlantL - Self.PlantHoldL).Size() > PlantBreakDist
+			|| (PlantR - Self.PlantHoldR).Size() > PlantBreakDist)
+		{
+			Self.PlantHoldL = PlantL;
+			Self.PlantHoldR = PlantR;
+			Self.bPlantHeld = true;
+		}
+		PlantL = Self.PlantHoldL;
+		PlantR = Self.PlantHoldR;
+	}
+	else
+	{
+		Self.bPlantHeld = false;
+	}
+
 	Self.Anim.LegIKAlpha = FootAlpha;
 	FVector OutFootL = FootL + (PlantL - FootL) * FootAlpha;
 	FVector OutFootR = FootR + (PlantR - FootR) * FootAlpha;
