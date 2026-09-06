@@ -23,6 +23,12 @@ class AMatchFilmerGameMode : ABeachVolleyballGameMode
 	void BeginPlay()
 	{
 		Super::BeginPlay();
+		// Light graphics is the default everywhere now (see GameMode's own
+		// BeginPlay) — force it back OFF here regardless. This mode exists to
+		// bisect renderer regressions in the mode that shows them (see
+		// CLAUDE.md's own note on this), which only works if it keeps
+		// filming the full render no matter what the player default is.
+		SetLightGraphics(false);
 		// Shorter dead-ball pause: we're here to film rallies, not waiting. The
 		// serve now waits for players to reach formation rather than a fixed
 		// countdown, so this only trims the minimum beat, not the whole gap.

@@ -81,21 +81,21 @@ class ABeachVolleyballGameMode : AGameModeBase
 		SpawnActors();
 		StartMatch();
 
-		// -lightgraphics boots straight into the reduced render. The toggle is a
-		// KEY, and a key needs a keyboard: headless verification runs (and any
-		// launch that wants the mode on from frame one) have no way to press B.
-		// Read after SpawnActors on purpose — SetLightGraphics walks the actors.
+		// LIGHT GRAPHICS IS NOW THE DEFAULT FOR EVERYONE (Erik, 2026-09-06:
+		// "gör lightmode default") — it used to boot only in PIE (the editor
+		// already carries the scene, shader cache and its own UI on one GPU,
+		// so the heavy render could least afford to run there) or behind an
+		// explicit -lightgraphics flag for headless runs with no keyboard to
+		// press B on. Read after SpawnActors on purpose — SetLightGraphics
+		// walks the actors.
 		//
-		// ...and PLAY-IN-EDITOR gets it by default. The editor is already holding
-		// the whole scene, the shader cache and its own UI on the same GPU, so
-		// the heavy render is exactly where it can least afford to be — and PIE
-		// is the mode used for reading motion, which is what the light render is
-		// for. IsEditorWorld() is true for PIE and false for a -game launch, so
-		// the headless verification runs and the match filmer keep the full
-		// render: a renderer regression has to be bisected in the mode that
-		// shows it. B still toggles from here as before.
-		if (FCommandLine::Get().Contains("-lightgraphics")
-			|| (GetWorld() != nullptr && GetWorld().IsEditorWorld()))
+		// -fullgraphics is the escape hatch for the opposite case: checking
+		// the normal-mode look on a real -game launch without PIE. MatchFilmer
+		// forces itself back to full graphics regardless of this default (see
+		// its own BeginPlay) — it exists specifically to bisect renderer
+		// regressions in the mode that shows them, not to inherit whatever
+		// the player default currently is. B still toggles from here as ever.
+		if (!FCommandLine::Get().Contains("-fullgraphics"))
 			SetLightGraphics(true);
 	}
 
