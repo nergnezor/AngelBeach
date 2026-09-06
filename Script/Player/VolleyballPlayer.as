@@ -2682,6 +2682,28 @@ class AVolleyballPlayer : APawn
 	private float GestureAge = 10.0f;
 	const float MinGestureDwell = 0.15f;
 
+	// Bypasses Reach()'s MinGestureDwell anti-flicker gate — same carve-out
+	// TriggerHit already gets ("a real contact is an event — no dwell gate"),
+	// for the other kind of unambiguous event: a scripted sequence (so far
+	// just the serve) taking over the gesture outright rather than one of
+	// several systems opinion-ing about which stroke this is. Needed because
+	// GestureAge is private to this class — a subclass driving a sequence
+	// (AIPlayer's BeginServe) has no other way to force the switch.
+	// Without it, RunServeSequence's first ~0.15s of Reach(Hit_Serve, ...)
+	// calls could be silently dropped by the dwell gate if the previous
+	// gesture hadn't lived that long yet, leaving PlayerIK's Hit_Serve
+	// branch — and the ServeTossTarget it writes — inactive: the ball's
+	// carry position read a STALE ServeTossTarget from whatever this player
+	// last served with, at wherever they stood back then, not this serve's
+	// actual chest position. That's a second, independent source of the same
+	// "flyger magiskt" jump HoldBallIfServer (AIPlayer.as) was written for.
+	protected void ForceCurrentHit(EHitType Type)
+	{
+		CurrentHit = Type;
+		GestureAge = 0.0f;
+		GestureClock = 0.0f;
+	}
+
 	// Crouch request that survives between AI reaction ticks (ready stance etc.).
 	// Per-frame writers (split step, dive) set ExtraCrouch directly instead — this
 	// channel is HELD across the tick gap; theirs decays every frame.

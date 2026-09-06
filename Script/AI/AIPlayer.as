@@ -164,6 +164,7 @@ class AAIPlayer : AVolleyballPlayer
 
 			MoveToHold(ReadyPosition(), DeltaTime, 0.7f);
 			PreFaceForServe();
+			HoldBallIfServer();
 			return true;
 		}
 
@@ -275,6 +276,11 @@ class AAIPlayer : AVolleyballPlayer
 		bTossReleased = false;
 		ServeSeqTimer = 0.0f;
 		PendingServeVel = ServeVel;
+		// See ForceCurrentHit's comment: without this, PlayerIK's Hit_Serve
+		// branch (and the ServeTossTarget it writes) might not activate for
+		// this serve's first ~0.15s, leaving the carry reading a stale
+		// target from whichever spot this player last served from.
+		ForceCurrentHit(EHitType::Hit_Serve);
 	}
 
 	// While waiting at the baseline as the upcoming server, face the court — the
@@ -299,6 +305,49 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		FacingDir = FVector(-MySign(), 0, 0);
 		bHasFacing = true;
+	}
+
+	// "vid död boll flyger den magiskt till servarens mage istället för att
+	// kastas och ta emot" (Erik, 2026-09-06). The fetch-and-throw already
+	// KASTAS (throws) it — see RunFetchSequence — but nothing ever caught it:
+	// the throw's landing spot (FetchThrowTarget in GameMode.ChooseFetcher) is
+	// a fixed WORLD point, not tied to any bone, so the ball just hung there
+	// motionless — not attached to me even once I'd walked up to it (arriving
+	// only has to land within ReadyRadius=90 of ReadyPosition, so "near" the
+	// hang point could still be a visible gap) — until RunServeSequence's
+	// first frame silently relocated it to the toss's start pose, computed
+	// fresh off my actual current chest bone. THAT relocation is what read as
+	// "flyger magiskt": a jump from a point in empty space to wherever my
+	// body actually ended up. This closes the gap from the other end — TA
+	// EMOT (receive it): once the throw has actually arrived near me, hold it
+	// at my own hand like a real catch, so by the time RunServeSequence takes
+	// over the ball is already following my body and that final relocation is
+	// a small hand-to-hand adjustment instead of a teleport across the gap.
+	protected void HoldBallIfServer()
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr || GS.ServingTeam != TeamSide || Role != EPlayerRole::Role_Back)
+			return;
+		if (Ball == nullptr || Ball.bInPlay || Mesh == nullptr)
+			return;
+		// Still mid-throw (walking it back off the net, airborne, whatever) —
+		// that player's own Tick is writing Ball.Position this frame too;
+		// grabbing it here as well would fight their write every frame.
+		if (GM != nullptr && GM.Fetcher != nullptr && GM.Fetcher.bFetching)
+			return;
+		// Not delivered to me yet — still sitting wherever the rally ended
+		// (ChooseFetcher found no one in reach; see its own comment) or still
+		// mid-flight toward someone else's hand, not mine to receive.
+		// Size2D, not Size(): the ball holds at ~110cm (FetchThrowTarget's Z)
+		// against my actor origin at ~0, so full 3D distance was ~110+ before
+		// I'd even walked over — the gate never actually opened for most
+		// serves (measured: HOLDGAP jumps of 123-802 with the 3D check,
+		// nothing like the small hand-to-chest adjustment this was meant to
+		// produce). Horizontal-only is the actual "have I walked up to it"
+		// question, matching ChooseFetcher's own Size2D distance check.
+		if ((Ball.Position - GetActorLocation()).Size2D() > HoldBallReach)
+			return;
+		CarryBall();
 	}
 
 	protected void RunServeSequence(float Dt)
@@ -411,6 +460,14 @@ class AAIPlayer : AVolleyballPlayer
 	// has planted and is holding always reads as ready — matching the hold
 	// threshold exactly would leave them one centimetre short forever.
 	const float ReadyRadius = 90.0f;
+
+	// How close the thrown ball has to land (horizontally) before I treat it
+	// as delivered and start holding it at my own hand — see HoldBallIfServer.
+	// Wider than ReadyRadius/FetchReach on purpose: FetchThrowTarget and
+	// ReadyPosition share the same X/Y by construction (both ±820,0), so in
+	// practice this only guards against grabbing a ball that hasn't actually
+	// been thrown my way yet, not against fine positioning.
+	const float HoldBallReach = 200.0f;
 
 	bool IsInReadyPosition() const
 	{
