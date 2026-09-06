@@ -11,6 +11,12 @@ class ABall : AActor
 	UPROPERTY(DefaultComponent)
 	UProceduralMeshComponent ShadowBlob;
 
+	// Ring on the sand at PredictLanding() — where ShadowBlob shows where the
+	// ball IS, this shows where it's GOING, updated every tick same as the
+	// blob. See BuildLandingRing/UpdateLandingIndicator below.
+	UPROPERTY(DefaultComponent)
+	UProceduralMeshComponent LandingIndicator;
+
 	// Physics state (BallVel avoids clash with APawn::GetVelocity if ever reparented)
 	FVector BallVel = FVector(0, 0, 0);
 	FVector Position = FVector(0, 0, 300);
@@ -129,6 +135,84 @@ class ABall : AActor
 		// this disc, which stays flat on the sand under the ball's XY regardless.
 		ShadowBlob.SetAbsolute(true, true, false);
 		BuildShadowDisc();
+
+		// Bright, flat, and white — deliberately distinct from both team tints
+		// (green / orange, see AVolleyballPlayer::TeamColor) and from the sand,
+		// so it never reads as "whose ball" or "part of the ground".
+		UMaterialInterface LandingMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (LandingMat != nullptr)
+		{
+			UMaterialInstanceDynamic LandingMID = LandingIndicator.CreateDynamicMaterialInstance(0, LandingMat);
+			if (LandingMID != nullptr)
+				LandingMID.SetVectorParameterValue(n"Color", FLinearColor(1.6f, 1.6f, 1.6f, 1.0f));
+		}
+		LandingIndicator.SetCastShadow(false);
+		LandingIndicator.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		LandingIndicator.SetAbsolute(true, true, false);  // flat on the sand, independent of the ball's own spin
+		BuildLandingRing();
+	}
+
+	// A flat annulus (ring, not a filled disc — ShadowBlob is already the filled
+	// shape directly under the ball, this has to read as a DIFFERENT kind of mark
+	// or the two blur together right as they converge on landing). Built once,
+	// like BuildShadowDisc; only its position/visibility change per frame.
+	const float LandingRingOuter = 60.0f;
+	const float LandingRingInner = 45.0f;
+	private void BuildLandingRing()
+	{
+		TArray<FVector> Verts;
+		TArray<int32> Tris;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UVs;
+		TArray<FLinearColor> Colors;
+		TArray<FVector2D> NoUV;
+		TArray<FProcMeshTangent> Tangents;
+
+		const int Segments = 24;
+
+		FProcMeshTangent FlatTangent;
+		FlatTangent.TangentX = FVector(1, 0, 0);
+		FlatTangent.bFlipTangentY = false;
+
+		for (int i = 0; i <= Segments; i++)
+		{
+			float Theta = 2.0f * PI * i / Segments;
+			float CosT = Math::Cos(Theta);
+			float SinT = Math::Sin(Theta);
+			Verts.Add(FVector(CosT * LandingRingOuter, SinT * LandingRingOuter, 0));
+			Verts.Add(FVector(CosT * LandingRingInner, SinT * LandingRingInner, 0));
+			Normals.Add(FVector(0, 0, 1));
+			Normals.Add(FVector(0, 0, 1));
+			UVs.Add(FVector2D(0.5f + 0.5f * CosT, 0.5f + 0.5f * SinT));
+			UVs.Add(FVector2D(0.5f + 0.5f * CosT, 0.5f + 0.5f * SinT));
+			Colors.Add(FLinearColor(1, 1, 1, 1));
+			Colors.Add(FLinearColor(1, 1, 1, 1));
+			Tangents.Add(FlatTangent);
+			Tangents.Add(FlatTangent);
+		}
+
+		// Same both-windings belt-and-braces as BuildShadowDisc — see its comment.
+		for (int i = 0; i < Segments; i++)
+		{
+			int OuterA = i * 2, InnerA = i * 2 + 1, OuterB = i * 2 + 2, InnerB = i * 2 + 3;
+
+			Tris.Add(OuterA); Tris.Add(InnerA); Tris.Add(OuterB);
+			Tris.Add(InnerA); Tris.Add(InnerB); Tris.Add(OuterB);
+
+			Tris.Add(OuterA); Tris.Add(OuterB); Tris.Add(InnerA);
+			Tris.Add(InnerA); Tris.Add(OuterB); Tris.Add(InnerB);
+		}
+
+		LandingIndicator.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
+			NoUV, NoUV, NoUV, Colors, Tangents, false);
+	}
+
+	private void UpdateLandingIndicator()
+	{
+		FVector Landing = PredictLanding();
+		LandingIndicator.SetWorldLocation(FVector(Landing.X, Landing.Y, FloorZ + 0.5f));
+		LandingIndicator.SetWorldRotation(FRotator(0, 0, 0));
 	}
 
 	// Flat filled circle, built the same way BuildSphereMesh builds the ball:
@@ -192,6 +276,11 @@ class ABall : AActor
 	UFUNCTION(BlueprintOverride)
 	void Tick(float DeltaTime)
 	{
+		// Set every frame regardless of the early-return below — otherwise a dead
+		// ball (bInPlay flips false in GameMode, not here) would leave the ring
+		// frozen at the last rally's landing spot forever instead of vanishing
+		// with it.
+		LandingIndicator.SetVisibility(bInPlay);
 		if (!bInPlay)
 			return;
 		// Substep: a hitchy frame (HighResShot writes, shader compiles) can be
@@ -207,6 +296,7 @@ class ABall : AActor
 		SetActorLocation(Position);
 		UpdateSpin(DeltaTime);
 		UpdateShadowBlob();
+		UpdateLandingIndicator();
 	}
 
 	// Ground projection of the ball, shrinking with height so a high ball reads
