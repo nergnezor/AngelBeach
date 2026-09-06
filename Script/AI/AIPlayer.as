@@ -330,14 +330,19 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		if (Ball == nullptr || Ball.bInPlay || Mesh == nullptr)
 			return;
-		// Still mid-throw (walking it back off the net, airborne, whatever) —
-		// that player's own Tick is writing Ball.Position this frame too;
-		// grabbing it here as well would fight their write every frame.
+		// Still mid-throw (walking it to me, carrying, airborne) — that
+		// player's own Tick is writing Ball.Position this frame too; grabbing
+		// it here as well would fight their write. Reaching for it is fine,
+		// though — "servaren borde fånga den": the same two-handed Hit_Bump
+		// reach an incoming ball already gets during a rally, aimed at
+		// wherever the thrown ball actually is right now.
 		if (GM != nullptr && GM.Fetcher != nullptr && GM.Fetcher.bFetching)
+		{
+			Reach(EHitType::Hit_Bump, Ball.Position);
 			return;
+		}
 		// Not delivered to me yet — still sitting wherever the rally ended
-		// (ChooseFetcher found no one in reach; see its own comment) or still
-		// mid-flight toward someone else's hand, not mine to receive.
+		// (ChooseFetcher found no one in reach; see its own comment).
 		// Size2D, not Size(): the ball holds at ~110cm (FetchThrowTarget's Z)
 		// against my actor origin at ~0, so full 3D distance was ~110+ before
 		// I'd even walked over — the gate never actually opened for most
@@ -347,6 +352,10 @@ class AAIPlayer : AVolleyballPlayer
 		// question, matching ChooseFetcher's own Size2D distance check.
 		if ((Ball.Position - GetActorLocation()).Size2D() > HoldBallReach)
 			return;
+		// Caught — relax the reach back to the default ready pose; CarryBall's
+		// own position write is what visibly "holds" it now, exactly like the
+		// fetcher's own carry (which never reaches, just carries).
+		ForceCurrentHit(EHitType::Hit_None);
 		CarryBall();
 	}
 
@@ -513,6 +522,10 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			MovePlayer(FVector2D::ZeroVector);
 			FaceToward(FetchTarget);
+			// "spelaren borde böja sig ned" (Erik, 2026-09-06) — the ball rests ON
+			// the sand, the carry above just snapped it to the hand with the body
+			// still fully upright. A real crouch reads the reach.
+			RequestCrouch(0.4f);
 			CarryBall();
 			FetchTimer += Dt;
 			if (FetchTimer >= PickupDuration)
@@ -526,6 +539,12 @@ class AAIPlayer : AVolleyballPlayer
 		if (FetchState == 2)   // carry clear of the net if the throw has to cross it
 		{
 			CarryBall();
+			// "kanske använda slaganimationen för kast" — the throw's wind-up
+			// reuses Hit_Bump's two-hands-together reach AT the throw target,
+			// same pose an incoming ball already gets. The ball rides along in
+			// the reaching hand (CarryBall reads hand_r every frame, same as
+			// always) until StartThrow lets it go on its own ballistic arc.
+			Reach(EHitType::Hit_Bump, FetchTarget);
 			bool bCrossesNet = (FetchTarget.X * MySign()) < 0.0f;
 			if (!bCrossesNet || Math::Abs(Me.X) >= MinCrossThrowX)
 			{
@@ -542,6 +561,11 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			MovePlayer(FVector2D::ZeroVector);
 			FaceToward(FetchTarget);
+			// Follow-through: same reach, now with nothing left to carry — the
+			// ball has its own ballistic arc below. A throw's arm keeps moving
+			// after release; freezing it here would look like the motion never
+			// finished.
+			Reach(EHitType::Hit_Bump, FetchTarget);
 			FetchTimer += Dt;
 			// CLOSED-FORM flight, same reasoning as the serve toss above: a frame
 			// hitch must not be able to integrate the ball through the floor.
@@ -554,6 +578,7 @@ class AAIPlayer : AVolleyballPlayer
 			{
 				FetchState = 4;
 				bFetching = false;
+				ForceCurrentHit(EHitType::Hit_None);   // relax — the throw is over
 				Log("FETCH done " + GetName() + " restX=" + int(P.X) + " restY=" + int(P.Y));
 			}
 			return true;

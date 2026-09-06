@@ -245,7 +245,19 @@ properties every frame. An **Animation Blueprint reparented to `UVolleyballAnimI
    was choreographed against belongs to a flight that no longer exists — the
    arms then spend the wind-up committed to the wrong place. "I bagger kopplar
    de alldeles för tidigt."
-4. **Every pass goes one metre inside the antenna on the partner's half**, and
+4. **A player is always either standing on the optimal position for the current
+   state, or travelling to it — and nothing else ever moves them.** There is no
+   third thing a player does. The moment a contact ends, the state has changed
+   and so has the optimal position, so the very next thing that happens is
+   travel toward the new one: no drifting out the follow-through, no finishing a
+   gesture in place, no waiting to be told.
+   - `MoveToHold`'s arrival hysteresis is what this is easy to break with. A
+     contact used to leave the hitter 29-35cm along the aim (rule 2's weight
+     transfer) while the hold said "arrived" at 35cm and "re-chase" at 110 — so
+     the drift fitted entirely inside the tolerance and nobody walked it back.
+     That is motion with no destination, and it is what "de rör sig konstigt
+     efter slag" was. The hold is now broken by the contact itself.
+5. **Every pass goes one metre inside the antenna on the partner's half**, and
    every player expects passes at the pin on their own half — see
    `PartnerPinTarget()` / `MyHalfPinY()` in `AIPlayer.as`. Nobody ball-chases;
    everyone anticipates.

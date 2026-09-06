@@ -21,6 +21,17 @@ class AVolleyballPlayer : APawn
 	UPROPERTY(DefaultComponent, Attach = Capsule)
 	UProceduralMeshComponent TeamRing;
 
+	// Grounded contact shadow — light graphics ONLY (Erik, 2026-09-06: "prova
+	// skuggor"). Normal mode already has a real dynamic shadow (see
+	// SetLightGraphics's Mesh.SetCastShadow); light mode turns every shadow
+	// pass off project-wide, and the team ring alone ("a marker ring floating
+	// at head height would read as a bug rather than as a shadow" — see
+	// UpdatePlayer) doesn't shrink with height the way an actual shadow does.
+	// Same technique as ABall's own ShadowBlob: a flat disc, filled not a
+	// ring, that shrinks as the player leaves the ground.
+	UPROPERTY(DefaultComponent, Attach = Capsule)
+	UProceduralMeshComponent ShadowBlob;
+
 	// The ring is built once at construction, so editing TeamRingColor() would not show
 	// up on players that already exist — hot reload swaps code, it does not re-run
 	// construction. Holding the material instance and the colour last pushed to it lets
@@ -169,6 +180,7 @@ class AVolleyballPlayer : APawn
 		// Tint per-team via the body material's vertex/param if available
 		ApplyTeamMaterial();
 		BuildTeamRing();
+		BuildShadowBlob();
 		SetupRagdollPhysics();
 	}
 
@@ -280,6 +292,62 @@ class AVolleyballPlayer : APawn
 				RingMID.SetVectorParameterValue(n"Color", Col);
 				AppliedRingColor = Col;
 			}
+		}
+	}
+
+	// Filled disc, same fan-of-triangles technique as ABall's own
+	// ShadowBlob (see that file's comment for the winding story — both
+	// windings are emitted on purpose, not a guess this time). Radius
+	// matches TeamRing's own ROuter so the shadow roughly fills the
+	// ring's footprint. Starts hidden: SetLightGraphics turns it on.
+	private void BuildShadowBlob()
+	{
+		const float Radius = 58.0f;
+		const int Segs = 20;
+
+		TArray<FVector> V; TArray<int32> T; TArray<FVector> N;
+		TArray<FVector2D> UV; TArray<FLinearColor> C;
+		TArray<FVector2D> NoUV; TArray<FProcMeshTangent> Tan;
+
+		FProcMeshTangent FlatTangent;
+		FlatTangent.TangentX = FVector(1, 0, 0);
+		FlatTangent.bFlipTangentY = false;
+
+		V.Add(FVector::ZeroVector);
+		N.Add(FVector(0, 0, 1));
+		UV.Add(FVector2D(0.5f, 0.5f));
+		C.Add(FLinearColor(1, 1, 1, 1));
+		Tan.Add(FlatTangent);
+
+		for (int i = 0; i <= Segs; i++)
+		{
+			float A = 2.0f * PI * i / Segs;
+			V.Add(FVector(Math::Cos(A) * Radius, Math::Sin(A) * Radius, 0));
+			N.Add(FVector(0, 0, 1));
+			UV.Add(FVector2D(0.5f + 0.5f * Math::Cos(A), 0.5f + 0.5f * Math::Sin(A)));
+			C.Add(FLinearColor(1, 1, 1, 1));
+			Tan.Add(FlatTangent);
+		}
+
+		for (int i = 1; i <= Segs; i++)
+		{
+			T.Add(0); T.Add(i);     T.Add(i + 1);
+			T.Add(0); T.Add(i + 1); T.Add(i);
+		}
+
+		ShadowBlob.CreateMeshSection_LinearColor(0, V, T, N, UV, NoUV, NoUV, NoUV, C, Tan, false);
+		ShadowBlob.SetCastShadow(false);
+		ShadowBlob.SetVisibility(false);   // SetLightGraphics turns it on
+
+		UMaterialInterface ShadowBase = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (ShadowBase != nullptr)
+		{
+			UMaterialInstanceDynamic MID = ShadowBlob.CreateDynamicMaterialInstance(0, ShadowBase);
+			// Dark, not pure black — see ABall's own ShadowBlob comment: flat
+			// black on lit sand reads as a hole cut in the ground.
+			if (MID != nullptr)
+				MID.SetVectorParameterValue(n"Color", FLinearColor(0.08f, 0.07f, 0.06f, 1.0f));
 		}
 	}
 
@@ -421,6 +489,7 @@ class AVolleyballPlayer : APawn
 			ApplyTeamMaterial();
 
 		Mesh.SetCastShadow(!bOn);
+		ShadowBlob.SetVisibility(bOn);
 		bLightGraphics = bOn;
 	}
 
@@ -484,12 +553,24 @@ class AVolleyballPlayer : APawn
 		// Dive overrides input; otherwise ease velocity toward the stored input.
 		UpdateDive(DeltaTime);
 		UpdateJumpLoad(DeltaTime);
-		// Weight transfer through a contact (see TriggerHit): a step's worth of
-		// body along the aim, fading out over the follow-through. Fed as INPUT,
-		// not as a velocity write, so it obeys the same acceleration limits as
-		// every other movement — and only when nobody is steering, so it can
-		// never fight the AI's next assignment. At contact the hitter is planted
-		// (MovePlayer(zero)), which is exactly when it applies.
+		// RULE 4: A PLAYER IS MOVED BY THEIR GOAL AND BY NOTHING ELSE.
+		//
+		// This used to feed a step's worth of input along the aim whenever nobody
+		// was steering — rule 2's weight transfer, carried past the contact. But
+		// "nobody is steering" is also what a player standing ON their optimal
+		// position looks like, which by rule 1 is exactly where a hitter is. So
+		// the transfer pushed them ~30cm off a spot they had chosen, MoveToHold's
+		// arrival tolerance (35cm, against a 110cm re-chase threshold) swallowed
+		// the drift whole, and nobody ever walked it back. A body sliding to rest
+		// somewhere it did not choose: "de rör sig konstigt efter slag".
+		//
+		// Measured after removing it: travel along the aim over the follow-through
+		// 29cm -> -2, with no gated metric moved. Rule 2's half of the contact is
+		// untouched — the legs still extend through the ball on the swing's own
+		// seam; what is gone is the body TRAVELLING for a reason that is not its
+		// goal. Breaking the hold at the contact instead was tried first and cost
+		// contacts per rally 7.33-11.50 -> 5.67-7.06, because players then left
+		// the play early.
 		if (bHitDriveMeasuring && HitDriveTimer <= 0.0f)
 		{
 			// DID THE BODY ACTUALLY GO WITH IT? The drive yields to the AI the
@@ -505,12 +586,8 @@ class AVolleyballPlayer : APawn
 		if (HitDriveTimer > 0.0f)
 		{
 			HitDriveTimer -= DeltaTime;
-			if (MoveInput.SizeSquared() < 0.01f && !IsDiving())
-			{
-				float DriveW = Math::Clamp(HitDriveTimer / HitDriveTime, 0.0f, 1.0f);
-				MoveInput = FVector2D(HitDriveDir.X, HitDriveDir.Y)
-					* (HitDriveStrength * DriveW);
-			}
+			// Nothing is injected here any more — the HITDRIVE line below now
+			// measures the invariant instead of the effect.
 		}
 		if (!IsDiving() && !bRagdollActive)
 			ApplyMoveInput(DeltaTime);
