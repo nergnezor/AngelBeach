@@ -128,8 +128,24 @@ class ABeachVolleyballCamera : AActor
 		float Alpha = Math::Clamp(FollowSpeed * DeltaTime, 0.0f, 1.0f);
 		CurrentLookAt = CurrentLookAt + (Target - CurrentLookAt) * Alpha;
 
-		FVector LookDir = (CurrentLookAt - CamPos).GetSafeNormal();
-		SetActorRotation(LookDir.Rotation());
+		// YAW AND PITCH ARE BUILT SEPARATELY, NOT FROM ONE LookDir VECTOR
+		// (Erik, 2026-09-06: "inte att den roterar i y-led" — Unreal's
+		// FRotator Y-axis is Pitch). Deriving rotation straight from
+		// (CurrentLookAt - CamPos) — the obvious way, and what this used to
+		// do — makes pitch a function of horizontal distance to the target
+		// as well as height: a near ball needs a much steeper look-down angle
+		// than a far one at the SAME height, so panning across the court's
+		// length nodded the camera up and down along with the intended
+		// side-to-side pan. Yaw still tracks the ball's real horizontal
+		// position (that pan is what the zoomed-in focus zone needs); pitch
+		// instead uses a FIXED horizontal reference distance (this rig's own
+		// distance to court centre) so only the ball's HEIGHT moves it, same
+		// as the original fixed-court-centre camera this rig traces back to.
+		FVector ToTarget = CurrentLookAt - CamPos;
+		float Yaw = FVector(ToTarget.X, ToTarget.Y, 0.0f).Rotation().Yaw;
+		float RefHorizDist = FVector(CamPos.X, CamPos.Y, 0.0f).Size();
+		float Pitch = Math::Atan2(ToTarget.Z, RefHorizDist) * (180.0f / PI);
+		SetActorRotation(FRotator(Pitch, Yaw, 0.0f));
 
 		FitFieldOfView();
 	}
