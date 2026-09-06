@@ -298,6 +298,22 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// The last row is why both changes stay: a reachable goal is not enough
 		// on its own, because the pre-pull drags the root toward the goal whether
 		// or not the arm could have got there by itself.
+		// THE HAND GOES WHERE THE BALL WILL BE, IT DOES NOT ORBIT THE CHEST.
+		//
+		// This used to take the BEARING to the meet point and walk 72cm along it,
+		// so the hand sat on a sphere around the chest and its position was set by
+		// that direction alone. Measured (PLATAMP): a step of the meet point
+		// became 2.45x that at the hand inside 15cm, 2.28 out to 30 — the ranges a
+		// dig is actually taken at. Every centimetre of re-prediction was
+		// multiplied for the whole last half second of the stroke, which is what
+		// "baggern ser för flängig ut" is.
+		//
+		// Tracking the POSITION instead makes that gain 1: the hand moves exactly
+		// as much as the point it is going to. The elbows no longer lock out on a
+		// ball that comes in close, which is what a real dig looks like anyway.
+		// Freezing the platform after the preparation was tried first and is a
+		// much worse idea: contacts per rally 8.31 -> 3.06 with 27% of rallies
+		// dying on one touch, because the meet point moves for real reasons too.
 		float Ext = Math::Max((Platform - ChestMid).Size(), 72.0f);  // lock the elbows out
 		// THE PLATFORM IS BUILT, NOT CONJURED. It starts as the loaded ready
 		// shape every defender waits in — hands joined low and in front, elbows
@@ -314,7 +330,10 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		// version of this build: pelvis reversals 1-7 per run -> 9-14. The final
 		// platform still hangs off the chest — it has the meet point, a world
 		// anchor, holding the other end.
-		FVector PlatFinal = ChestMid + PlatDir * Ext;
+		FVector ToPlat = Platform - ChestMid;
+		FVector PlatFinal = (ToPlat.Size() > 72.0f)
+			? ChestMid + PlatDir * Ext
+			: ChestMid + ToPlat;
 		FVector PlatReady = ActorMid + Up * (ShoulderUp - 30.0f) + Fwd * 30.0f;
 		FVector PlatEnd = PlatReady + (PlatFinal - PlatReady) * Prep;
 		// At contact the platform SWINGS THROUGH the ball, lifting along the aim —
