@@ -2280,6 +2280,25 @@ class AVolleyballPlayer : APawn
 		// between frames, with real movement on both sides of the reversal so a
 		// hand that is merely settling cannot register. Both magnitudes are in
 		// cm per frame; 1.5 at 120Hz is 180cm/s, i.e. deliberate motion.
+		if (CurrentPose > 0.05f && Mesh != nullptr && Anim != nullptr)
+		{
+			FVector Base = GetActorLocation();
+			FVector FtL = Mesh.GetBoneTransform(n"foot_l").Location - Base;
+			FVector FtR = Mesh.GetBoneTransform(n"foot_r").Location - Base;
+			if (bLegPathInit)
+			{
+				float A = ((Anim.FootTargetL - Base) - PrevFootTgtL).Size()
+					+ ((Anim.FootTargetR - Base) - PrevFootTgtR).Size();
+				float B = (FtL - PrevFootBoneL).Size() + (FtR - PrevFootBoneR).Size();
+				if (A < 80.0f) LegTgtPath += A;      // ignore pose teleports
+				if (B < 80.0f) LegBonePath += B;
+				LegCrouchPath += Math::Abs(Anim.CrouchAmount - PrevCrouchForPath);
+			}
+			PrevFootTgtL = Anim.FootTargetL - Base; PrevFootTgtR = Anim.FootTargetR - Base;
+			PrevFootBoneL = FtL; PrevFootBoneR = FtR;
+			PrevCrouchForPath = Anim.CrouchAmount;
+			bLegPathInit = true;
+		}
 		FVector HandStepVec = HandR - MonPrevHandR;
 		if (bReaching && DeltaTime > 0.0f)
 		{
@@ -2662,6 +2681,8 @@ class AVolleyballPlayer : APawn
 			// says whether the feet were still going; the facing dot says
 			// whether the turn had happened (1 = squared to the ball).
 			GestureStartSpd = FVector(PlayerVelocity.X, PlayerVelocity.Y, 0).Size();
+			LegTgtPath = 0.0f; LegBonePath = 0.0f; LegCrouchPath = 0.0f;
+			bLegPathInit = false;
 			GestureStartFace = -2.0f;
 			ABall RB = GetWorldBall();
 			if (RB != nullptr && RB.bInPlay)
@@ -2692,6 +2713,21 @@ class AVolleyballPlayer : APawn
 		}
 	}
 
+	// WHAT MOVES THE LEGS DURING A GESTURE, split by who is asking, and measured
+	// BODY-RELATIVE — a player who walks two metres moves their feet two metres
+	// for an honest reason; the question is how much the legs churn UNDER the
+	// body. The script's foot GOALS against the solved foot BONES: goals moving
+	// means the script is steering the legs and it is ours to fix, bones moving
+	// while the goals sit still means the clip is.
+	private float LegTgtPath = 0.0f;
+	private float LegBonePath = 0.0f;
+	private float LegCrouchPath = 0.0f;
+	private FVector PrevFootTgtL = FVector::ZeroVector;
+	private FVector PrevFootTgtR = FVector::ZeroVector;
+	private FVector PrevFootBoneL = FVector::ZeroVector;
+	private FVector PrevFootBoneR = FVector::ZeroVector;
+	private float PrevCrouchForPath = 0.0f;
+	private bool bLegPathInit = false;
 	private int GestureStartStamp = -1;
 	private float GestureStartTau = -1.0f;
 	private float GestureStartSpd = -1.0f;
@@ -3233,7 +3269,10 @@ class AVolleyballPlayer : APawn
 				+ " stale=" + ((GestureStartStamp != StampNow) ? 1 : 0)
 				+ " tauAtStart=" + int(GestureStartTau * 100)
 				+ " spdAtStart=" + int(GestureStartSpd)
-				+ " faceAtStart=" + int(GestureStartFace * 100));
+				+ " faceAtStart=" + int(GestureStartFace * 100)
+				+ " legTgt=" + int(LegTgtPath)
+				+ " legBone=" + int(LegBonePath)
+				+ " crouchPath=" + int(LegCrouchPath * 100));
 		}
 		Log("PLANVA touch=" + MyTouches + " type=" + int(Type)
 			+ " ballFwd=" + int(BallFwd) + " ballSide=" + int(BallSide)
