@@ -63,42 +63,25 @@ cannot come from script: there is now a `SphereReflectionCapture` placed in
 owns — `r.ReflectionCapture.Runtime 1` (without it a runtime-flagged capture is skipped
 entirely) and one `RefreshCapture()` a second after `BeginPlay`, once.
 
-**The MCP bridge can rewire the AnimGraph but cannot configure a node.** Nodes added
-through it are structurally real — they appear, they connect, they compile, and the pose
-flows through them — but the inner `FAnimNode_*` struct set with
-`set_editor_property('Node', an)` reads back correctly in the editor and does not reach
-the compiled class. Measured twice, on 2026-09-06, each time with a full autopsy:
+**A blend space that evaluates to nothing looks exactly like a broken graph.** An
+`AnimGraphNode_BlendSpacePlayer` pointed at `BS_VolleyballLocomotion` takes over the pose
+— trunk lean goes 28 degrees to 1 — and plays no animation: knee bend 16 -> 1, knee travel
+1583 -> 102, foot slide up. Bodies gliding on locked legs. The same node pointed at Epic's
+`BS_MM_WalkRun` works. The blend space is the broken asset, not the node and not the graph:
+it was built by an earlier automated pass, it reads back correctly (axis Speed 0-560,
+samples MM_Idle at 0, MM_Walk_Fwd at 240, MM_Run_Fwd at 532) and it evaluates to nothing.
 
-- A `Transform (Modify) Bone` on the spine applied no rotation at 13 degrees, at 60, with
-  the alpha forced to 1, and pointed at `pelvis` (the bone an existing node already
-  drives). Trunk lean measured 28 degrees off vertical in every case.
-- A `BlendSpacePlayer` wired in place of the binary idle/run switch DID take over the pose
-  — trunk lean 28 -> 1, so the node is on the live path — but played the reference pose
-  rather than the blend space: knee bend 17 -> 1, knee travel 1373 -> 126, foot slide
-  2120 -> 4544. A body gliding with locked legs.
+An earlier version of this section blamed the MCP bridge for that — "it can rewire but not
+author" — after the same failure appeared on two bridge-made nodes. **That was wrong.** A
+node authored BY HAND in the editor UI, with its asset picked in the details panel and its
+Speed pin dragged out, failed identically: knee bend 1, knee travel 102, lean 1. The bridge
+had nothing to do with it. Two failures with a common cause are not evidence about the tool
+they were made with.
 
-Ruled out, each by measurement rather than by reasoning:
-
-- **The skeleton.** Repointing the mesh to `/MoverExamples/.../SKM_Manny_Simple`, which
-  shares the ABP's and the blend space's skeleton exactly, changed neither result.
-- **A pin default shadowing the property.** The BlendSpacePlayer has no BlendSpace pin at
-  all — the asset is a struct property, and it reads back correctly after compile AND
-  after save.
-- **The input.** With the Speed link broken and the X pin pinned to a constant 400 (between
-  the walk sample at 240 and the run sample at 532), the legs stay locked. So it is not the
-  variable, the connection, or the value.
-- **An unreconstructed node.** `reconstruct_node()` before compiling changes nothing.
-- **The asset.** BS_VolleyballLocomotion is well formed: axis "Speed" 0-560, grid 4,
-  samples MM_Idle at 0, MM_Walk_Fwd at 240, MM_Run_Fwd at 532.
-
-What is left is the node itself: it takes over the pose (trunk lean 28 -> 1, so it is
-evaluated) and produces no animation. The one test not run, because it needs a person in
-the editor: add ONE node by hand in the UI and diff the two assets.
-
-So: use the bridge to place actors and set ordinary asset properties (the reflection
-capture below), and to inspect a graph (`scripts/etapp5_reachability.py`). Do NOT trust it
-to author an anim node's settings — that needs the editor UI, and until someone does it in
-the UI the locomotion stays the binary switch it is.
+**The test for a live blend space is `kneeWalk`**, from MOTIONSTATS: around 10-16 when the
+legs are animating, 0-1 when the pose is frozen. It takes one `ab.sh` run, and it is the
+difference between "wired" and "working" — which nothing in the editor's own UI will tell
+you, because a dead blend space looks perfectly normal in the graph.
 
 Placing the capture was done head-less through the project's own MCP bridge, which is the way to
 make editor-only asset changes from a terminal: `scripts/launch_ue.sh editor` (add
