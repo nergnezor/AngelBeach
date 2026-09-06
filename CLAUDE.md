@@ -15,9 +15,15 @@ their arm bones; AI plays structured volleyball (receive → set → attack).
 
 `B` toggles a stripped-down render of the same match — `ABeachVolleyballGameMode::
 ToggleLightGraphics()`, bound in `AHumanPlayer` because a possessed pawn is the only
-place script sees a keyboard in this fork. It hides the beach (sand, sea, coastline,
-dunes, props, sand spray — court lines, net and posts stay) and paints every player
-in a strong flat team tint (`AVolleyballPlayer::SetLightGraphics`).
+place script sees a keyboard in this fork. **It is the default now** (2026-09-06):
+every real launch boots into it, not just PIE — `-fullgraphics` forces the heavy
+render at launch instead, and `MatchFilmerGameMode` always forces itself back to
+full graphics regardless (it exists to bisect renderer regressions in the mode that
+shows them). It hides the surrounding SCENERY (sea, coastline, dunes, props, sand
+spray — court lines, net and posts stay, and so does the sand itself, frozen rather
+than hidden: a floating court with no ground plane read as barren and cost depth/
+footing cues, not just looks) and paints every player in a strong flat team tint
+(`AVolleyballPlayer::SetLightGraphics`).
 
 **Where the frame time actually goes.** Hiding geometry barely moved it — this scene
 is a handful of meshes; the cost is per-pixel. So the mode also:
