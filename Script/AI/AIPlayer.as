@@ -1857,14 +1857,39 @@ class AAIPlayer : AVolleyballPlayer
 		return FVector(MySign() * 180.0f, AimY, 20.0f);
 	}
 
+	// THE PIN IS WHERE THE PASS GOES; THE PARTNER IS WHO IT GOES TO.
+	//
+	// Rule 5 has both halves of that: the pass goes a metre inside the antenna,
+	// and the partner expects it there. It works while the partner can be there —
+	// but when they have been dragged out of position, aiming at the pin anyway
+	// sends the ball to a spot nobody is running to, and the pass is only good on
+	// paper. Erik, watching: they do not take the partner's position into account.
+	//
+	// So: the pin, unless the partner is genuinely far from it, and then part of
+	// the way back toward them. Inside a metre nothing moves at all, which keeps
+	// the anticipation the rule is built on — the partner is not chased, they are
+	// met where they can actually get to.
+	private FVector AimForPartner(FVector Ideal) const
+	{
+		if (Teammate == nullptr) return Ideal;
+		FVector P = FVector(Teammate.GetActorLocation().X,
+			Teammate.GetActorLocation().Y, Ideal.Z);
+		float Gap = (P - Ideal).Size2D();
+		float T = Math::Clamp((Gap - 100.0f) / 400.0f, 0.0f, 0.6f);
+		FVector Aim = Ideal + (P - Ideal) * T;
+		Aim = ClampToCourt(Aim);
+		Aim.Z = Ideal.Z;
+		return Aim;
+	}
+
 	private void DoDig()
 	{
-		AimAt(PassTarget());
+		AimAt(AimForPartner(PassTarget()));
 	}
 
 	private void DoSet()
 	{
-		AimAt(PartnerPinTarget());
+		AimAt(AimForPartner(PartnerPinTarget()));
 	}
 
 	private void DoSpike()
@@ -1990,7 +2015,16 @@ class AAIPlayer : AVolleyballPlayer
 		// hopeless 3m backpedal whenever the serve turned out to be his).
 		ABeachVolleyballGameState GSB = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
 		ETeam Opp = (TeamSide == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
-		if (GSB == nullptr || GSB.LastTouchTeam != Opp || GSB.TouchesThisRally < 1)
+		// ...AND ONLY AGAINST THE ATTACK ITSELF, not against the build. The gate
+		// was "they have touched it at least once", which is true of their DIG
+		// and their SET too — both of which put the ball near the net and high,
+		// which is exactly what the commit test below looks for. So the front
+		// player ran to the net on the opponents' second ball as readily as on
+		// their third: "de springer fram för att blocka för ofta".
+		//
+		// In a two-player game the ball you block is the one they attack with, so
+		// wait until their next contact IS that attack: two touches made.
+		if (GSB == nullptr || GSB.LastTouchTeam != Opp || GSB.TouchesThisRally < 2)
 		{
 			bCommittedToBlock = false;
 			return false;
