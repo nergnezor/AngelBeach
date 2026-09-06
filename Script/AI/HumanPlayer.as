@@ -119,7 +119,7 @@ class AHumanPlayer : AAIPlayer
 		if (bPlayerControlled && Ball != nullptr && Ball.bInPlay)
 		{
 			// Direct control: player drives movement, hits via buttons
-			MovePlayer(FVector2D(AxisForward, AxisRight));
+			MovePlayer(ScreenToWorldMove(AxisForward, AxisRight));
 			return;
 		}
 
@@ -191,13 +191,9 @@ class AHumanPlayer : AAIPlayer
 	// ---- Touch input (Android on-screen controls; see ABeachVolleyballHUD) ----
 	// The HUD drives these directly instead of the FKey-based handlers above:
 	// there is no real key behind a screen tap, and the axis handlers already
-	// take a plain float so they need no touch-specific twin.
-
-	void TouchMove(float32 Forward, float32 Right)
-	{
-		OnMoveForward(Forward);
-		OnMoveRight(Right);
-	}
+	// take a plain float so they need no touch-specific twin. Movement has no
+	// twin here at all — it comes from the engine's own virtual joystick via
+	// the ordinary Gamepad_LeftX/Y axis mappings, not from the HUD.
 
 	void TouchJump()  { DoJump(); }
 	void TouchPass()  { DoPass(); }
@@ -235,5 +231,21 @@ class AHumanPlayer : AAIPlayer
 	{
 		bPlayerControlled = true;
 		Print("Player control activated!");
+	}
+
+	// Stick/touch axes are SCREEN-relative (push up = away from camera) but
+	// MovePlayer wants WORLD-space X/Y (ApplyMoveInput feeds it straight into
+	// PlayerVelocity — see VolleyballPlayer.as — because AI travel already
+	// works in world space). Camera.as's portrait rig (EndCamPos) looks down
+	// world +X, so screen-forward == world +X and screen-right == world +Y
+	// there — identity, which is why this went unnoticed. Its landscape rig
+	// (SideCamPos) is yawed 90° to look down world +Y instead, so without this
+	// remap a landscape player pushing "forward" walked sideways across the
+	// screen and "right" walked toward/away from the camera.
+	private FVector2D ScreenToWorldMove(float Forward, float Right) const
+	{
+		FVector2D ViewportSize = WidgetLayout::GetViewportSize();
+		bool bLandscape = ViewportSize.X > ViewportSize.Y;
+		return bLandscape ? FVector2D(-Right, Forward) : FVector2D(Forward, Right);
 	}
 }
