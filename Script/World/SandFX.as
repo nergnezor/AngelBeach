@@ -17,7 +17,12 @@ class ASandFX : AActor
 	UNiagaraSystem FootstepSystem;
 
 	// --- CPU particle pool ---
-	const int   MaxParticles = 260;
+	// Raised 260 -> 400 (Erik, 2026-09-06: "mycket om billigt" — a lot, if
+	// it's cheap — turning sand spray back on for light graphics). It is:
+	// camera-facing quads with per-vertex colour, no material lookups beyond
+	// BasicShapeMaterial, same cost per particle live gameplay already pays
+	// in normal mode. 400 floats/vectors is a few KB, not a frame-time line.
+	const int   MaxParticles = 400;
 	const float PGravity     = -980.0f;
 	const float PDrag        = 0.6f;
 	const float GroundZ      = 0.0f;
@@ -30,9 +35,31 @@ class ASandFX : AActor
 	private int NextFree = 0;
 	private bool bDustDirty = false;
 
+	// DustMesh had no material at all before this (2026-09-06) — CreateMeshSection_
+	// LinearColor's per-vertex colours went nowhere: the engine's own default
+	// material does not read them, the same "renders as the flat default,
+	// not what the vertex data says" trap CLAUDE.md documents for a missing
+	// usage flag. Every OTHER coloured element in this codebase (Ball, Court,
+	// TeamRing, the player tint, both ShadowBlobs) carries its colour on a
+	// BasicShapeMaterial "Color" PARAMETER instead of vertex colour, for
+	// exactly this reason — DustMesh now matches. Per-vertex colour stays in
+	// RebuildDust as plain white; the parameter below is the only thing that
+	// actually tints it, which costs the old per-particle life-fade tint
+	// (still fades in SIZE, via PSize's own frac term).
+	private UMaterialInstanceDynamic DustMID;
+
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
+		UMaterialInterface Base = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (Base != nullptr)
+		{
+			DustMID = DustMesh.CreateDynamicMaterialInstance(0, Base);
+			if (DustMID != nullptr)
+				DustMID.SetVectorParameterValue(n"Color", FLinearColor(0.95f, 0.86f, 0.66f, 1));
+		}
+
 		for (int i = 0; i < MaxParticles; i++)
 		{
 			PPos.Add(FVector::ZeroVector);
@@ -44,21 +71,23 @@ class ASandFX : AActor
 	}
 
 	// --- Light graphics mode (toggled with B — see ABeachVolleyballGameMode) ----
-	// No sand means no sand spray. Bursts and footsteps become no-ops and the
-	// grains already in flight are cut short, so the pool empties within a frame
-	// instead of leaving a cloud hanging over a court that has no beach.
+	// The sand is gone, but the spray stays ON now (Erik, 2026-09-06) — no
+	// ground to kick it up FROM is not a reason to also cut a burst that
+	// reads perfectly well against a plain sky, and it is one more motion
+	// cue in a mode that exists to make motion easy to read. RebuildDust
+	// tints it pink here instead of the normal sandy tan, matching the
+	// mode's own strong flat team colours rather than trying to fake a sand
+	// colour with no sand mesh left to match against.
 	private bool bLightGraphics = false;
 
 	void SetLightGraphics(bool bOn)
 	{
-		if (bOn == bLightGraphics) return;
 		bLightGraphics = bOn;
-
-		if (bOn)
+		if (DustMID != nullptr)
 		{
-			for (int i = 0; i < MaxParticles; i++)
-				PLife[i] = 0.0f;
-			bDustDirty = true;   // one last rebuild clears the quads
+			DustMID.SetVectorParameterValue(n"Color", bOn
+				? FLinearColor(1.00f, 0.30f, 0.65f, 1)
+				: FLinearColor(0.95f, 0.86f, 0.66f, 1));
 		}
 	}
 
@@ -66,8 +95,6 @@ class ASandFX : AActor
 	UFUNCTION(BlueprintCallable)
 	void Burst(FVector Pos, FVector ImpactVel, float Strength)
 	{
-		if (bLightGraphics) return;
-
 		float S = Math::Clamp(Strength, 0.1f, 3.0f);
 
 		// NOTE: When ImpactSystem is assigned, spawn it here once the Niagara
@@ -75,7 +102,11 @@ class ASandFX : AActor
 		//   Niagara::SpawnSystemAtLocation(ImpactSystem, Pos, FRotator::ZeroRotator);
 		// Until then (and whenever no system is set) the procedural spray runs.
 
+		// Light graphics gets a bigger burst on purpose ("mycket om billigt"):
+		// the same cheap quad pool, just more of it, since nothing else is
+		// competing for this mode's frame time the way the full beach does.
 		int Count = int(18.0f + S * 34.0f);
+		if (bLightGraphics) Count = int(Count * 1.6f);
 		SprayFallback(Pos, ImpactVel, S, Count, 1.0f);
 	}
 
@@ -83,8 +114,6 @@ class ASandFX : AActor
 	UFUNCTION(BlueprintCallable)
 	void Footstep(FVector Pos, float Strength)
 	{
-		if (bLightGraphics) return;
-
 		float S = Math::Clamp(Strength, 0.1f, 2.0f);
 
 		if (FootstepSystem != nullptr)
@@ -94,6 +123,7 @@ class ASandFX : AActor
 		}
 
 		int Count = int(6.0f + S * 10.0f);
+		if (bLightGraphics) Count = int(Count * 1.6f);
 		SprayFallback(Pos, FVector(0, 0, 0), S, Count, 0.5f);
 	}
 
@@ -187,9 +217,12 @@ class ASandFX : AActor
 			UV.Add(FVector2D(0, 0)); UV.Add(FVector2D(1, 0));
 			UV.Add(FVector2D(1, 1)); UV.Add(FVector2D(0, 1));
 
-			float shade = 0.85f + 0.15f * frac;
+			// Plain white — DustMID's own Color parameter (see BeginPlay/
+			// SetLightGraphics) is what actually tints these now, not vertex
+			// colour (see that field's comment for why). The old per-particle
+			// life-fade tint is gone; PSize's own frac shrink still fades it.
 			for (int k = 0; k < 4; k++)
-				C.Add(FLinearColor(0.95f * shade, 0.86f * shade, 0.66f * shade, 1));
+				C.Add(FLinearColor(1, 1, 1, 1));
 
 			T.Add(b); T.Add(b + 2); T.Add(b + 1);
 			T.Add(b); T.Add(b + 3); T.Add(b + 2);
