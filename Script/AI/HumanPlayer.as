@@ -72,9 +72,12 @@ class AHumanPlayer : AAIPlayer
 		// AActor's "this actor was touched" delegates (need collision, never fire
 		// for a controller), APlayerController.GetInputTouchState isn't callable
 		// with any argument spelling, and UInputComponent::BindTouch isn't bound.
-		// So movement comes from the engine's virtual joystick via the ordinary
-		// Gamepad_LeftX/Y axis mappings above (see Config/DefaultInput.ini), and
-		// the action buttons come from HUD hit boxes (see ABeachVolleyballHUD).
+		// So on Android, movement is the only input: it comes from the engine's
+		// own virtual joystick via the ordinary Gamepad_LeftX/Y axis mappings
+		// above (see Config/DefaultInput.ini). Contact happens automatically on
+		// arm collision (see Ball.as::CheckPlayerCollision) — there used to be
+		// on-screen Jump/Pass/Set/Spike buttons (see git history on HUD.as) but
+		// they went untouched in practice and were removed.
 	}
 
 	UFUNCTION(BlueprintOverride)
@@ -187,18 +190,6 @@ class AHumanPlayer : AAIPlayer
 	{
 		if (GM != nullptr) GM.ToggleLightGraphics();
 	}
-
-	// ---- Touch input (Android on-screen controls; see ABeachVolleyballHUD) ----
-	// The HUD drives these directly instead of the FKey-based handlers above:
-	// there is no real key behind a screen tap, and the axis handlers already
-	// take a plain float so they need no touch-specific twin. Movement has no
-	// twin here at all — it comes from the engine's own virtual joystick via
-	// the ordinary Gamepad_LeftX/Y axis mappings, not from the HUD.
-
-	void TouchJump()  { DoJump(); }
-	void TouchPass()  { DoPass(); }
-	void TouchSet()   { DoSet(); }
-	void TouchSpike() { DoSpike(); }
 
 	private void DoJump()
 	{
