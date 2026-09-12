@@ -458,10 +458,18 @@ jobs:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 
       - name: Install uploader dependencies
-        # Runner's system Python is PEP 668 "externally managed" (Debian/Ubuntu
-        # policy on Python 3.11+); --break-system-packages is safe here since
-        # this is an ephemeral CI runner step, not a persistent system change.
-        run: pip install --quiet --user --break-system-packages google-api-python-client google-auth google-auth-httplib2
+        # `pip install --user` (the previous approach here) hard-fails as
+        # "User site-packages are disabled for this Python" against a NixOS
+        # runner's python3 -- nixpkgs patches user-site out of every Python
+        # derivation on purpose, to keep them pure/immutable, and that isn't
+        # something a workflow-level flag can opt back into (the --break-
+        # system-packages this used to pass is a Debian/Ubuntu PEP-668 knob
+        # with no NixOS equivalent). A venv sidesteps it the normal way:
+        # its site-packages is a plain writable directory regardless of how
+        # python3 itself was built, so pip works inside it unmodified.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/play-upload-venv"
+          "$RUNNER_TEMP/play-upload-venv/bin/pip" install --quiet google-api-python-client google-auth google-auth-httplib2
 
       - name: Upload to Play internal testing track
         run: |
@@ -471,7 +479,7 @@ jobs:
           # needs a download-artifact step (name: android-aab-<sha>) again.
           AAB=$(find "$GITHUB_WORKSPACE/Artifacts/aab" -name '*.aab' 2>/dev/null | head -1)
           test -n "$AAB" || { echo "ERROR: no .aab found in workspace (built on another machine?)"; exit 1; }
-          python3 scripts/upload_play_internal.py \
+          "$RUNNER_TEMP/play-upload-venv/bin/python3" scripts/upload_play_internal.py \
             --package "$PACKAGE_NAME" \
             --aab "$AAB" \
             --service-account-json "$RUNNER_TEMP/play-service-account.json" \
