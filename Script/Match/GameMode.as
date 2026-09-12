@@ -1311,6 +1311,32 @@ class ABeachVolleyballGameMode : AGameModeBase
 	{
 		FString T = (Team == ETeam::Team_A) ? "A" : "B";
 		RallySeq += " " + T + TouchNum + ":" + HitName(Type);
+
+		// WHERE THE DEFENCE ACTUALLY IS when the attack lands, one line per
+		// spike. Erik: "de är dåliga på att backa till bra försvarsposition när
+		// de inte blockar." depth is distance from the net (the court is 900cm
+		// deep), so depth~110 is standing at the net and depth~500 is the base
+		// formation; blk says whether that player is actually blocking. A
+		// defender at depth~110 with blk=0 is the shape being reported: up at
+		// the net, not blocking, and not covering anything behind them.
+		if (Type == EHitType::Hit_Spike)
+		{
+			ETeam Def = (Team == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+			TArray<AActor> Found;
+			GetAllActorsOfClass(AVolleyballPlayer, Found);
+			FString Line = "DEFENCE vs" + T;
+			for (AActor A : Found)
+			{
+				AAIPlayer P = Cast<AAIPlayer>(A);
+				if (P == nullptr || P.TeamSide != Def) continue;
+				FVector L = P.GetActorLocation();
+				Line += " [" + (P.Role == EPlayerRole::Role_Front ? "F" : "B")
+					+ " depth=" + int(Math::Abs(L.X))
+					+ " y=" + int(L.Y)
+					+ " blk=" + (P.IsBlocking() ? 1 : 0) + "]";
+			}
+			Log(Line);
+		}
 	}
 
 	// Called by AIPlayer.SetPlayState on every real (debounced) transition

@@ -857,8 +857,42 @@ class AAIPlayer : AVolleyballPlayer
 		// only the standing place moves.
 		if (Role == EPlayerRole::Role_Front && IsOpponentBuildingAttack())
 		{
-			MoveToHold(ClampToCourt(BlockReadySpot()), DeltaTime, 0.75f);
-			if (bHolding) { RequestCrouch(0.25f); FaceBall(); }
+			// ...BUT A BLOCKER WHO IS NOT BLOCKING PULLS OFF THE NET. Erik: "de
+			// är dåliga på att backa till bra försvarsposition när de inte
+			// blockar."
+			//
+			// Reaching this branch at all means we are not in Play_Block this
+			// tick -- PlayBlock owns that state -- so the only question is
+			// whether a block is still COMING. While the attacker is still
+			// building it is, and waiting at the net is the whole point of
+			// BlockReadySpot. Once they have committed to their approach and we
+			// still have not been given the block (IsPassAttackable refused it:
+			// wrong side of the net, unarrivable, whatever), this attack is not
+			// ours to block and standing at the net does nothing but leave the
+			// court open.
+			//
+			// MEASURED at the moment of 22 opponent spikes, before this: the
+			// front player was at the net (depth 46-111 of a 900cm court) in
+			// every single one, and actually blocking in only 6 -- so 16 spikes
+			// were dug, or not dug, by a team with one player pressed against
+			// the net doing nothing. That is the reported shape exactly.
+			//
+			// Pulling off is what a beach blocker does with the same read: drop
+			// off the net and defend the angle. The target is mid-depth rather
+			// than the full base position because this decision arrives late by
+			// construction -- the point is to be moving back and low when the
+			// ball is struck, not to complete a 4.5m retreat that would fail the
+			// same way the 4.5m sprint forward did.
+			// "Not blocking" is only settled once the attacker is committed AND
+			// the block is out of reach -- committed alone is the same cue the
+			// block itself waits for, so pulling off on that pre-empts the block
+			// instead of replacing it.
+			AAIPlayer Att = FindAttackingOpponent();
+			bool bAttackUnderway = (Att != nullptr && Att.bSpikeApproachCommitted);
+			bool bPullOff = bAttackUnderway && !CanArriveToBlock();
+			FVector DefenceSpot = bPullOff ? PullOffSpot() : BlockReadySpot();
+			MoveToHold(ClampToCourt(DefenceSpot), DeltaTime, 0.75f);
+			if (bHolding) { RequestCrouch(bPullOff ? 0.4f : 0.25f); FaceBall(); }
 			return;
 		}
 
@@ -898,6 +932,33 @@ class AAIPlayer : AVolleyballPlayer
 		return FVector(MySign() * 110.0f, BasePosition().Y * 0.5f, FloorZ + PlayerHeight);
 	}
 
+	// Where a blocker goes when the attack is underway and the block is not
+	// theirs: off the net, defending their own half. Mid-depth on purpose --
+	// this read always arrives late, so the goal is to be retreating and low at
+	// contact, not to reach a spot 4.5m away that the clock never allowed.
+	FVector PullOffSpot() const
+	{
+		return FVector(MySign() * 300.0f, BasePosition().Y, FloorZ + PlayerHeight);
+	}
+
+	// Can I still reach the block in time? One answer, used by both decisions
+	// that depend on it: IsPassAttackable (should I commit) and PlayBase
+	// (should I keep waiting at the net or pull off and defend). They MUST
+	// agree -- when they disagreed, pulling off on "the attack is underway"
+	// while committing needed "I can arrive", the retreat moved the player far
+	// enough that the arrival test could never pass again, so the two fought
+	// and blocking collapsed to 1 of 58 spikes.
+	// Not const: BodyTravelTime is a mixin taking a non-const AAIPlayer.
+	bool CanArriveToBlock()
+	{
+		FVector Goal = FVector(MySign() * 55.0f, BasePosition().Y, FloorZ + PlayerHeight);
+		float Dist = (GetActorLocation() - FVector(Goal.X, Goal.Y, 0)).Size2D();
+		FVector Strike;
+		float Tau = PredictBallTimeToHeight(SpikeStrikeZ(), Strike);
+		if (Tau < 0.0f) return false;
+		return (Tau - this.BodyTravelTime(Dist)) >= BlockArrivalMargin;
+	}
+
 	// The opponent is building an attack: the ball is on their side and they
 	// have touched it. Deliberately from their FIRST touch, not their second --
 	// the blocker's trip has to start long before the set, which is the whole
@@ -911,6 +972,10 @@ class AAIPlayer : AVolleyballPlayer
 		if (GS.LastTouchTeam != Opp || GS.TouchesThisRally < 1) return false;
 		return !IsBallComingToMySide();
 	}
+
+	// Readable from GameMode (PlayState itself is private): is this player
+	// actually blocking right now, as opposed to merely standing near the net.
+	bool IsBlocking() const { return PlayState == EPlayState::Play_Block; }
 
 	// Temporary diagnostics — set true on ONE player from GameMode to inspect.
 	bool bDebugAI = false;
@@ -2180,8 +2245,9 @@ class AAIPlayer : AVolleyballPlayer
 		FVector ArrivalStrike;
 		float ArrivalTau = PredictBallTimeToHeight(SpikeStrikeZ(), ArrivalStrike);
 		float ArrivalTravelT = this.BodyTravelTime(ArrivalDist);
-		bool bCanArrive = ArrivalTau >= 0.0f
-			&& (ArrivalTau - ArrivalTravelT) >= BlockArrivalMargin;
+		// One source of truth, shared with PlayBase's pull-off (see
+		// CanArriveToBlock) -- the locals above exist for the telemetry below.
+		bool bCanArrive = CanArriveToBlock();
 
 		if (bCommittedToBlock)
 		{
