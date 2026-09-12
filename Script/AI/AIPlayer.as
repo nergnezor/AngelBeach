@@ -672,8 +672,17 @@ class AAIPlayer : AVolleyballPlayer
 		if (Want == EPlayState::Play_Block) GM.OnBlockCommit(TeamSide);
 	}
 
+	// Cross-team-readable (private is per-class in Angelscript, same as C++ --
+	// Teammate.bWasHitter etc. already rely on this): is this player, RIGHT
+	// NOW, in the committed sprint-to-plant or airborne phase of its own
+	// spike approach. Reset every tick so a player who stops attacking (ball
+	// died, role changed) reads false again without needing its own cleanup
+	// path. See IsPassAttackable's use of this via FindAttackingOpponent.
+	private bool bSpikeApproachCommitted = false;
+
 	protected void UpdateAI(float DeltaTime)
 	{
+		bSpikeApproachCommitted = false;
 		StateDwell += DeltaTime;
 
 		bool bMine = IsBallComingToMySide();
@@ -1678,6 +1687,7 @@ class AAIPlayer : AVolleyballPlayer
 			else
 			{
 				bGo = true;
+				bSpikeApproachCommitted = true;
 				// GO: committed sprint TO the plant point, shoulders OPEN —
 				// a right-handed hitter runs in with the left shoulder leading and
 				// the chest turned ~22° off the ball line, loading the torso. The
@@ -1753,6 +1763,7 @@ class AAIPlayer : AVolleyballPlayer
 			// shoulders to the ball — uncoiling from the open approach stance.
 			MovePlayer(FVector2D::ZeroVector);
 			FaceBall();
+			bSpikeApproachCommitted = true;
 		}
 
 		// Wind up ONLY during the committed run and the jump itself — an attacker
@@ -2046,18 +2057,52 @@ class AAIPlayer : AVolleyballPlayer
 			return false;
 		}
 
+		AAIPlayer Attacker = FindAttackingOpponent();
+		bool bAttackerStillCommitted = (Attacker != nullptr && Attacker.bSpikeApproachCommitted);
+
 		if (bCommittedToBlock)
 		{
-			// Stay on the block until the pass is clearly bad: well off the net OR
-			// dropped low. Wide margins so small ball motion doesn't drop the block.
-			if (BallOffNet > 420.0f || BallZ < 110.0f)
+			// Release as soon as the attacker's OWN approach is no longer
+			// committed (they hit the Tau<0 bail-to-bump path, or aren't
+			// attacking any more) -- not ball-position drift alone, which is
+			// what let one momentary bSpikeApproachCommitted=true tick latch a
+			// hold for the rest of the exchange even after the attacker's own,
+			// separately-recomputed Tau dropped them back out of the approach a
+			// tick later (measured: 9/11 rallies committed once this went in,
+			// up from 3/11 before it -- the two hysteresis loops were fighting
+			// each other, not cooperating). Ball position stays as a second,
+			// wider-margin release for the couple of frames right at contact
+			// where bSpikeApproachCommitted may already read false a tick early.
+			if (!bAttackerStillCommitted || BallOffNet > 420.0f || BallZ < 110.0f)
 				bCommittedToBlock = false;
 		}
 		else
 		{
-			// Commit to the block only when the ball is clearly a real attack setup:
-			// near the net and high. Tighter than the drop thresholds (hysteresis gap).
-			if (BallOffNet < 300.0f && BallZ > 170.0f)
+			// Commit to the block only once the actual opponent hitter has
+			// committed to THEIR OWN spike approach (sprinting to the plant, or
+			// already airborne) -- not "the ball is high near the net", which the
+			// previous attempt (BallZ>170, then a ball-trajectory-only check)
+			// both used and neither could tell a genuine spike setup from one
+			// the attacker was always going to bail out of.
+			//
+			// MEASURED (local headless samples, 2026-09-12): under BallZ>170,
+			// 5/5 observed commits ended their exchange in a Bump, not a Spike.
+			// Swapping that for "does the set's own trajectory ever reach
+			// SpikeStrikeZ" (the same feasibility test ApproachForSpike uses to
+			// decide Tau<0 => hit it over, never jump) did NOT fix it: a second
+			// sample still had 3/12 commits end in a Bump, because a viable
+			// trajectory is necessary but not sufficient -- ApproachForSpike's
+			// own comment calls the other failure mode by name ("if the attack
+			// still fails it fails in the legs"): the attacker can't PHYSICALLY
+			// reach their plant in time, which is about THEIR position, not the
+			// ball's arc, and no amount of ball-only prediction can see it.
+			//
+			// bSpikeApproachCommitted is set by that opponent inside their own
+			// ApproachForSpike (Angelscript's `private` is per-class, like C++ --
+			// Teammate.bWasHitter etc. already read another instance's private
+			// fields this same way), so this asks the actual hitter "are you
+			// really going", not a proxy for it.
+			if (BallOffNet < 300.0f && bAttackerStillCommitted)
 				bCommittedToBlock = true;
 		}
 
