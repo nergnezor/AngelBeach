@@ -716,7 +716,26 @@ class AAIPlayer : AVolleyballPlayer
 			StateDwell = 0.0f;
 		}
 		else if (bWantJob)    SetPlayState(EPlayState::Play_Job);
-		else if (bWantBlock)  SetPlayState(EPlayState::Play_Block);
+		else if (bWantBlock && PlayState != EPlayState::Play_Block)
+		{
+			// Same exemption as the hitter hand-off above, for the same reason.
+			// StateMinDwell exists to absorb NOISY predicates; IsPassAttackable
+			// is not one any more -- it carries its own commit/release
+			// hysteresis, it asks the attacker whether they are actually
+			// committed, and it refuses trips that cannot arrive. By the time it
+			// says yes, the answer is a fact, and it is a fact with a deadline.
+			//
+			// MEASURED: with the blocker holding at the net (BlockReadySpot),
+			// bMine/AmIHitter flicker for a ball hovering over the net, so the
+			// player cycles Job/Base every ~0.1s and StateDwell never reaches
+			// 0.35s. Every accepted block was logged at state=0 dwell=10 and
+			// then dropped on the floor -- 6 arrivable blocks in one run, 0 of
+			// them entered. The block is the one state whose cue expires.
+			PlayState = EPlayState::Play_Block;
+			StateDwell = 0.0f;
+			GM.OnBlockCommit(TeamSide);
+			if (bDebugAI) Log(DebugTag() + " STATE=block(direct)");
+		}
 		else if (bIMadeLastTouch && PlayState == EPlayState::Play_Job)
 		{
 			// I just made my own touch: CanContactBall() (!bIMadeLastTouch)
@@ -807,6 +826,42 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
+		// ...AND NEITHER DOES THE BLOCKER, which is the same argument as the two
+		// branches above, on the defensive side, where it had never been made.
+		// Erik: "i försvar hamnar spelarna ofta fel: den som är längst från
+		// nätet springer för sent för att blocka och lämnar en stor lucka efter
+		// sig."
+		//
+		// BasePosition holds BOTH players ~5m off the net (Role_Front/Role_Back
+		// differ by 60cm in X and 380cm in Y -- they are the -Y/+Y halves, not
+		// front and back), and PlayBlock's goal is 55cm off it. So the old
+		// behaviour asked the blocker to cover ~4.5m at the moment the attack
+		// was already recognisable. MEASURED, both cues on the same rallies:
+		//
+		//   cue                      time left   trip cost   slack
+		//   ball high near net       ~120cs      ~140cs      -9..-25
+		//   attacker committed       ~52-86cs    ~140cs      -46..-78
+		//
+		// No cue is early enough, because none can be: a set only hangs ~1.2s
+		// and the trip costs ~1.4s. The blocker was always arriving after the
+		// ball -- out of the defence, not yet at the net -- which is the "lucka"
+		// exactly. Adding an arrival check (see IsPassAttackable) removes the
+		// doomed trips, but on its own it just means nobody ever blocks: 61 of
+		// 62 chances refused over 9 rallies, all of them 3.5-5m out.
+		//
+		// The fix is the one the attack side already got: be there beforehand.
+		// A blocker who stands at the net while the opponent builds is not
+		// early, they are in position -- that is where a beach blocker plays
+		// from, and the partner covers the court behind them. The jump is still
+		// decided late, by IsPassAttackable, off the attacker's own commitment;
+		// only the standing place moves.
+		if (Role == EPlayerRole::Role_Front && IsOpponentBuildingAttack())
+		{
+			MoveToHold(ClampToCourt(BlockReadySpot()), DeltaTime, 0.75f);
+			if (bHolding) { RequestCrouch(0.25f); FaceBall(); }
+			return;
+		}
+
 		MoveToHold(ClampToCourt(BasePosition()), DeltaTime, 0.75f);
 		// Crouch + ball-face only when ARRIVED. Asking for both while jogging
 		// back to base is exactly "böjer sig framåt och backar": chest toward
@@ -831,6 +886,30 @@ class AAIPlayer : AVolleyballPlayer
 		if (Role == EPlayerRole::Role_Front)
 			return FVector(Sign * 500.0f, -190.0f, Z);
 		return FVector(Sign * 560.0f, 190.0f, Z);
+	}
+
+	// Where the blocker waits while the opponent builds: at the net, in their
+	// own half, close enough that PlayBlock's goal (55cm off the net) is a
+	// shuffle rather than the 4.5m sprint BasePosition made of it. Not pressed
+	// against the net -- the lateral tracking to the hitter still has to happen
+	// from here, and a body already touching the net has nowhere to load a jump.
+	FVector BlockReadySpot() const
+	{
+		return FVector(MySign() * 110.0f, BasePosition().Y * 0.5f, FloorZ + PlayerHeight);
+	}
+
+	// The opponent is building an attack: the ball is on their side and they
+	// have touched it. Deliberately from their FIRST touch, not their second --
+	// the blocker's trip has to start long before the set, which is the whole
+	// point. A serve is excluded because the ball is on its way to us, not
+	// sitting on their side, so nobody goes to the net against one.
+	bool IsOpponentBuildingAttack() const
+	{
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS == nullptr || GS.GamePhase != EGamePhase::Phase_Rally) return false;
+		ETeam Opp = (TeamSide == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+		if (GS.LastTouchTeam != Opp || GS.TouchesThisRally < 1) return false;
+		return !IsBallComingToMySide();
 	}
 
 	// Temporary diagnostics — set true on ONE player from GameMode to inspect.
@@ -2021,6 +2100,16 @@ class AAIPlayer : AVolleyballPlayer
 	// until the pass is CLEARLY un-attackable; once dropped we don't re-commit until
 	// the ball is CLEARLY attackable again. The two thresholds don't overlap.
 	private bool bCommittedToBlock = false;
+	// Slack the block trip must still have left over on arrival: the run has to
+	// end in a brake and a gather before the jump (PlayBlock only fires
+	// StartLoadedJump once velocity is under 90), and the spiked ball needs a
+	// moment to cross the net after contact, so arriving exactly at the strike
+	// is late rather than tight.
+	const float BlockArrivalMargin = 0.10f;
+	// One BLOCKREFUSED line per attack, not per tick: how much the trip missed
+	// by is the number that says whether the gate is merely strict or has shut
+	// blocking off altogether.
+	private bool bBlockRefusedLogged = false;
 
 	private bool IsPassAttackable()
 	{
@@ -2043,6 +2132,7 @@ class AAIPlayer : AVolleyballPlayer
 		if (GSB == nullptr || GSB.LastTouchTeam != Opp || GSB.TouchesThisRally < 2)
 		{
 			bCommittedToBlock = false;
+			bBlockRefusedLogged = false;
 			return false;
 		}
 
@@ -2059,6 +2149,39 @@ class AAIPlayer : AVolleyballPlayer
 
 		AAIPlayer Attacker = FindAttackingOpponent();
 		bool bAttackerStillCommitted = (Attacker != nullptr && Attacker.bSpikeApproachCommitted);
+
+		// CAN I EVEN GET THERE? Erik: "den som är längst från nätet springer för
+		// sent för att blocka och lämnar en stor lucka efter sig."
+		//
+		// BasePosition sits both players ~5m off the net (Role_Front/Role_Back
+		// are really the -Y/+Y halves; they differ by 60cm in X and 380cm in Y),
+		// and PlayBlock's goal is 55cm off it -- so committing to a block is
+		// committing to a ~4.5m sprint. MEASURED over one headless run, logging
+		// both gates on the same rallies:
+		//
+		//   gate                       tau (time left)   travelT   slack
+		//   BallZ>170 (pre-98db8dc)    ~120cs            ~140cs    -9..-25
+		//   attacker-committed (now)   ~52-86cs          ~140cs    -46..-78
+		//
+		// So the late cue this file now uses roughly halved the time available
+		// -- but note the EARLY cue never made it either. A 4.5m trip costs
+		// ~1.4s and a set buys ~1.2s: the block from base has never actually
+		// been arrivable, it just failed less visibly. Every such commit spends
+		// the rally running out of the defence and arriving after the ball.
+		//
+		// Real beach volleyball has the same rule the numbers force here: if you
+		// cannot get to the net in time, you do not go -- you stay back and dig.
+		// A block that does not arrive was never a block, only a hole in the
+		// defence, so refusing the trip costs nothing and keeps the court
+		// covered. Margin is for the brake and the gather at the end of the run
+		// (PlayBlock only jumps once stopped, velocity < 90).
+		FVector ArrivalGoal = FVector(MySign() * 55.0f, BasePosition().Y, FloorZ + PlayerHeight);
+		float ArrivalDist = (GetActorLocation() - FVector(ArrivalGoal.X, ArrivalGoal.Y, 0)).Size2D();
+		FVector ArrivalStrike;
+		float ArrivalTau = PredictBallTimeToHeight(SpikeStrikeZ(), ArrivalStrike);
+		float ArrivalTravelT = this.BodyTravelTime(ArrivalDist);
+		bool bCanArrive = ArrivalTau >= 0.0f
+			&& (ArrivalTau - ArrivalTravelT) >= BlockArrivalMargin;
 
 		if (bCommittedToBlock)
 		{
@@ -2102,8 +2225,28 @@ class AAIPlayer : AVolleyballPlayer
 			// Teammate.bWasHitter etc. already read another instance's private
 			// fields this same way), so this asks the actual hitter "are you
 			// really going", not a proxy for it.
-			if (BallOffNet < 300.0f && bAttackerStillCommitted)
+			if (BallOffNet < 300.0f && bAttackerStillCommitted && !bCanArrive && !bBlockRefusedLogged)
+			{
+				bBlockRefusedLogged = true;
+				Log("BLOCKREFUSED " + DebugTag()
+					+ " dist=" + int(ArrivalDist)
+					+ " travelT=" + int(ArrivalTravelT * 100)
+					+ " tau=" + int(ArrivalTau * 100)
+					+ " slack=" + int((ArrivalTau - ArrivalTravelT) * 100));
+			}
+			if (BallOffNet < 300.0f && bAttackerStillCommitted && bCanArrive)
+			{
 				bCommittedToBlock = true;
+				// The trip, priced, at the moment we decide to make it -- the same
+				// three numbers SPIKEBUDGET prints for the attacker (how far, how
+				// long it takes, how long is left), so a block that goes wrong can
+				// be read out of the log instead of watched.
+				Log("BLOCKBUDGET " + DebugTag()
+					+ " dist=" + int(ArrivalDist)
+					+ " travelT=" + int(ArrivalTravelT * 100)
+					+ " tau=" + int(ArrivalTau * 100)
+					+ " slack=" + int((ArrivalTau - ArrivalTravelT) * 100));
+			}
 		}
 
 		return bCommittedToBlock;
