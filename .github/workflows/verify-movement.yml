@@ -146,8 +146,16 @@ jobs:
             echo "### MatchFilmer — rally sequences (what stroke each touch used)" >> "$SUMMARY"
             RALLIES=$(grep -c "^RALLY end" "$FILM_LOG" || true)
             SET_TOUCHES=$(grep -o "[0-9]:Set" "$FILM_LOG" | wc -l || true)
+            # blockCommitsA/B counts every Play_Block SetPlayState transition,
+            # not just rallies where a block actually touched the ball (that's
+            # what a "Block" entry in the seq=[ ] below already shows) -- see
+            # GameMode.OnBlockCommit. Sums the per-rally fields across the run
+            # so a run-over-run trend is visible without eyeballing every line.
+            BLOCK_COMMITS=$(grep -o "blockCommitsA=[0-9]*" "$FILM_LOG" | grep -o "[0-9]*" | awk '{s+=$1} END {print s+0}')
+            BLOCK_COMMITS=$((BLOCK_COMMITS + $(grep -o "blockCommitsB=[0-9]*" "$FILM_LOG" | grep -o "[0-9]*" | awk '{s+=$1} END {print s+0}')))
             echo "- Rallies completed: $RALLIES" >> "$SUMMARY"
             echo "- Fingerpass (Set) touches across the run: $SET_TOUCHES" >> "$SUMMARY"
+            echo "- Block commits across the run (both teams, incl. blocks that never touched the ball): $BLOCK_COMMITS" >> "$SUMMARY"
             echo '```' >> "$SUMMARY"
             grep "^RALLY end" "$FILM_LOG" >> "$SUMMARY" || true
             echo '```' >> "$SUMMARY"

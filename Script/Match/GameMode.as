@@ -1271,6 +1271,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 		// Fresh rally telemetry (see OnTouchForRally).
 		RallyCrossings = 0;
 		RallySeq = "";
+		RallyBlockCommitsA = 0;
+		RallyBlockCommitsB = 0;
 	}
 
 	// True from serve launch until the serve has crossed the net (or faulted).
@@ -1283,6 +1285,16 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// which touch number, which stroke). One RALLY line per rally at its end.
 	private int RallyCrossings = 0;
 	private FString RallySeq = "";
+
+	// How many times each team's front player actually COMMITTED to Play_Block
+	// (SetPlayState transition, not just the ball ending up touched) this rally.
+	// Separate from RallySeq's "Block" entries, which only fire on an actual
+	// Hit_Block contact — most block commitments never touch the ball at all,
+	// which is exactly the gap "Erik saw in a match" (players going to the net
+	// far more than they ever actually block something) that RallySeq alone
+	// cannot show.
+	private int RallyBlockCommitsA = 0;
+	private int RallyBlockCommitsB = 0;
 
 	private FString HitName(EHitType T) const
 	{
@@ -1301,9 +1313,18 @@ class ABeachVolleyballGameMode : AGameModeBase
 		RallySeq += " " + T + TouchNum + ":" + HitName(Type);
 	}
 
+	// Called by AIPlayer.SetPlayState on every real (debounced) transition
+	// into Play_Block -- see RallyBlockCommitsA/B above.
+	void OnBlockCommit(ETeam Team)
+	{
+		if (Team == ETeam::Team_A) RallyBlockCommitsA++;
+		else                       RallyBlockCommitsB++;
+	}
+
 	private void LogRallyEnd(FString Reason)
 	{
 		Log("RALLY end reason=" + Reason + " crossings=" + RallyCrossings
+			+ " blockCommitsA=" + RallyBlockCommitsA + " blockCommitsB=" + RallyBlockCommitsB
 			+ " seq=[" + RallySeq + " ]");
 
 		// Motion-quality totals per player, on the same hook, so every rally in a
@@ -1315,6 +1336,8 @@ class ABeachVolleyballGameMode : AGameModeBase
 
 		RallyCrossings = 0;
 		RallySeq = "";
+		RallyBlockCommitsA = 0;
+		RallyBlockCommitsB = 0;
 	}
 
 	// Called by the ball when it crosses the net plane, so we know the serve was good.

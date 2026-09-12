@@ -665,6 +665,11 @@ class AAIPlayer : AVolleyballPlayer
 		PlayState = Want;
 		StateDwell = 0.0f;
 		if (bDebugAI) Log(DebugTag() + " STATE=" + int(Want));
+		// Counted regardless of bDebugAI: "de springer fram för att blocka för
+		// ofta" (98db8dc) is a frequency question the RALLY end summary should
+		// answer on its own, in every headless run, without needing per-actor
+		// debug logging turned on first.
+		if (Want == EPlayState::Play_Block) GM.OnBlockCommit(TeamSide);
 	}
 
 	protected void UpdateAI(float DeltaTime)
