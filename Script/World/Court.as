@@ -14,6 +14,17 @@ class ACourt : AActor
 	UPROPERTY(DefaultComponent, Attach = SandMesh)
 	UProceduralMeshComponent PostsMesh;
 
+	// The ground that exists only so the shadows have somewhere to land. Light
+	// graphics hides SandMesh (see SetLightGraphics), and with the sand gone
+	// there is nothing under the players at all — the real dynamic shadow that
+	// mode deliberately keeps was being cast into empty space. Erik: "aktivera
+	// skuggor". Two triangles, one flat colour, visible ONLY in light graphics,
+	// so the stripped-down look survives and full graphics still uses the sand.
+	// Attached to SandMesh like its siblings, which is safe because
+	// SetLightGraphics hides the sand with bPropagateToChildren left false.
+	UPROPERTY(DefaultComponent, Attach = SandMesh)
+	UProceduralMeshComponent ShadowPlaneMesh;
+
 	// Court dimensions (cm) - regulation 16m x 8m
 	const float CourtHalfLength = 800.0f;   // 16m / 2
 	const float CourtHalfWidth  = 400.0f;   //  8m / 2
@@ -88,6 +99,10 @@ class ACourt : AActor
 		// bPropagateToChildren stays false on purpose: NetMesh/LinesMesh/PostsMesh
 		// are attached to SandMesh (it is the root), and they must not follow it.
 		SandMesh.SetVisibility(!bOn);
+		// ...and the shadow catcher takes over exactly where it leaves off, so
+		// the players never stand on nothing. Inverse of the sand by
+		// construction: the two are never both on, and never both off.
+		ShadowPlaneMesh.SetVisibility(bOn);
 
 		// Footprints and craters keep accumulating in the heightfield while the
 		// mesh is hidden, so coming back needs one rebuild to show the current
@@ -102,6 +117,63 @@ class ACourt : AActor
 		BuildNet();
 		BuildLines();
 		BuildPosts();
+		BuildShadowPlane();
+	}
+
+	// Court + a short apron, at the sand's own surface height. Margin is small
+	// on purpose: this is not the beach coming back, it is the footing under
+	// the players, and a low sun throws a body shadow a couple of metres.
+	const float ShadowPlaneMargin = 250.0f;
+	// Grey-blue, the ground colour light graphics already describes itself
+	// against ("red goes muddy against the sand-free grey-blue ground" —
+	// AVolleyballPlayer::LightModeTint). Rough, so it stays matte and reads as
+	// floor rather than as another reflective shell.
+	const FLinearColor ShadowPlaneColor = FLinearColor(0.16f, 0.19f, 0.24f, 1.0f);
+
+	private void BuildShadowPlane()
+	{
+		TArray<FVector> V;
+		TArray<int32> T;
+		TArray<FVector> N;
+		TArray<FVector2D> UV;
+		TArray<FProcMeshTangent> Tan;
+
+		float W = CourtHalfLength + ShadowPlaneMargin;
+		float D = CourtHalfWidth + ShadowPlaneMargin;
+		// Just under BuildLines' H = 1.0: the lines have to stay on top, and the
+		// sand's own surface is 0, so this sits between them and z-fights with
+		// neither.
+		float Z = -0.5f;
+
+		V.Add(FVector(-W, -D, Z));   // A
+		V.Add(FVector( W, -D, Z));   // B
+		V.Add(FVector( W,  D, Z));   // C
+		V.Add(FVector(-W,  D, Z));   // D
+		// Tangents left empty, as every other procedural mesh in this project
+		// does: nothing here is normal-mapped, it is one flat colour.
+		for (int i = 0; i < 4; i++)
+			N.Add(FVector(0.0f, 0.0f, 1.0f));
+		UV.Add(FVector2D(0, 0));
+		UV.Add(FVector2D(1, 0));
+		UV.Add(FVector2D(1, 1));
+		UV.Add(FVector2D(0, 1));
+		// Same A,C,B / A,D,C order BuildSand winds its grid quads with — the one
+		// CheckMeshWinding below exists to catch getting wrong.
+		T.Add(0); T.Add(2); T.Add(1);
+		T.Add(0); T.Add(3); T.Add(2);
+
+		ShadowPlaneMesh.CreateMeshSection_LinearColor(0, V, T, N, UV,
+			TArray<FVector2D>(), TArray<FVector2D>(), TArray<FVector2D>(),
+			TArray<FLinearColor>(), Tan, false, false);
+		CheckMeshWinding("ShadowPlaneMesh", V, T, N);
+		ApplySolidColorMaterial(ShadowPlaneMesh, 0, ShadowPlaneColor);
+
+		// A receiver, not a caster: it is a flat plane lying on the ground, so
+		// its own shadow would be either nothing or one huge quad depending on
+		// the sun angle, and it costs a caster slot either way.
+		ShadowPlaneMesh.SetCastShadow(false);
+		// Full graphics owns the sand; this only appears when that is hidden.
+		ShadowPlaneMesh.SetVisibility(false);
 	}
 
 	UFUNCTION(BlueprintOverride)
