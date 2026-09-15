@@ -227,6 +227,47 @@ class ABeachVolleyballGameMode : AGameModeBase
 		System::ExecuteConsoleCommand("r.ScreenPercentage " + Pct);
 	}
 
+	// FULL GRAPHICS HAD NO PIXEL BUDGET AT ALL — a flat r.ScreenPercentage 100,
+	// unlike light graphics above. That is fine on ordinary displays, but at 4K
+	// native with Lumen hardware-ray-traced GI and reflections (the single most
+	// expensive pass in the frame, see ApplyLightGraphicsCVars) it took down an
+	// 8GB card: B toggled back to full graphics mid-match, ~25s later
+	// VulkanMemory.cpp:3114 "Out Of Memory, trying to allocate 134217728 bytes"
+	// inside FRDGBuilder::AllocateTransientResources
+	// (Saved/Logs/BeachVolleyball.log, -windowed run, RTX 3060 Ti). 35fps at
+	// half that resolution without crashing confirms it's the same cost, just
+	// short of the cliff.
+	//
+	// Same sqrt(target/actual) technique as light graphics, but a much higher
+	// target: 1440p is the floor everything up to and including a normal 1440p
+	// monitor renders at full native 100 (this must NOT quietly soften the
+	// everyday look on ordinary displays, see the restore-values note on
+	// ApplyLightGraphicsCVars) and only 4K and above ever gets scaled down —
+	// exactly the resolution that crashed.
+	const float FullGraphicsTargetPixels = 2560.0f * 1440.0f;
+
+	private int ComputeFullGraphicsScreenPercentage() const
+	{
+		FVector2D ViewportSize = WidgetLayout::GetViewportSize();
+		float ActualPixels = ViewportSize.X * ViewportSize.Y;
+		if (ActualPixels < 1.0f) return 100; // no real viewport yet — do not divide by ~0
+		float Pct = 100.0f * Math::Sqrt(FullGraphicsTargetPixels / ActualPixels);
+		return int(Math::Clamp(Pct, 50.0f, 100.0f));
+	}
+
+	// Delayed the same way and for the same reason as ApplyLightGraphicsScreenPercentage
+	// — guarded on bLightGraphics still being false so a fast B/B toggle inside the
+	// 0.2s window can't land this after light graphics turned back on.
+	UFUNCTION()
+	void ApplyFullGraphicsScreenPercentage()
+	{
+		if (bLightGraphics) return;
+		int Pct = ComputeFullGraphicsScreenPercentage();
+		FVector2D VS = WidgetLayout::GetViewportSize();
+		Log("SCREENPCT(full) viewport=(" + VS.X + "," + VS.Y + ") pct=" + Pct);
+		System::ExecuteConsoleCommand("r.ScreenPercentage " + Pct);
+	}
+
 	// WHY A SECOND LIGHT EXISTS ONLY IN THIS MODE.
 	//
 	// In normal mode the side of a player the camera sees is lit by Lumen. The sun
@@ -409,7 +450,10 @@ class ABeachVolleyballGameMode : AGameModeBase
 		else
 		{
 			System::ExecuteConsoleCommand("t.MaxFPS 0");
-			System::ExecuteConsoleCommand("r.ScreenPercentage 100");
+			// Not synchronous — see ApplyFullGraphicsScreenPercentage; needs the
+			// same "viewport may not be ready yet" delay ApplyLightGraphicsCVars's
+			// ON branch already relies on.
+			System::SetTimer(this, n"ApplyFullGraphicsScreenPercentage", 0.2f, bLooping = false);
 			System::ExecuteConsoleCommand("r.DynamicGlobalIlluminationMethod 1");
 			System::ExecuteConsoleCommand("r.ReflectionMethod 1");
 			System::ExecuteConsoleCommand("r.ReflectionCapture.Runtime 1");
