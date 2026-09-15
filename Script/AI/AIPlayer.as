@@ -896,7 +896,8 @@ class AAIPlayer : AVolleyballPlayer
 			return;
 		}
 
-		MoveToHold(ClampToCourt(BasePosition()), DeltaTime, 0.75f);
+		MoveToHold(ClampToCourt(FVector(BasePosition().X, DefenseBaseY(), BasePosition().Z)),
+			DeltaTime, 0.75f);
 		// Crouch + ball-face only when ARRIVED. Asking for both while jogging
 		// back to base is exactly "böjer sig framåt och backar": chest toward
 		// the ball/net, travel toward the baseline, hips sunk for a dig that
@@ -922,6 +923,40 @@ class AAIPlayer : AVolleyballPlayer
 		return FVector(Sign * 560.0f, 190.0f, Z);
 	}
 
+	// THE ONE EXCEPTION TO "BasePosition is deliberately not derived from the
+	// ball" above: while the opponent is actually building an attack (their
+	// touch, ball on their side), lean the defensive Y away from the fixed
+	// home spot toward wherever the ball currently sits, same cue PlayBlock
+	// already uses for BlockY. Erik, watching: "i försvar måste spelarna bli
+	// bättre på att försöka täcka hela planhalvan" (defenders need to get
+	// better at covering the WHOLE half) — a fixed +-190 home spot on a court
+	// that runs to +-450 left both corners open, and PickAttackTarget now
+	// genuinely aims at the whole width instead of a narrow guess, so the gap
+	// is bigger than it used to be, not smaller.
+	//
+	// A LEAN, NOT A CHASE: blended toward the live Y rather than snapped to
+	// it, and clamped to THIS player's own half (Front is the -Y half, Back
+	// is +Y — see the BasePosition comment above) so shading never crosses
+	// into the partner's zone. The two-player split is still what covers the
+	// whole court between them; this only stops each half from being
+	// defended from a single point inside it.
+	const float DefenseShadeAmount = 0.6f;
+	// Keeps the two halves' shading from meeting exactly on the centre line,
+	// where they would otherwise both crowd the same spot for a ball sitting
+	// dead center.
+	const float DefenseHalfGuard = 20.0f;
+
+	private float DefenseBaseY() const
+	{
+		if (!IsOpponentBuildingAttack()) return BasePosition().Y;
+
+		float HalfMin = (Role == EPlayerRole::Role_Front) ? CourtMinY + 60.0f : DefenseHalfGuard;
+		float HalfMax = (Role == EPlayerRole::Role_Front) ? -DefenseHalfGuard : CourtMaxY - 60.0f;
+		float ShadeTarget = Math::Clamp(Ball.Position.Y, HalfMin, HalfMax);
+
+		return Math::Lerp(BasePosition().Y, ShadeTarget, DefenseShadeAmount);
+	}
+
 	// Where the blocker waits while the opponent builds: at the net, in their
 	// own half, close enough that PlayBlock's goal (55cm off the net) is a
 	// shuffle rather than the 4.5m sprint BasePosition made of it. Not pressed
@@ -933,12 +968,15 @@ class AAIPlayer : AVolleyballPlayer
 	}
 
 	// Where a blocker goes when the attack is underway and the block is not
-	// theirs: off the net, defending their own half. Mid-depth on purpose --
-	// this read always arrives late, so the goal is to be retreating and low at
-	// contact, not to reach a spot 4.5m away that the clock never allowed.
+	// theirs: off the net, defending their own half — shaded toward the live
+	// ball Y the same way DefenseBaseY leans the other defender's spot,
+	// rather than the single fixed point this used to sit on. Mid-depth on
+	// purpose -- this read always arrives late, so the goal is to be
+	// retreating and low at contact, not to reach a spot 4.5m away that the
+	// clock never allowed.
 	FVector PullOffSpot() const
 	{
-		return FVector(MySign() * 300.0f, BasePosition().Y, FloorZ + PlayerHeight);
+		return FVector(MySign() * 300.0f, DefenseBaseY(), FloorZ + PlayerHeight);
 	}
 
 	// Can I still reach the block in time? One answer, used by both decisions
