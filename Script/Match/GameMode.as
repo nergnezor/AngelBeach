@@ -461,10 +461,27 @@ class ABeachVolleyballGameMode : AGameModeBase
 			// pixels than anything else in the mode touches. 100 keeps TSR (it is
 			// what makes half-resolution look like anything) at history parity.
 			System::ExecuteConsoleCommand("r.TSR.History.ScreenPercentage 100");
+			// Explicit restore, not just relying on the project default (RendererSettings
+			// r.AntiAliasingMethod=4) — full graphics turns this OFF below, and without
+			// setting it back here a B/B/B round trip would leave light mode silently
+			// running on FXAA too, quietly breaking every comment above that assumes TSR.
+			System::ExecuteConsoleCommand("r.AntiAliasingMethod 4");
 		}
 		else
 		{
 			System::ExecuteConsoleCommand("t.MaxFPS 0");
+			// NOT TSR (Erik: "det låter som att vi inte borde använda tsr alls"). MEASURED
+			// at native 4K, r.ScreenPercentage 50 both times: WITH TSR, 20.8ms/frame (48fps)
+			// — TSR's own reconstruction pass alone was ~8.5ms of that, because it writes a
+			// full 4K output REGARDLESS of how little input data it's upsampling from (its
+			// cost tracks OUTPUT resolution, not the render resolution this mode is trying
+			// to cut). WITHOUT it (FXAA instead): 12.3ms/frame (81.5fps) — the exact same
+			// scene, same 50% render resolution, same everything else. FXAA is a much
+			// cheaper, non-temporal, purely spatial filter: the trade is a softer, more
+			// aliased image on the upscale, no temporal detail reconstruction, no free
+			// look full native 4K would have. (Confirmed separately that native 4K itself,
+			// even without TSR, is still not viable at all: 5.4fps.)
+			System::ExecuteConsoleCommand("r.AntiAliasingMethod 1");
 			// Not synchronous — see ApplyFullGraphicsScreenPercentage; needs the
 			// same "viewport may not be ready yet" delay ApplyLightGraphicsCVars's
 			// ON branch already relies on.
