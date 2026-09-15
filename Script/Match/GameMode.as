@@ -238,13 +238,28 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// half that resolution without crashing confirms it's the same cost, just
 	// short of the cliff.
 	//
-	// Same sqrt(target/actual) technique as light graphics, but a much higher
-	// target: 1440p is the floor everything up to and including a normal 1440p
-	// monitor renders at full native 100 (this must NOT quietly soften the
-	// everyday look on ordinary displays, see the restore-values note on
-	// ApplyLightGraphicsCVars) and only 4K and above ever gets scaled down —
-	// exactly the resolution that crashed.
-	const float FullGraphicsTargetPixels = 2560.0f * 1440.0f;
+	// LOWERED 1440p -> 1080p (Erik: "jag vill ha minst 60fps i 4k"). The 1440p
+	// value above kept ordinary displays untouched but only bought an
+	// estimated ~44fps at native 4K, by extrapolation from a fixed+per-pixel
+	// GPU cost model fitted to three headless runs at 640x360/960x540/1280x720
+	// (CsvProfile r.GPUCsvStatsEnabled). 1080p was then MEASURED DIRECTLY, not
+	// just extrapolated: a real headless run at 1920x1080 (the actual pixel
+	// count this target produces at native 4K, since 100*sqrt(1080p/4K)=50%)
+	// came back at 9.09ms/frame GPU time -- 110fps GPU-bound, well clear of
+	// the 60fps floor. The fixed per-frame cost (~4.8ms, resolution-
+	// independent -- Lumen scene bookkeeping, RT structure updates, draw-call
+	// setup) dominated more than the fitted model predicted, so cutting
+	// render resolution further paid off better than the model suggested.
+	//
+	// THE TRADE THIS COSTS: a 1440p monitor USED TO render at full native 100
+	// under the old target -- now it renders at 75 (sqrt(1080p/1440p)). That
+	// breaks the old "ordinary displays stay untouched" guarantee for exactly
+	// the 1440p case; only 1080p and below still hit 100. Chosen deliberately
+	// over lowering Lumen quality further, which was tried first (halving
+	// ScreenProbeGather's probe density AND ray count only bought ~5%, see
+	// git history) -- the fixed per-frame cost dominates, so resolution is
+	// the lever that actually moves the needle.
+	const float FullGraphicsTargetPixels = 1920.0f * 1080.0f;
 
 	private int ComputeFullGraphicsScreenPercentage() const
 	{
