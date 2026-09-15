@@ -2065,19 +2065,70 @@ class AAIPlayer : AVolleyballPlayer
 		bHasAim = true;
 	}
 
-	// Aim for the opponent's open court, away from their players
+	// Aim for the opponent's open court, away from their players. Erik,
+	// watching: "spelarna måste sikta mot tomma ytor" (players must aim at
+	// EMPTY areas) — the old version never actually looked at the opponents.
+	// It aimed opposite OUR OWN attacker's Y, which is not where the defenders
+	// are; a defender who had shifted to cover that exact guess got hit
+	// straight at every time.
 	private FVector PickAttackTarget() const
 	{
 		float OppSign = -MySign();
 		float TargetX = OppSign * Math::Lerp(350.0f, 700.0f, Difficulty);
 
-		// Aim to whichever Y half is less defended — approximate by aiming
-		// opposite our own attacker's Y, with error that shrinks with skill
-		float AimY = (GetActorLocation().Y > 0) ? -250.0f : 250.0f;
+		// Difficulty still governs precision, not the read itself: even a
+		// difficulty-0 AI aims at real daylight, it just aims at it sloppily.
+		float AimY = MostOpenOpponentY();
 		float Error = Math::RandRange(-180.0f, 180.0f) * (1.0f - Difficulty);
 		AimY = Math::Clamp(AimY + Error, CourtMinY + 60.0f, CourtMaxY - 60.0f);
 
 		return FVector(TargetX, AimY, FloorZ + BallRadiusGuess());
+	}
+
+	// Samples candidate landing spots across the net width and returns the one
+	// farthest (in Y) from the NEAREST actual opponent — the biggest gap,
+	// whether that's a sideline past a defender who shaded the other way or
+	// the seam between two who bunched to one side. Reads live positions, not
+	// base/home spots, so a defender already pulled out of position by a dig
+	// or a block stays exploitable rather than credited for standing where
+	// they started.
+	const int AttackYSamples = 9;
+
+	private float MostOpenOpponentY() const
+	{
+		TArray<FVector> OppPositions = OpponentPositions();
+
+		float BestY = 0.0f;
+		float BestGap = -1.0f;
+		for (int i = 0; i < AttackYSamples; i++)
+		{
+			float T = float(i) / float(AttackYSamples - 1);
+			float Y = Math::Lerp(CourtMinY + 60.0f, CourtMaxY - 60.0f, T);
+
+			float NearestOpp = 99999.0f;
+			for (FVector Opp : OppPositions)
+				NearestOpp = Math::Min(NearestOpp, Math::Abs(Opp.Y - Y));
+			// No opponents found (shouldn't happen mid-rally) — every sample
+			// ties, so the loop below just keeps the first one it tried.
+			if (OppPositions.Num() == 0) NearestOpp = 0.0f;
+
+			if (NearestOpp > BestGap) { BestGap = NearestOpp; BestY = Y; }
+		}
+		return BestY;
+	}
+
+	private TArray<FVector> OpponentPositions() const
+	{
+		TArray<FVector> Result;
+		TArray<AActor> Players;
+		GetAllActorsOfClass(AVolleyballPlayer, Players);
+		for (AActor A : Players)
+		{
+			AAIPlayer P = Cast<AAIPlayer>(A);
+			if (P == nullptr || P.TeamSide == TeamSide) continue; // only opponents
+			Result.Add(P.GetActorLocation());
+		}
+		return Result;
 	}
 
 	private float BallRadiusGuess() const { return (Ball != nullptr) ? Ball.BallRadius : 10.66f; }
