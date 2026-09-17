@@ -216,20 +216,31 @@ class ABeachVolleyballCamera : AActor
 	// the ball instead; that produced a real zoomed-in look but let players
 	// standing away from the ball fall out of frame, which is exactly the
 	// rule this replaces it to satisfy. Corners are each subject's actual
-	// live position ± SubjectMargin in X/Y, with world Z in {0, ActionHeight}
-	// (ground contact and jump apex — a subject can go from grounded to
-	// airborne at any spot on the court, independent of X/Y). This can never
-	// need MORE field of view than fitting the court's own static corners
-	// did (no player can stand outside the court), so EndCamPos/SideCamPos
-	// need no retuning for this change — see their own comment.
+	// live position ± SubjectMargin in X/Y, with world Z in {0, subject's own
+	// live Z} — ground contact and WHEREVER THIS SUBJECT ACTUALLY IS RIGHT
+	// NOW, not a fixed anticipatory jump-apex height. This can never need
+	// MORE field of view than fitting the court's own static corners did (no
+	// player can stand outside the court), so EndCamPos/SideCamPos need no
+	// retuning for this change — see their own comment.
+	//
+	// USED TO use a fixed ActionHeight (320cm) top corner for every subject,
+	// everywhere, all the time — "a subject can go from grounded to airborne
+	// at any spot, independent of X/Y" — so a jump could never outrun the
+	// frame. Correct, but it reserved the same vertical headroom for four
+	// grounded players and a ball resting at ankle height as for someone
+	// mid-spike: "onödigt mycket plats i övre delen av skärmen". FieldOfView
+	// is recomputed from live positions with no smoothing/lag (set directly,
+	// no interpolation, every Tick) — so a subject's OWN live Z is always one
+	// of the eight sampled corners here on the exact frame it changes, which
+	// means it is inside frame by construction on every frame, jump included.
+	// Nothing anticipatory is needed for that guarantee to hold; the fixed
+	// margin was only ever buying safety this reactive box already has.
 	private void FitFieldOfView(float DeltaTime)
 	{
 		FVector Forward = GetActorForwardVector();
 		FVector Right = GetActorRightVector();
 		FVector Up = GetActorUpVector();
 		FVector Eye = GetActorLocation();
-
-		const float ActionHeight = 320.0f; // headroom for a jumping spiker / high ball
 
 		TArray<FVector> Subjects;
 		for (int i = 0; i < Players.Num(); i++)
@@ -255,7 +266,7 @@ class ABeachVolleyballCamera : AActor
 					float Y = Subjects[s].Y + ((iy == 0) ? -SubjectMargin : SubjectMargin);
 					for (int iz = 0; iz < 2; iz++)
 					{
-						float Z = (iz == 0) ? 0.0f : ActionHeight;
+						float Z = (iz == 0) ? 0.0f : Subjects[s].Z;
 
 						FVector ToPoint = FVector(X, Y, Z) - Eye;
 						float Depth = ToPoint.DotProduct(Forward);
