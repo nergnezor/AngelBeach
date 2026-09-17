@@ -374,6 +374,17 @@ class ABeachVolleyballGameMode : AGameModeBase
 	// feel light" looked like. A cap is the one setting that makes the card idle,
 	// and 60 is above anything a rally needs to be readable at.
 	const int LightGraphicsMaxFPS = 60;
+	// Full graphics used to need every frame it could get (48fps at 4K before the
+	// TSR->FXAA and Lumen-budget passes, see the perf commits on this mode), so
+	// leaving it uncapped cost nothing worth having. Those passes were tuned
+	// explicitly FOR 60fps at 4K, not for "as fast as possible" — so once they
+	// landed, uncapped stopped being harmless: "i high graphics mode går fps
+	// över 60, men är ryckigare" is the same GPU-pinned-at-100%-however-cheap-
+	// the-frame-is effect the light-mode cap above exists to prevent, just now
+	// reachable in this mode too because it got fast enough to hit it. Same cap,
+	// same reason; a separate constant because the two modes' costs are tuned
+	// independently and shouldn't be assumed to want the same number forever.
+	const int FullGraphicsMaxFPS = 60;
 
 	// The restore values are this PROJECT's settings (Config/DefaultEngine.ini),
 	// not the engine's cvar defaults — those differ: the engine ships GI=None and
@@ -469,7 +480,7 @@ class ABeachVolleyballGameMode : AGameModeBase
 		}
 		else
 		{
-			System::ExecuteConsoleCommand("t.MaxFPS 0");
+			System::ExecuteConsoleCommand("t.MaxFPS " + FullGraphicsMaxFPS);
 			// NOT TSR (Erik: "det låter som att vi inte borde använda tsr alls"). MEASURED
 			// at native 4K, r.ScreenPercentage 50 both times: WITH TSR, 20.8ms/frame (48fps)
 			// — TSR's own reconstruction pass alone was ~8.5ms of that, because it writes a
