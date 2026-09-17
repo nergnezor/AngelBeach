@@ -281,6 +281,15 @@ class ABall : AActor
 		// frozen at the last rally's landing spot forever instead of vanishing
 		// with it.
 		LandingIndicator.SetVisibility(bInPlay);
+		// SAME REASON, and it was missed the first time: a dead ball is still
+		// carried/tossed by script (AIPlayer's CarryBall/RunFetchSequence/
+		// RunServeSequence all write Ball.Position directly while bInPlay is
+		// false), so Position keeps moving even though nothing below this
+		// point runs. ShadowBlob only reads Position here, so gating it behind
+		// the early return left it painted at wherever the ball died —
+		// "bollskuggan är frusen på marken efter död boll" — instead of
+		// following the ball back to the server's hand and through the toss.
+		UpdateShadowBlob();
 		if (!bInPlay)
 			return;
 		// Substep: a hitchy frame (HighResShot writes, shader compiles) can be
@@ -295,7 +304,6 @@ class ABall : AActor
 		}
 		SetActorLocation(Position);
 		UpdateSpin(DeltaTime);
-		UpdateShadowBlob();
 		UpdateLandingIndicator();
 	}
 
