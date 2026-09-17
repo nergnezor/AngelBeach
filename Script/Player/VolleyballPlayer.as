@@ -743,8 +743,22 @@ class AVolleyballPlayer : APawn
 			// backwards" even though turn-and-run already picked travel. Cap at
 			// 720 (still under a snap) only while the body is still opposing
 			// the commanded travel.
+			//
+			// GATED ON ACTUAL SPEED, not just misalignment. This override exists
+			// to un-stick a body that is ALREADY TRANSLATING the wrong way — it
+			// buys nothing when HSpeed2 is near zero, which is exactly the state
+			// right after a dig: Rule 3 plants the hitter facing the ball, Rule 4
+			// immediately retargets to the next optimal spot the instant contact
+			// ends, and that spot is very often behind where the dig just faced.
+			// With no crawl to fix (no velocity yet to be wrong), the override
+			// still fired on misalignment alone and spun the WHOLE BODY through
+			// ~180° at 720deg/s from a standing start — "ofta snurrar spelarna
+			// runt med hela kroppen efter bagger på ett väldigt onaturligt sätt".
+			// The 450deg/s base rate is itself already the human ceiling this
+			// file argues for; only a genuine backward crawl justifies exceeding
+			// it, so require the speed that crawl actually needs.
 			float MaxRate = BodyMaxTurnRate;
-			if (bTravelWins && TravelFlat.SizeSquared() > 0.01f)
+			if (bTravelWins && TravelFlat.SizeSquared() > 0.01f && HSpeed2 > 80.0f)
 			{
 				float BodyAlign = GetActorForwardVector().GetSafeNormal2D()
 					.DotProduct(TravelFlat.GetSafeNormal());
@@ -2568,6 +2582,15 @@ class AVolleyballPlayer : APawn
 	FVector SmHandVelL;
 	FVector SmHandR;
 	FVector SmHandL;
+	// Poles used to be speed-clamped only (MoveTowardClamped), on the theory
+	// that "an elbow hint reversing is not something the eye reads as a jolt
+	// the way the hand is". Once the hand path got smooth (GestureClock's
+	// rate cap, PlayerIK), a plain-speed-clamped elbow reversing at full rate
+	// right next to it stood out MORE, not less — "för många kroppsrörelser
+	// samtidigt" after the hand fix landed. Same accel-limited sink as the
+	// hands now, which is why these are velocities, not just positions.
+	FVector SmPoleVelR;
+	FVector SmPoleVelL;
 	FVector SmPoleR;
 	FVector SmPoleL;
 	FRotator SmRotR;

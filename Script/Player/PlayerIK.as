@@ -185,6 +185,30 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		else
 			Raw = Blend;   // no plan behind this reach (AutoReach, dive rescue)
 		if (Swing > 0.0f) Raw = 1.0f;              // contact fired: the wind-up is over
+		else
+		{
+			// GestureClock's monotonicity (below) only stops it running BACKWARDS
+			// when ReachTau's re-prediction wobbles upward. It does nothing about
+			// the other direction: the AI replans at ~9Hz (Reach(), ReachTau's own
+			// comment), and a replan that lands on a SHORTER tau than plain
+			// realtime decay would have reached snaps Raw forward in the one
+			// frame it arrives — the prep clock leaping ahead of where the pose
+			// physically is, every reaction tick, on every non-serve stroke.
+			// "det är ryckiga rörelser istället för förberedande och sedan
+			// följande" is that leap: the serve is the one stroke exempt because
+			// ServePhase is a scripted timeline, never a re-prediction (see its
+			// declaration in VolleyballPlayer.as), so it has nothing to wobble.
+			//
+			// Cap the ADVANCE, not the value: plain decay already climbs at
+			// 1/PrepWindow (~0.87/s) with nothing to smooth, so a limit a few
+			// times that only ever engages on an actual replan correction, and
+			// resolves within a couple of reaction ticks instead of one frame.
+			// A guessed rate, not yet measured against MonPlatLogs/PLATAMP —
+			// worth checking hand-reversal counts before and after if the jerk
+			// persists.
+			const float MaxClockRatePerSec = 4.0f;
+			Raw = Math::Min(Raw, Self.GestureClock + MaxClockRatePerSec * Dt);
+		}
 		if (Raw > Self.GestureClock) Self.GestureClock = Raw;
 	}
 	// The poses that PARK at the meet point (bump, set) want to arrive EARLY and
@@ -858,6 +882,8 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		Self.bSmInit = true;
 		Self.SmHandVelR = FVector::ZeroVector;
 		Self.SmHandVelL = FVector::ZeroVector;
+		Self.SmPoleVelR = FVector::ZeroVector;
+		Self.SmPoleVelL = FVector::ZeroVector;
 		Self.SmHandR = WantHandR; Self.SmHandL = WantHandL;
 		Self.SmPoleR = PoleR;     Self.SmPoleL = PoleL;
 		Self.SmRotR  = PalmR;     Self.SmRotL  = PalmL;
@@ -868,11 +894,11 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 	// at the anti-flicker limit was robbing every strike of its snap). The
 	// motion monitor reads SinkBoostLog so its teleport check tracks the
 	// same ceiling.
-	float MaxStep = 900.0f * SinkBoost * Dt;
 	Self.SinkBoostLog = SinkBoost;
-	// Hands go through the acceleration-limited sink; the poles and the palm
-	// keep the plain speed clamp, since an elbow hint reversing is not something
-	// the eye reads as a jolt the way the hand is.
+	// Hands AND poles go through the acceleration-limited sink (see
+	// SmPoleVelR/L below for why poles were moved onto it too); the palm
+	// keeps the plain rotation-rate approach since a wrist snapping is a much
+	// smaller, cheaper-to-read motion than a whole limb reversing.
 	float MaxSpeed = 900.0f * SinkBoost;
 	float MaxAccel = HandSinkAccel * SinkBoost;
 	Self.SmHandR = MoveTowardAccel(Self.SmHandR, Self.SmHandVelR, WantHandR,
@@ -891,8 +917,21 @@ mixin void UpdateIKTargets(AVolleyballPlayer Self, float Blend, float Dt)
 		Self.SmPlatDir = FVector::ZeroVector;
 		Self.GestureClock = 0.0f;
 	}
-	Self.SmPoleR = MoveTowardClamped(Self.SmPoleR, PoleR, MaxStep);
-	Self.SmPoleL = MoveTowardClamped(Self.SmPoleL, PoleL, MaxStep);
+	// Poles now go through the SAME accel-limited sink as the hands (see
+	// SmPoleVelR/L's comment) — a plain speed clamp let the elbow reverse at
+	// full rate in one frame while the hand it's supposed to be tracking eased
+	// through the same reversal, and that mismatch is what read as clutter.
+	Self.SmPoleR = MoveTowardAccel(Self.SmPoleR, Self.SmPoleVelR, PoleR,
+		MaxSpeed, MaxAccel, Dt);
+	Self.SmPoleL = MoveTowardAccel(Self.SmPoleL, Self.SmPoleVelL, PoleL,
+		MaxSpeed, MaxAccel, Dt);
+	if (Blend < 0.05f)
+	{
+		Self.SmPoleR = PoleR;
+		Self.SmPoleL = PoleL;
+		Self.SmPoleVelR = FVector::ZeroVector;
+		Self.SmPoleVelL = FVector::ZeroVector;
+	}
 	// Wrist keeps pace with the hand: the palm SNAPS through contact at swing
 	// speed (kinetic chain: the wrist is the last, fastest link).
 	float RotAlpha = Math::Clamp(14.0f * SinkBoost * Dt, 0.0f, 1.0f);
@@ -1205,14 +1244,18 @@ FVector ArcAround(FVector Pivot, FVector A, FVector B, float T)
 
 // THE SINK'S SECOND LIMIT: acceleration.
 //
-// MoveTowardClamped below caps how far an effector may travel in a frame and
+// A plain speed clamp caps how far an effector may travel in a frame and
 // nothing else, so it has no memory of which way the hand was already going. A
-// target that flips hand the hand reverses at the FULL speed cap in a single
+// target that flips has the hand reverse at the FULL speed cap in a single
 // frame — 900cm/s one way, 900cm/s the other, no deceleration in between. That
 // is what "stötiga slaganimationer" is, and it is invisible to the teleport
 // monitor because the speed limit was never broken. Measured over three runs:
 // 8878 direction reversals past 90 degrees inside hit gestures, worst 178, and
-// the samples show both sides of the reversal pinned at the cap.
+// the samples show both sides of the reversal pinned at the cap. (The elbow
+// poles were left on the plain clamp when this was fixed for the hands, on the
+// theory that a reversing elbow hint doesn't read as a jolt — see SmPoleVelR/L
+// in VolleyballPlayer.as for why that didn't hold up and poles moved onto this
+// too, which is also why the plain clamp below no longer has any callers.)
 //
 // A limb cannot do that. It has to bleed off the speed it has before it can
 // build speed the other way, so the hand carries a velocity and the velocity
@@ -1245,13 +1288,4 @@ FVector MoveTowardAccel(FVector From, FVector& Vel, FVector To,
 		return To;
 	}
 	return Next;
-}
-
-// Move From toward To by at most MaxStep (cm) — the sink's speed limiter.
-FVector MoveTowardClamped(FVector From, FVector To, float MaxStep)
-{
-	FVector D = To - From;
-	float L = D.Size();
-	if (L <= MaxStep || L < 0.001f) return To;
-	return From + D * (MaxStep / L);
 }
