@@ -214,7 +214,19 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 		// prediction drift; the floor keeps a purposeful stride.
 		float Avail = Math::Max(Tau - MB_SettleTime - MB_FirstStepLag, 0.05f);
 		float NeedSpeed = MB_RequiredCruiseSpeed(Dist, Avail, EffVMax, MyAccel, MyBrake);
-		Plan.SpeedFraction = Math::Clamp((NeedSpeed / EffVMax) * 1.15f, 0.35f, 1.0f);
+		// HEADROOM AND FLOOR, TURNED UP (Erik, 2026-09-17: "ingen springer
+		// riktigt fort"). Good positioning (rule 1) means most contacts arrive
+		// with slack, and slack IS the point of "efficient" — but a well-
+		// anticipated game where nobody is ever seen sprinting reads as
+		// listless even when every arrival is technically on budget. Raising
+		// the headroom saturates SpeedFraction to 1.0 at a lower required-
+		// speed ratio (visible sprints on plainly comfortable balls, not just
+		// genuinely desperate ones); raising the floor briskens the laziest
+		// repositioning too. Ungated guesses, not measurements — MB_SettleTime
+		// (the correctness term: how early the body must be STOPPED) is
+		// untouched, so arrivals stay on time; only how much of the body's own
+		// top speed gets used to get there goes up.
+		Plan.SpeedFraction = Math::Clamp((NeedSpeed / EffVMax) * 1.75f, 0.45f, 1.0f);
 
 		// UNCERTAINTY: while the slack left AFTER the run and settle exceeds
 		// the time the expected estimate drift costs to correct (plus a buffer

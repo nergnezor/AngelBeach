@@ -697,8 +697,23 @@ class AAIPlayer : AVolleyballPlayer
 			bOnTwoLoggedNotViable = false;
 		}
 
-		FVector Landing = Ball.PredictLanding();
-		bool bWantJob = bMine && AmIHitter(Landing);
+		// OWNERSHIP HAS TO AGREE WITH THE BUDGET THAT DECIDES REACHABILITY, and
+		// until now it didn't: AmIHitter compared distances to the ball's
+		// eventual GROUND landing spot, while PlanIntercept (called later, only
+		// for whoever wins this vote) decides playability against the WAIST-
+		// HEIGHT CROSSING — a hard-driven ball can cross waist height 3-4m in
+		// front of where it would eventually hit the sand. Ownership went to
+		// whoever was closer to a spot nobody was ever going to play the ball
+		// at, so the player actually standing at the real contact point never
+		// got the job and stood in Play_Base watching it land. Erik: "försvarare
+		// lämnar bollar som de kan nå." Same fallback as PlanIntercept's own
+		// dive branch: if the flight never reaches waist height, BallTimeToHeight
+		// hands back the landing point anyway, so this degrades to the old
+		// behaviour exactly in that case instead of disagreeing with it.
+		FVector ContactEstimate;
+		float ContactEstimateTau = 0.0f;
+		Predict::BallTimeToHeight(Ball, FloorZ + 112.0f, ContactEstimate, ContactEstimateTau);
+		bool bWantJob = bMine && AmIHitter(ContactEstimate);
 		bool bWantBlock = !bMine && Role == EPlayerRole::Role_Front && IsPassAttackable();
 
 		if (bWantJob && Teammate != nullptr && Teammate.bIMadeLastTouch
@@ -1028,7 +1043,11 @@ class AAIPlayer : AVolleyballPlayer
 	// Role assignment — deterministic so the two players never swap
 	// mid-rally and end up chasing the same ball.
 	// ---------------------------------------------------------------
-	private bool AmIHitter(FVector Landing)
+	// ContactEstimate is the ball's waist-height crossing (or its landing spot,
+	// if the flight never reaches waist height) — NOT necessarily where it
+	// lands. See the call site in UpdateAI for why that distinction is the
+	// whole point.
+	private bool AmIHitter(FVector ContactEstimate)
 	{
 		if (Teammate == nullptr) return true;
 
@@ -1048,8 +1067,8 @@ class AAIPlayer : AVolleyballPlayer
 
 		// Fresh ball coming over (no team touches yet): closest player digs,
 		// with the back player favored for deep balls (typical serve receive).
-		float MyDist    = (GetActorLocation() - Landing).Size2D();
-		float TheirDist = (Teammate.GetActorLocation() - Landing).Size2D();
+		float MyDist    = (GetActorLocation() - ContactEstimate).Size2D();
+		float TheirDist = (Teammate.GetActorLocation() - ContactEstimate).Size2D();
 
 		// SERVE RECEIVE IS SPLIT LEFT/RIGHT, NOT FRONT/BACK.
 		//
@@ -1069,10 +1088,10 @@ class AAIPlayer : AVolleyballPlayer
 		// +Y half. A serve landing clearly in a player's own half is theirs,
 		// which is exactly how a real beach pair splits serve receive. Only the
 		// narrow band down the middle falls through to distance.
-		bool bDeep = IsDeep(Landing.X);
+		bool bDeep = IsDeep(ContactEstimate.X);
 		bool bMine;
-		bool bFrontOwnsIt = (Landing.Y < -HalfClaimY);
-		bool bBackOwnsIt  = (Landing.Y >  HalfClaimY);
+		bool bFrontOwnsIt = (ContactEstimate.Y < -HalfClaimY);
+		bool bBackOwnsIt  = (ContactEstimate.Y >  HalfClaimY);
 		// ...unless the owner is hopelessly out of position. Measured case: a
 		// serve to Y=-213 is the front player's by half, but they were 685cm away
 		// while the back player stood 112cm from it. Owning a half is not worth a
@@ -1125,7 +1144,7 @@ class AAIPlayer : AVolleyballPlayer
 			bServeRecvLogged = true;
 			Log("SERVERECV " + DebugTag() + " " + GetName()
 				+ " mine=" + (bMine ? 1 : 0)
-				+ " landX=" + int(Landing.X) + " landY=" + int(Landing.Y)
+				+ " landX=" + int(ContactEstimate.X) + " landY=" + int(ContactEstimate.Y)
 				+ " myDist=" + int(MyDist) + " theirDist=" + int(TheirDist));
 		}
 
@@ -2445,9 +2464,42 @@ class AAIPlayer : AVolleyballPlayer
 		// the foul case this function's caller comment warns about.
 		if (TeamTouches() > 0 && Math::Abs(Ball.Position.X) < 100.0f) return true;
 
-		// Ball is on the opponent's side. Only commit early if it has clearly
-		// crossed toward us (moving to our side AND already low enough that the
-		// predicted landing is on our court) — otherwise hold and defend.
+		// If the opponent will NOT touch this ball again — it's a serve in
+		// flight, or their third (final) touch is already over — CHARGE NOW,
+		// REGARDLESS OF HOW FAST THE BALL IS CURRENTLY MOVING TOWARD US.
+		//
+		// This used to sit AFTER the bMovingToMe check below and was therefore
+		// unreachable for anything but a hard-driven ball: a soft tip or roll
+		// shot on the attacker's final touch can carry almost no horizontal
+		// velocity (nothing above the 50cm/s bMovingToMe demands) while still
+		// being guaranteed to cross — it is the LAST touch, nothing else is
+		// coming. Gating the override on speed meant only hard spikes got the
+		// early start their whole gesture lead depends on; a soft attack
+		// silently burned that lead waiting to physically cross X=0 first, by
+		// which point it was often too late to set up a comfortable play at
+		// all. Erik: "försvararna struntar i att försöka ta många lätta
+		// anfall" — it was specifically the EASY (slow) attacks this starved,
+		// never the hard ones, which is the inverted, tell-tale shape of a
+		// speed-gated check that should not have been speed-gated at all.
+		//
+		// The receive needs every tenth of flight time: waiting for the ball
+		// to reach the net gave the receiver 0.35s to cover the last 1.4m and
+		// made clean serves into aces. While the opponent is still building
+		// (touches 1-2), hold the defensive shape until the ball is actually
+		// near the net — that part is unchanged, below.
+		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
+		if (GS != nullptr)
+		{
+			ETeam Opp = (TeamSide == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
+			bool bServeIncoming = (GS.LastTouchTeam == ETeam::Team_None && GS.ServingTeam == Opp);
+			bool bAttackOver = (GS.LastTouchTeam == Opp && GS.TouchesThisRally >= 3);
+			if (bServeIncoming || bAttackOver) return true;
+		}
+
+		// Still building (touches 1-2). Only commit early if the ball has
+		// clearly crossed toward us (moving to our side AND already low
+		// enough that the predicted landing is on our court) — otherwise hold
+		// and defend.
 		bool bMovingToMe = (TeamSide == ETeam::Team_A) ? Ball.BallVel.X < -50.0f
 		                                               : Ball.BallVel.X >  50.0f;
 		if (!bMovingToMe) return false;
@@ -2457,20 +2509,6 @@ class AAIPlayer : AVolleyballPlayer
 		                                             : Landing.X >= 0.0f;
 		if (!bLandMine) return false;
 
-		// If the opponent will NOT touch this ball again — it's a serve in
-		// flight, or their third (final) touch is already over — CHARGE NOW.
-		// The receive needs every tenth of flight time: waiting for the ball to
-		// reach the net gave the receiver 0.35s to cover the last 1.4m and made
-		// clean serves into aces. While they're still building (touches 1-2),
-		// hold the defensive shape until the ball is actually near the net.
-		ABeachVolleyballGameState GS = Cast<ABeachVolleyballGameState>(GetWorld().GetGameState());
-		if (GS != nullptr)
-		{
-			ETeam Opp = (TeamSide == ETeam::Team_A) ? ETeam::Team_B : ETeam::Team_A;
-			bool bServeIncoming = (GS.LastTouchTeam == ETeam::Team_None && GS.ServingTeam == Opp);
-			bool bAttackOver = (GS.LastTouchTeam == Opp && GS.TouchesThisRally >= 3);
-			if (bServeIncoming || bAttackOver) return true;
-		}
 		// Require the ball to be near or past the net before charging in.
 		return Math::Abs(Ball.Position.X) < 250.0f;
 	}
