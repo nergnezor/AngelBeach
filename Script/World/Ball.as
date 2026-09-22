@@ -784,9 +784,12 @@ class ABall : AActor
 	// positions because TrajectoryArc's own transform is locked to identity
 	// (see BeginPlay), so this can be called mid-flight without re-deriving the
 	// ball's local frame.
-	private void RebuildTrajectoryMesh(int PointCount, float Radius)
+	private void RebuildTrajectoryMesh(int RequestedPointCount, float Radius)
 	{
-		PointCount = Math::Clamp(PointCount, 2, TrajectoryPoints.Num());
+		// Angelscript in this fork treats value parameters as const (Erik's
+		// build broke on "Cannot assign to parameter PointCount" reassigning
+		// the argument directly) — clamp into a local instead.
+		int PointCount = Math::Clamp(RequestedPointCount, 2, TrajectoryPoints.Num());
 
 		TArray<FVector> Verts;
 		TArray<int32> Tris;
@@ -840,9 +843,9 @@ class ABall : AActor
 			for (int s = 0; s < Sides; s++)
 			{
 				int A = i * Sides + s;
-				int B = i * Sides + (s + 1) % Sides;
+				int B = i * Sides + ((s + 1) % Sides);
 				int C = (i + 1) * Sides + s;
-				int D = (i + 1) * Sides + (s + 1) % Sides;
+				int D = (i + 1) * Sides + ((s + 1) % Sides);
 
 				Tris.Add(A); Tris.Add(B); Tris.Add(C);
 				Tris.Add(B); Tris.Add(D); Tris.Add(C);
