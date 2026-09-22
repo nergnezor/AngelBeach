@@ -53,8 +53,9 @@ class ABeachVolleyballCamera : AActor
 	// 100 -> 80 (Erik, 2026-09-22: "20% mer zoom") — this margin is the
 	// system's actual zoom lever (see FitFieldOfView's own comment: "the box
 	// is exactly as tight as the players currently make it"), since FOV
-	// itself is derived from the box and can't be set directly.
-	const float SubjectMargin = 80.0f;
+	// itself is derived from the box and can't be set directly. Trimmed
+	// further 80 -> 50 same day ("krymp till 50cm").
+	const float SubjectMargin = 50.0f;
 
 	FVector CamPos;
 	bool bLandscape = false;
