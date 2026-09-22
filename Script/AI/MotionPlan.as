@@ -48,11 +48,21 @@ const float MB_Margin = 0.08f;
 // to 2/39 — efficiency means no WASTED speed, not zero cushion.
 const float MB_SettleTime = 0.45f;
 
-// Dive envelope (matches StartDive physics: 1.75x speed burst over 0.42s,
-// only worthwhile beyond a lunge and inside the burst's real range).
+// Dive envelope: only worthwhile beyond a lunge (below this, reaching with
+// the arms alone covers it) and inside the burst's real range (beyond this,
+// even a dive can't close the distance). "Can walking make it in time?" is
+// already answered by BodyT > DiveTau below — a real time budget derived
+// from the same physics as everywhere else in this file, not a second,
+// distance-blind ceiling. An earlier version of this envelope also
+// hard-capped DiveTau at 0.8s regardless of distance, which meant a ball
+// 400cm away (BodyT ~1.4s — genuinely unwalkable) was refused a dive unless
+// it ALSO happened to be under 0.8s out — a dead zone where the ball was
+// provably unreachable on foot but too "early" by this second clock to earn
+// a dive either, so the AI just sprinted at it uselessly. Erik: "de slänger
+// sig aldrig efter bollen." Removed; BodyT > DiveTau alone is both correct
+// and already computed.
 const float MB_DiveMinDist = 130.0f;
 const float MB_DiveMaxDist = 400.0f;
-const float MB_DiveMaxTau  = 0.8f;
 
 // Expected drift of a contact estimate, per second of remaining flight (cm/s):
 // models perception/judgement error shrinking as the ball closes. The planner
@@ -256,7 +266,7 @@ mixin FInterceptPlan PlanIntercept(AAIPlayer Self, float PreferredZ, float Fallb
 	Plan.Contact = DivePos;
 	Plan.BallTime = DiveTau;
 	Plan.BodyTime = BodyT;
-	Plan.bDive = (DiveTau > 0.0f && DiveTau < MB_DiveMaxTau
+	Plan.bDive = (DiveTau > 0.0f
 		&& DiveDist > MB_DiveMinDist && DiveDist < MB_DiveMaxDist
 		&& BodyT > DiveTau);
 	Plan.bStartGesture = true;   // desperation: arms out no matter what
