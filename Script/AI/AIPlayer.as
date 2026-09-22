@@ -1190,6 +1190,13 @@ class AAIPlayer : AVolleyballPlayer
 	// plant releases. See RequestBallFacing.
 	private FVector PlantedFacing = FVector::ZeroVector;
 
+	// PreviewPlannedShot state — what was last shown, so the preview arc only
+	// redraws when the plan actually moves rather than every tick PlayHitter
+	// runs (see PreviewPlannedShot for why that matters).
+	private bool bPreviewShown = false;
+	private FVector PreviewedAim = FVector::ZeroVector;
+	private FVector PreviewedContact = FVector::ZeroVector;
+
 	// ---------------------------------------------------------------
 	// I am the player who will contact the ball this touch
 	// ---------------------------------------------------------------
@@ -1350,6 +1357,11 @@ class AAIPlayer : AVolleyballPlayer
 				Plan.bStartGesture = this.GestureShouldStart(SetTau);
 			}
 		}
+
+		// Show where this is headed the instant the plan is this far along —
+		// aim decided (DoDig/DoSet above) and a contact point/time to go with
+		// it — rather than waiting for the physical contact itself.
+		PreviewPlannedShot(Intend, Plan.Contact, Plan.BallTime);
 
 		// WHY DID THE RECEIVE FAIL? Roughly half of all rallies end with the
 		// serve landing untouched (measured: seq=[ ] with crossings=1), and the
@@ -1558,16 +1570,6 @@ class AAIPlayer : AVolleyballPlayer
 	private float ContactHeight() const
 	{
 		return ContactHeightFor(EHitType::Hit_Bump);
-	}
-
-	// Simulate the ball forward and return its (X,Y,Z) when it next descends to the
-	// given height. If it never reaches that height (already below / rising away),
-	// fall back to the ground landing prediction.
-	private FVector PredictBallAtHeight(float TargetZ) const
-	{
-		FVector Pos;
-		PredictBallTimeToHeight(TargetZ, Pos);
-		return Pos;
 	}
 
 	// Same simulation, but also returns WHEN (seconds from now) the ball next
@@ -1838,10 +1840,12 @@ class AAIPlayer : AVolleyballPlayer
 		{
 			// The set never gets to strike height — no jump attack available. Get
 			// under where it drops to play height and hit it over instead.
-			FVector PlaySpot = PredictBallAtHeight(ContactHeight());
+			FVector PlaySpot;
+			float PlayTau = PredictBallTimeToHeight(ContactHeight(), PlaySpot);
 			MoveToward2D(ClampToCourt(FVector(PlaySpot.X, PlaySpot.Y, 0)), DeltaTime);
 			FaceBall();
 			DoSpike();   // still aim into the opponent court
+			PreviewPlannedShot(EHitType::Hit_Bump, PlaySpot, PlayTau);
 			if ((GetActorLocation() - Ball.Position).Size() < PrepareDistance)
 				Reach(EHitType::Hit_Bump, PlaySpot);
 			return;
@@ -1980,6 +1984,7 @@ class AAIPlayer : AVolleyballPlayer
 			// Tau here is the time to SpikeStrikeZ from the top of this function —
 			// the clock the arm's backswing is choreographed against.
 			Reach(EHitType::Hit_Spike, Ball.Position, Tau);
+			PreviewPlannedShot(EHitType::Hit_Spike, Strike, Tau);
 		}
 	}
 
@@ -2118,8 +2123,50 @@ class AAIPlayer : AVolleyballPlayer
 	// Tell the base player where to send the ball on the next physical contact.
 	private void AimAt(FVector WorldTarget)
 	{
+		// Starting a fresh decision cycle (we weren't already aiming) — let the
+		// next PreviewPlannedShot call draw its arc from scratch instead of
+		// treating this as a small refinement of a plan from a previous touch.
+		if (!bHasAim)
+			bPreviewShown = false;
 		DesiredAim = WorldTarget;
 		bHasAim = true;
+	}
+
+	// Erik: show the ball's whole planned flight as soon as a player has
+	// decided where to send it — not just once contact actually happens
+	// (that's ShowTrajectoryArc, on the ball itself). Stitches the ball's
+	// REAL current flight up to the planned contact point onto the ballistic
+	// arc that contact would send it on, so the whole thing reads as one
+	// continuous "this is where it's going" preview.
+	//
+	// Called every tick PlayHitter/ApproachForSpike run (i.e. every tick this
+	// player is lined up to make the next touch), so it only actually pushes
+	// a redraw to the ball when the aim or the contact point has moved enough
+	// to matter — otherwise the arc would restart its draw-in sweep every
+	// single frame and never settle, and RebuildTrajectoryMesh would run at
+	// full tick rate instead of only during that sweep.
+	private void PreviewPlannedShot(EHitType Intend, FVector ContactPos, float ContactTau)
+	{
+		if (!bHasAim || Ball == nullptr || ContactTau <= 0.0f)
+			return;
+
+		bool bAimMoved = (DesiredAim - PreviewedAim).SizeSquared() > 100.0f;      // >10cm
+		bool bContactMoved = (ContactPos - PreviewedContact).SizeSquared() > 400.0f; // >20cm
+		if (bPreviewShown && !bAimMoved && !bContactMoved)
+			return;
+
+		// Spike is a genuine attack over the net (AttackBallistic already raises
+		// its apex until it clears the tape/block); dig and set are placement
+		// arcs — 340 matches OnBallContact's own baseline apex for an
+		// error-free touch, see its Apex comment.
+		FVector OutVel = (Intend == EHitType::Hit_Spike)
+			? AttackBallistic(ContactPos, DesiredAim)
+			: BallisticVelocity(ContactPos, DesiredAim, 340.0f);
+		Ball.ShowPlannedShot(ContactPos, ContactTau, OutVel);
+
+		PreviewedAim = DesiredAim;
+		PreviewedContact = ContactPos;
+		bPreviewShown = true;
 	}
 
 	// Aim for the opponent's open court, away from their players. Erik,

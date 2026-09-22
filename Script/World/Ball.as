@@ -620,18 +620,22 @@ class ABall : AActor
 			NoUV, NoUV, NoUV, Colors, Tangents, true);
 	}
 
-	// Forward-simulates from the CURRENT Position/BallVel to the floor, keeping
-	// every sample instead of collapsing to the landing point the way
+	// Forward-simulates from an arbitrary start position/velocity to the floor,
+	// keeping every sample instead of collapsing to the landing point the way
 	// PredictLanding does. Visualisation only — nothing here feeds a gameplay
 	// decision, so this doesn't need to join PredictLanding on the
 	// biomech_report.py integrator allowlist (see Prediction.as's header for
 	// why that allowlist exists and how narrow it is on purpose); it's a second,
 	// purely-cosmetic use of the same physics constants already on this class.
-	private void SampleTrajectory(TArray<FVector>& OutPoints, float MaxTime = 3.0f) const
+	// Takes an explicit start state (rather than always reading Position/
+	// BallVel) so ShowPlannedShot below can run the same simulation forward
+	// from a hypothetical future contact, not just from where the ball is now.
+	private void SampleTrajectoryFrom(FVector StartPos, FVector StartVel, TArray<FVector>& OutPoints,
+		float MaxTime = 3.0f) const
 	{
 		OutPoints.Empty();
-		FVector PPos = Position;
-		FVector PVel = BallVel;
+		FVector PPos = StartPos;
+		FVector PVel = StartVel;
 		const float Dt = 0.05f;
 		float T = 0.0f;
 		float Floor = FloorZ + BallRadius;
@@ -659,7 +663,52 @@ class ABall : AActor
 	// bounce) — samples the whole flight right away and starts its draw-in.
 	private void ShowTrajectoryArc()
 	{
-		SampleTrajectory(TrajectoryPoints);
+		SampleTrajectoryFrom(Position, BallVel, TrajectoryPoints);
+		TrajectoryTotalTime = Math::Max(0, TrajectoryPoints.Num() - 1) * 0.05f;
+		StartTrajectoryAnim();
+	}
+
+	// Erik: show the ball's whole planned flight as soon as a PLAYER has
+	// decided where to aim — before the ball has actually reached them, not
+	// just once contact physically happens (ShowTrajectoryArc above). Stitches
+	// two segments into one continuous preview: the ball's REAL current
+	// flight (this is just physics — nothing to predict) up to the planned
+	// contact point, then the ballistic arc that contact is expected to send
+	// it on from there. Called from AIPlayer.PreviewPlannedShot, which throttles
+	// how often this actually runs.
+	void ShowPlannedShot(FVector ContactPos, float ContactTau, FVector OutVel)
+	{
+		if (ContactTau <= 0.0f)
+			return;
+
+		TArray<FVector> Incoming;
+		SampleTrajectoryFrom(Position, BallVel, Incoming, ContactTau);
+		if (Incoming.Num() == 0)
+			return;
+		// Snap the seam to the exact planned contact point rather than
+		// wherever the fixed 50ms sampling last landed — otherwise the two
+		// segments visibly kink at a point that isn't the one the plan means.
+		Incoming[Incoming.Num() - 1] = ContactPos;
+
+		TArray<FVector> Outgoing;
+		SampleTrajectoryFrom(ContactPos, OutVel, Outgoing);
+
+		TrajectoryPoints = Incoming;
+		for (int i = 1; i < Outgoing.Num(); i++)
+			TrajectoryPoints.Add(Outgoing[i]);
+
+		// Total flight time for the reveal/fade windows below — same
+		// (Num-1)*Dt approximation ShowTrajectoryArc's own caller already
+		// relies on, just summed across the two segments' own sample counts.
+		TrajectoryTotalTime = ContactTau + Math::Max(0, Outgoing.Num() - 1) * 0.05f;
+		StartTrajectoryAnim();
+	}
+
+	// Shared reveal-start bookkeeping for ShowTrajectoryArc/ShowPlannedShot —
+	// both build TrajectoryPoints (and, for ShowTrajectoryArc, TrajectoryTotalTime)
+	// themselves first, since they fill them differently.
+	private void StartTrajectoryAnim()
+	{
 		if (TrajectoryPoints.Num() < 2)
 		{
 			bTrajectoryActive = false;
@@ -667,7 +716,6 @@ class ABall : AActor
 			return;
 		}
 
-		TrajectoryTotalTime = (TrajectoryPoints.Num() - 1) * 0.05f;
 		TrajectoryElapsed = 0.0f;
 		bTrajectoryActive = true;
 		bTrajectoryRevealSettled = false;
