@@ -49,8 +49,12 @@ class ABeachVolleyballCamera : AActor
 	// so it doesn't sit flush on the frame edge exactly when it matters (a
 	// spike at full extension). Trimmed 150 -> 100 (Erik, 2026-09-06:
 	// "spelarna kan ha mindre marginal till skärmkanten") for a tighter crop
-	// now that every player is guaranteed in frame regardless.
-	const float SubjectMargin = 100.0f;
+	// now that every player is guaranteed in frame regardless. Trimmed again
+	// 100 -> 80 (Erik, 2026-09-22: "20% mer zoom") — this margin is the
+	// system's actual zoom lever (see FitFieldOfView's own comment: "the box
+	// is exactly as tight as the players currently make it"), since FOV
+	// itself is derived from the box and can't be set directly.
+	const float SubjectMargin = 80.0f;
 
 	FVector CamPos;
 	bool bLandscape = false;
