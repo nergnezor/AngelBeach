@@ -17,6 +17,12 @@ class ABall : AActor
 	UPROPERTY(DefaultComponent)
 	UProceduralMeshComponent LandingIndicator;
 
+	// The ball's whole predicted flight, drawn the instant it's known — i.e. the
+	// instant a hit or serve gives BallVel a new value, not built up as the ball
+	// travels. ShowTrajectoryArc/RebuildTrajectoryMesh below.
+	UPROPERTY(DefaultComponent)
+	UProceduralMeshComponent TrajectoryArc;
+
 	// Physics state (BallVel avoids clash with APawn::GetVelocity if ever reparented)
 	FVector BallVel = FVector(0, 0, 0);
 	FVector Position = FVector(0, 0, 300);
@@ -33,6 +39,16 @@ class ABall : AActor
 	float NetHalfThickness = 2.5f;
 
 	bool bInPlay = false;
+
+	// TrajectoryArc state — see ShowTrajectoryArc/UpdateTrajectoryArc.
+	TArray<FVector> TrajectoryPoints;
+	float TrajectoryTotalTime = 0.0f;
+	float TrajectoryElapsed = 0.0f;
+	bool bTrajectoryActive = false;
+	bool bTrajectoryRevealSettled = false;
+	const float TrajectoryRadius = 3.0f;       // tube thickness, cm
+	const float TrajectoryRevealTime = 0.12f;  // draw-in sweep on appearance
+	const float TrajectoryFadeTime = 0.3f;     // shrink-to-nothing before landing
 
 	// Brief lockout after a player contact so one touch doesn't register twice
 	// while the ball is still overlapping the player.
@@ -53,6 +69,7 @@ class ABall : AActor
 		BallVel = InitVel;
 		SetActorLocation(Position);
 		bInPlay = true;
+		ShowTrajectoryArc();
 	}
 
 	UFUNCTION(BlueprintCallable)
@@ -151,6 +168,29 @@ class ABall : AActor
 		LandingIndicator.SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		LandingIndicator.SetAbsolute(true, true, false);  // flat on the sand, independent of the ball's own spin
 		BuildLandingRing();
+
+		// Electric blue, overbright like LandingIndicator's white — a predictive
+		// UI mark has to read as "not a real object" against ball/players/sand,
+		// none of which use this hue.
+		UMaterialInterface ArcMat = Cast<UMaterialInterface>(LoadObject(nullptr,
+			"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+		if (ArcMat != nullptr)
+		{
+			UMaterialInstanceDynamic ArcMID = TrajectoryArc.CreateDynamicMaterialInstance(0, ArcMat);
+			if (ArcMID != nullptr)
+				ArcMID.SetVectorParameterValue(n"Color", FLinearColor(0.2f, 1.3f, 1.9f, 1.0f));
+		}
+		TrajectoryArc.SetCastShadow(false);
+		TrajectoryArc.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// Vertices are baked in absolute world space (see RebuildTrajectoryMesh),
+		// so the component itself must never inherit the ball's own transform —
+		// same reasoning as ShadowBlob/LandingIndicator, but all three axes here:
+		// unlike those two flat marks this is full 3D geometry, and the ball's
+		// own spin (UpdateSpin, actor rotation) would otherwise twist it.
+		TrajectoryArc.SetAbsolute(true, true, true);
+		TrajectoryArc.SetWorldLocation(FVector::ZeroVector);
+		TrajectoryArc.SetWorldRotation(FRotator::ZeroRotator);
+		TrajectoryArc.SetVisibility(false);
 	}
 
 	// A flat annulus (ring, not a filled disc — ShadowBlob is already the filled
@@ -281,6 +321,10 @@ class ABall : AActor
 		// frozen at the last rally's landing spot forever instead of vanishing
 		// with it.
 		LandingIndicator.SetVisibility(bInPlay);
+		// Same reasoning as LandingIndicator just above: cut the arc the instant
+		// play stops rather than leaving its reveal/fade animation running (or
+		// frozen) against a ball that isn't going anywhere any more.
+		TrajectoryArc.SetVisibility(bInPlay && bTrajectoryActive);
 		// SAME REASON, and it was missed the first time: a dead ball is still
 		// carried/tossed by script (AIPlayer's CarryBall/RunFetchSequence/
 		// RunServeSequence all write Ball.Position directly while bInPlay is
@@ -305,6 +349,7 @@ class ABall : AActor
 		SetActorLocation(Position);
 		UpdateSpin(DeltaTime);
 		UpdateLandingIndicator();
+		UpdateTrajectoryArc(DeltaTime);
 	}
 
 	// Ground projection of the ball, shrinking with height so a high ball reads
@@ -435,7 +480,8 @@ class ABall : AActor
 
 			// Contact: let the player compute the bounce from real physics.
 			FVector NewVel = P.OnBallContact(Position, BallVel, Center);
-			if (NewVel.SizeSquared() > 1.0f)
+			bool bContactMade = NewVel.SizeSquared() > 1.0f;
+			if (bContactMade)
 				BallVel = NewVel;
 
 			// Push the ball just outside the limb so it doesn't stick.
@@ -443,6 +489,12 @@ class ABall : AActor
 			FVector Out = (Position - Center).GetSafeNormal();
 			if (Out.SizeSquared() < 0.01f) Out = FVector(0, 0, 1);
 			Position = Center + Out * (Reach + 1.0f);
+
+			// Arc is sampled from the FINAL post-contact Position/BallVel, not
+			// the pre-push-out one above — otherwise the drawn arc starts a few
+			// cm off from where the ball actually leaves the arm.
+			if (bContactMade)
+				ShowTrajectoryArc();
 
 			PlayerHitCooldown = 0.25f;
 			break;  // only one contact per frame
@@ -462,6 +514,10 @@ class ABall : AActor
 				Position.X = (Position.X < NetX)
 					? NetX - NetHalfThickness - BallRadius
 					: NetX + NetHalfThickness + BallRadius;
+				// The net bounce just invalidated whatever arc was drawn for the
+				// pre-bounce flight (it would show the ball sailing straight
+				// through the net) — redraw for the actual post-bounce path.
+				ShowTrajectoryArc();
 
 				if (GM != nullptr)
 					GM.OnBallHitNet();
@@ -562,6 +618,194 @@ class ABall : AActor
 
 		MeshComp.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
 			NoUV, NoUV, NoUV, Colors, Tangents, true);
+	}
+
+	// Forward-simulates from the CURRENT Position/BallVel to the floor, keeping
+	// every sample instead of collapsing to the landing point the way
+	// PredictLanding does. Visualisation only — nothing here feeds a gameplay
+	// decision, so this doesn't need to join PredictLanding on the
+	// biomech_report.py integrator allowlist (see Prediction.as's header for
+	// why that allowlist exists and how narrow it is on purpose); it's a second,
+	// purely-cosmetic use of the same physics constants already on this class.
+	private void SampleTrajectory(TArray<FVector>& OutPoints, float MaxTime = 3.0f) const
+	{
+		OutPoints.Empty();
+		FVector PPos = Position;
+		FVector PVel = BallVel;
+		const float Dt = 0.05f;
+		float T = 0.0f;
+		float Floor = FloorZ + BallRadius;
+
+		OutPoints.Add(PPos);
+		while (T < MaxTime)
+		{
+			FVector Prev = PPos;
+			PVel.Z += Gravity * Dt;
+			PPos += PVel * Dt;
+			T += Dt;
+			if (PPos.Z <= Floor)
+			{
+				float Span = Prev.Z - PPos.Z;
+				float Frac = (Span > 0.0001f)
+					? Math::Clamp((Prev.Z - Floor) / Span, 0.0f, 1.0f) : 1.0f;
+				OutPoints.Add(Prev + (PPos - Prev) * Frac);
+				return;
+			}
+			OutPoints.Add(PPos);
+		}
+	}
+
+	// Call the instant BallVel becomes a new known value (a hit, a serve, a net
+	// bounce) — samples the whole flight right away and starts its draw-in.
+	private void ShowTrajectoryArc()
+	{
+		SampleTrajectory(TrajectoryPoints);
+		if (TrajectoryPoints.Num() < 2)
+		{
+			bTrajectoryActive = false;
+			TrajectoryArc.SetVisibility(false);
+			return;
+		}
+
+		TrajectoryTotalTime = (TrajectoryPoints.Num() - 1) * 0.05f;
+		TrajectoryElapsed = 0.0f;
+		bTrajectoryActive = true;
+		bTrajectoryRevealSettled = false;
+		TrajectoryArc.SetVisibility(true);
+		RebuildTrajectoryMesh(2, TrajectoryRadius);
+	}
+
+	// Drives the two-phase animation: a quick draw-in sweep from the launch
+	// point (so the arc doesn't just pop into existence), then, once the ball
+	// is within TrajectoryFadeTime of landing, a shrink to nothing so it clears
+	// itself before the ball actually arrives instead of sitting on top of the
+	// landing ring. In between, the mesh is already built and this does nothing
+	// — the arc is static while the ball flies its middle stretch.
+	private void UpdateTrajectoryArc(float DeltaTime)
+	{
+		if (!bTrajectoryActive)
+			return;
+
+		TrajectoryElapsed += DeltaTime;
+		int LastIndex = TrajectoryPoints.Num() - 1;
+		if (LastIndex < 1 || TrajectoryElapsed >= TrajectoryTotalTime + TrajectoryFadeTime)
+		{
+			bTrajectoryActive = false;
+			TrajectoryArc.SetVisibility(false);
+			return;
+		}
+
+		if (TrajectoryElapsed < TrajectoryRevealTime)
+		{
+			float RevealFrac = TrajectoryElapsed / TrajectoryRevealTime;
+			int Count = 2 + int(RevealFrac * (LastIndex - 1));
+			RebuildTrajectoryMesh(Math::Clamp(Count, 2, TrajectoryPoints.Num()), TrajectoryRadius);
+		}
+		else if (!bTrajectoryRevealSettled)
+		{
+			// The reveal's last partial-length frame (RevealFrac just under 1)
+			// stopped a hair short of the full arc — settle on the full length
+			// once, here, rather than leaving that last sliver undrawn for the
+			// whole static middle stretch of the flight.
+			RebuildTrajectoryMesh(TrajectoryPoints.Num(), TrajectoryRadius);
+			bTrajectoryRevealSettled = true;
+		}
+		else if (TrajectoryElapsed > TrajectoryTotalTime - TrajectoryFadeTime)
+		{
+			float FadeFrac = Math::Clamp(
+				(TrajectoryElapsed - (TrajectoryTotalTime - TrajectoryFadeTime)) / TrajectoryFadeTime,
+				0.0f, 1.0f);
+			float Radius = TrajectoryRadius * (1.0f - FadeFrac);
+			if (Radius < 0.2f)
+			{
+				bTrajectoryActive = false;
+				TrajectoryArc.SetVisibility(false);
+			}
+			else
+			{
+				RebuildTrajectoryMesh(TrajectoryPoints.Num(), Radius);
+			}
+		}
+	}
+
+	// Extrudes a thin tube of PointCount samples from TrajectoryPoints, oriented
+	// per-sample from each sample's own direction of travel (FVector::Rotation()
+	// + FRotator::RotateVector — the same technique UpdateSpin already uses to
+	// turn a travel direction into an orientation — rather than a cross product,
+	// which isn't confirmed bound in this fork). Vertices are absolute world
+	// positions because TrajectoryArc's own transform is locked to identity
+	// (see BeginPlay), so this can be called mid-flight without re-deriving the
+	// ball's local frame.
+	private void RebuildTrajectoryMesh(int PointCount, float Radius)
+	{
+		PointCount = Math::Clamp(PointCount, 2, TrajectoryPoints.Num());
+
+		TArray<FVector> Verts;
+		TArray<int32> Tris;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UVs;
+		TArray<FLinearColor> Colors;
+		TArray<FVector2D> NoUV;
+		TArray<FProcMeshTangent> Tangents;
+
+		const int Sides = 6;
+		FLinearColor ArcColor = FLinearColor(0.2f, 1.3f, 1.9f, 1.0f);
+
+		for (int i = 0; i < PointCount; i++)
+		{
+			FVector P = TrajectoryPoints[i];
+			FVector Tangent;
+			if (i == 0)
+				Tangent = (TrajectoryPoints[1] - P).GetSafeNormal();
+			else if (i == PointCount - 1)
+				Tangent = (P - TrajectoryPoints[i - 1]).GetSafeNormal();
+			else
+				Tangent = (TrajectoryPoints[i + 1] - TrajectoryPoints[i - 1]).GetSafeNormal();
+
+			if (Tangent.SizeSquared() < 0.01f)
+				Tangent = FVector(1, 0, 0);
+			FRotator TangentRot = Tangent.Rotation();
+			FVector Right = TangentRot.RotateVector(FVector(0, 1, 0));
+			FVector Up = TangentRot.RotateVector(FVector(0, 0, 1));
+
+			for (int s = 0; s < Sides; s++)
+			{
+				float Theta = 2.0f * PI * s / Sides;
+				FVector Offset = (Right * Math::Cos(Theta) + Up * Math::Sin(Theta)) * Radius;
+				Verts.Add(P + Offset);
+				Normals.Add(Offset.GetSafeNormal());
+				UVs.Add(FVector2D(float(s) / Sides, float(i) / (PointCount - 1)));
+				Colors.Add(ArcColor);
+				FProcMeshTangent Tan;
+				Tan.TangentX = Tangent;
+				Tan.bFlipTangentY = false;
+				Tangents.Add(Tan);
+			}
+		}
+
+		// Both winding orders, same belt-and-braces as BuildShadowDisc/
+		// BuildLandingRing: this geometry can't be render-tested from here
+		// either, so pay a few extra triangles rather than gamble on which way
+		// backface culling would eat it.
+		for (int i = 0; i < PointCount - 1; i++)
+		{
+			for (int s = 0; s < Sides; s++)
+			{
+				int A = i * Sides + s;
+				int B = i * Sides + (s + 1) % Sides;
+				int C = (i + 1) * Sides + s;
+				int D = (i + 1) * Sides + (s + 1) % Sides;
+
+				Tris.Add(A); Tris.Add(B); Tris.Add(C);
+				Tris.Add(B); Tris.Add(D); Tris.Add(C);
+
+				Tris.Add(A); Tris.Add(C); Tris.Add(B);
+				Tris.Add(B); Tris.Add(C); Tris.Add(D);
+			}
+		}
+
+		TrajectoryArc.CreateMeshSection_LinearColor(0, Verts, Tris, Normals, UVs,
+			NoUV, NoUV, NoUV, Colors, Tangents, false);
 	}
 
 	// Where this flight reaches the sand.
